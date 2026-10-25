@@ -20,6 +20,7 @@ import com.lcebot.ferryqr.R
 
 @Composable
 fun PermissionPanel(openSettings: Boolean, onRequest: () -> Unit, modifier: Modifier = Modifier) {
+    val haptics = rememberHaptics()
     Surface(
         modifier = modifier.padding(32.dp),
         shape = MaterialTheme.shapes.extraLarge,
@@ -43,7 +44,7 @@ fun PermissionPanel(openSettings: Boolean, onRequest: () -> Unit, modifier: Modi
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
-            Button(onClick = onRequest) {
+            Button(onClick = { haptics.tap(); onRequest() }) {
                 Text(
                     stringResource(
                         if (openSettings) R.string.camera_permission_settings else R.string.camera_permission_grant

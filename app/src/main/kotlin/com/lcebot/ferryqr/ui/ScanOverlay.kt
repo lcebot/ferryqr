@@ -7,11 +7,13 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LoadingIndicator
@@ -27,6 +29,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
@@ -58,6 +61,9 @@ private val MARKER_PADDING = 14.dp
 private val MIN_MARKER = 72.dp
 private val BADGE_SIZE = 72.dp
 private val LOADING_SIZE = 48.dp
+
+/** Same size as the picker's markers, so a found code keeps its marker when the frame freezes. */
+private val FOUND_SIZE = 56.dp
 
 /** zxing-cpp often misses a code for a frame or two; the marker rides through such gaps. */
 private const val HIDE_DELAY_MS = 250L
@@ -156,20 +162,72 @@ fun ScanOverlay(
             )
         }
 
+        // Codes decoded while the rest of a multi-code frame is awaited get a marker as each one arrives.
+        if (confirming == null && sighting != null) {
+            sighting.found.forEach { detection ->
+                if (detection.corners.isNotEmpty()) {
+                    key(detection.text) {
+                        val c = detection.center
+                        val at = toView(sighting.frameWidth, sighting.frameHeight, c.x, c.y, c.x, c.y, viewWidth, viewHeight)
+                        FoundMarker(at.center)
+                    }
+                }
+            }
+        }
+
         if (confirming != null) {
             key(confirming) {
-                SuccessBadge(center = { rect.value.center }, onDone = { onConfirmed(confirming.detection) })
+                SuccessBadge(
+                    center = { rect.value.center },
+                    fromMarker = confirming.wasShown,
+                    onDone = { onConfirmed(confirming.detection) },
+                )
             }
         }
     }
 }
 
+/** Pops in with a light tick when its code is appended, then follows the code as the camera moves. */
+@Composable
+private fun FoundMarker(target: Offset) {
+    val haptics = rememberHaptics()
+    val pop = remember { Animatable(0f) }
+    val position = remember { Animatable(target, Offset.VectorConverter) }
+    val popSpec = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
+    val moveSpec = MaterialTheme.motionScheme.fastSpatialSpec<Offset>()
+    LaunchedEffect(Unit) {
+        haptics.found()
+        pop.animateTo(1f, popSpec)
+    }
+    LaunchedEffect(target) { position.animateTo(target, moveSpec) }
+    Box(
+        modifier = Modifier
+            .centeredOn(FOUND_SIZE) { position.value }
+            .size(FOUND_SIZE)
+            .graphicsLayer {
+                scaleX = pop.value
+                scaleY = pop.value
+            }
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.primary),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            painterResource(R.drawable.ic_check),
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onPrimary,
+            modifier = Modifier.size(28.dp),
+        )
+    }
+}
+
 /** A burst that pops onto the code and settles into a circle with a check mark. */
 @Composable
-private fun SuccessBadge(center: () -> Offset, onDone: () -> Unit) {
+private fun SuccessBadge(center: () -> Offset, fromMarker: Boolean, onDone: () -> Unit) {
     val haptics = LocalHapticFeedback.current
     val done by rememberUpdatedState(onDone)
-    val pop = remember { Animatable(0f) }
+    // A code that already wore a found marker grows from that marker instead of popping in again.
+    val pop = remember { Animatable(if (fromMarker) FOUND_SIZE / BADGE_SIZE else 0f) }
     val popSpec = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
     val morph = remember { Morph(MaterialShapes.SoftBurst, MaterialShapes.Circle) }
     val fill = MaterialTheme.colorScheme.primary

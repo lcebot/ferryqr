@@ -9,6 +9,7 @@ coreKtx = "1.19.1"
 graphicsShapes = "1.1.0"
 coroutines = "1.11.0"
 zxingCpp = "3.1.1"
+zxingCore = "3.5.4"
 wechatQrcode = "2.6.0"
 junit = "4.13.2"
 
@@ -30,6 +31,7 @@ compose-foundation = { module = "androidx.compose.foundation:foundation" }
 compose-material3 = { module = "androidx.compose.material3:material3" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 zxing-cpp = { module = "io.github.zxing-cpp:android", version.ref = "zxingCpp" }
+zxing-core = { module = "com.google.zxing:core", version.ref = "zxingCore" }
 wechat-opencv = { module = "com.github.jenly1314.WeChatQRCode:opencv", version.ref = "wechatQrcode" }
 wechat-opencv-arm64 = { module = "com.github.jenly1314.WeChatQRCode:opencv-armv64", version.ref = "wechatQrcode" }
 wechat-qrcode = { module = "com.github.jenly1314.WeChatQRCode:wechat-qrcode", version.ref = "wechatQrcode" }

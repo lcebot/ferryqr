@@ -107,6 +107,7 @@ dependencies {
     implementation(libs.androidx.camera.compose)
 
     implementation(libs.zxing.cpp)
+    implementation(libs.zxing.core)
     implementation(libs.wechat.opencv)
     implementation(libs.wechat.opencv.arm64)
     implementation(libs.wechat.qrcode)

@@ -8,6 +8,7 @@ import androidx.annotation.StringRes
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.lcebot.ferryqr.dispatch.ResultCard
+import com.lcebot.ferryqr.history.HistoryStore
 import com.lcebot.ferryqr.scan.AutoZoom
 import com.lcebot.ferryqr.scan.Detection
 import com.lcebot.ferryqr.scan.LiveAnalyzer
@@ -32,10 +33,20 @@ private const val SUPPRESS_MS = 1500L
 sealed interface Phase {
     data object Scanning : Phase
     data object Decoding : Phase
-    data class Picking(val frame: Bitmap, val detections: List<Detection>) : Phase
+    /** [alreadyShown] holds codes whose markers were on screen before the frame froze. */
+    data class Picking(
+        val frame: Bitmap,
+        val detections: List<Detection>,
+        val alreadyShown: Set<String> = emptySet(),
+    ) : Phase
 
     /** A live scan just succeeded; the screen confirms it on the code before handing it off. */
-    data class Confirming(val detection: Detection, val frameWidth: Int, val frameHeight: Int) : Phase
+    data class Confirming(
+        val detection: Detection,
+        val frameWidth: Int,
+        val frameHeight: Int,
+        val wasShown: Boolean = false,
+    ) : Phase
     data class Routing(val detection: Detection) : Phase
     data class Showing(val card: ResultCard) : Phase
 }
@@ -44,6 +55,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
 
     private val zxing = ZxingEngine()
     private val wechat = WeChatEngine(app)
+    private val history = HistoryStore.get(app)
 
     private val _phase = MutableStateFlow<Phase>(Phase.Scanning)
     val phase = _phase.asStateFlow()
@@ -68,7 +80,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     @Volatile
     private var suppressedSeenAt = 0L
 
-    private fun onLiveHit(frame: Bitmap, detections: List<Detection>) {
+    private fun onLiveHit(frame: Bitmap, detections: List<Detection>, alreadyShown: Set<String>) {
         val now = SystemClock.elapsedRealtime()
         if (detections.all { it.text in suppressed } && now - suppressedSeenAt < SUPPRESS_MS) {
             suppressedSeenAt = now
@@ -77,9 +89,10 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         }
         suppressed = emptySet()
         _phase.value = if (detections.size == 1) {
-            Phase.Confirming(detections.single(), frame.width, frame.height).also { frame.recycle() }
+            val single = detections.single()
+            Phase.Confirming(single, frame.width, frame.height, single.text in alreadyShown).also { frame.recycle() }
         } else {
-            Phase.Picking(frame, detections)
+            Phase.Picking(frame, detections, alreadyShown)
         }
     }
 
@@ -89,6 +102,10 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
 
     fun pick(detection: Detection) {
         _phase.value = Phase.Routing(detection)
+    }
+
+    fun record(detection: Detection) {
+        history.add(detection.text, detection.format)
     }
 
     fun show(card: ResultCard) {

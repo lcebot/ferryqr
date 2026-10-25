@@ -48,7 +48,21 @@ data class ResultCard(
     val actions: List<CardAction>,
 )
 
+data class Kind(@param:StringRes val label: Int, @param:DrawableRes val icon: Int)
+
 object Cards {
+
+    fun kindOf(payload: Payload): Kind = when (payload) {
+        is WebPayload -> Kind(R.string.kind_link, R.drawable.ic_link)
+        is SchemePayload -> Kind(R.string.kind_app_link, R.drawable.ic_apps)
+        is FidoPayload -> Kind(R.string.kind_fido, R.drawable.ic_key)
+        is EsimPayload -> Kind(R.string.kind_esim, R.drawable.ic_sim_card)
+        is DppPayload -> Kind(R.string.kind_dpp, R.drawable.ic_wifi)
+        is WifiPayload -> Kind(R.string.kind_wifi, R.drawable.ic_wifi)
+        is ContactPayload -> Kind(R.string.kind_contact, R.drawable.ic_person_add)
+        is EventPayload -> Kind(R.string.kind_event, R.drawable.ic_event)
+        is TextPayload -> Kind(R.string.kind_text, R.drawable.ic_notes)
+    }
 
     private val IP_LITERAL = Regex("^(\\d{1,3}\\.){3}\\d{1,3}$|^\\[.*]$")
 

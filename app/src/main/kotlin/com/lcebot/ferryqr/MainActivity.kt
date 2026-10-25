@@ -8,8 +8,8 @@ import androidx.activity.compose.setContent
 import androidx.core.content.IntentCompat
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.ViewModelProvider
+import com.lcebot.ferryqr.ui.FerryApp
 import com.lcebot.ferryqr.ui.FerryTheme
-import com.lcebot.ferryqr.ui.ScanScreen
 
 class MainActivity : ComponentActivity() {
 
@@ -21,7 +21,7 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState == null) handleShare(intent)
         setContent {
             FerryTheme {
-                ScanScreen(vm)
+                FerryApp(vm)
             }
         }
     }

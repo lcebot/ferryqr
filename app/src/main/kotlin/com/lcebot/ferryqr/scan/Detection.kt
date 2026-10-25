@@ -25,12 +25,14 @@ data class Detection(
 /**
  * QR codes zxing-cpp located in a live frame but could not decode yet. [bounds] covers all of them
  * in the pixel space of the upright frame; [deep] is set while the WeChat detector works on them.
+ * [found] holds the codes already decoded while the rest of a multi-code frame is still awaited.
  */
 data class Sighting(
     val frameWidth: Int,
     val frameHeight: Int,
     val bounds: Rect,
     val deep: Boolean,
+    val found: List<Detection> = emptyList(),
 )
 
 internal fun List<Detection>.mergedWith(other: List<Detection>): List<Detection> {

@@ -30,6 +30,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.lcebot.ferryqr.scan.AutoZoom
 import java.util.concurrent.Executor
 import kotlin.math.abs
+import kotlin.math.floor
 import kotlin.math.ln
 import kotlinx.coroutines.awaitCancellation
 
@@ -67,6 +68,7 @@ fun CameraPreview(
     val owner = LocalLifecycleOwner.current
     var request by remember { mutableStateOf<SurfaceRequest?>(null) }
     var camera by remember { mutableStateOf<Camera?>(null) }
+    val haptics = rememberHaptics()
 
     LaunchedEffect(owner, session) {
         val provider = ProcessCameraProvider.awaitInstance(context)
@@ -123,7 +125,10 @@ fun CameraPreview(
                 val c = camera ?: return@detectTransformGestures
                 val state = c.cameraInfo.zoomState.value ?: return@detectTransformGestures
                 autoZoom.onUserZoom()
-                c.cameraControl.setZoomRatio((state.zoomRatio * zoom).coerceIn(state.minZoomRatio, state.maxZoomRatio))
+                val next = (state.zoomRatio * zoom).coerceIn(state.minZoomRatio, state.maxZoomRatio)
+                // A light detent at every whole zoom ratio, where logical cameras tend to switch lenses.
+                if (floor(next) != floor(state.zoomRatio)) haptics.step()
+                c.cameraControl.setZoomRatio(next)
             }
         },
     )

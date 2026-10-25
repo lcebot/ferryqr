@@ -70,7 +70,7 @@ import kotlin.math.abs
 private val CONTROL_LABEL_WIDTH = 88.dp
 
 @Composable
-fun ScanScreen(vm: ScanViewModel) {
+fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: () -> Unit) {
     val activity = LocalActivity.current ?: return
     val context = LocalContext.current
     val phase by vm.phase.collectAsStateWithLifecycle()
@@ -82,12 +82,20 @@ fun ScanScreen(vm: ScanViewModel) {
     var hasFlash by remember { mutableStateOf(false) }
     var zoom by remember { mutableFloatStateOf(1f) }
 
+    val haptics = rememberHaptics()
     LaunchedEffect(vm) {
-        vm.messages.collect { snackbar.showSnackbar(context.getString(it)) }
+        vm.messages.collect { message ->
+            when (message) {
+                R.string.reset_done -> haptics.confirm()
+                R.string.no_code_found, R.string.image_unreadable, R.string.no_camera -> haptics.reject()
+            }
+            snackbar.showSnackbar(context.getString(message))
+        }
     }
 
     LaunchedEffect(phase) {
         val routing = phase as? Phase.Routing ?: return@LaunchedEffect
+        vm.record(routing.detection)
         val payload = Classifier.classify(routing.detection.text)
         if (Dispatcher.autoLaunch(activity, payload)) activity.finish()
         else vm.show(Cards.build(activity, payload, routing.detection.format))
@@ -170,32 +178,48 @@ fun ScanScreen(vm: ScanViewModel) {
                         Box(Modifier.width(CONTROL_LABEL_WIDTH))
                     }
                     if (camera.granted) {
-                        ControlButton(R.drawable.ic_restart_alt, R.string.action_reset, onClick = vm::manualReset)
+                        ControlButton(R.drawable.ic_restart_alt, R.string.action_reset, pressFeedback = false, onClick = vm::manualReset)
                     } else {
                         Box(Modifier.width(CONTROL_LABEL_WIDTH))
                     }
                 }
             }
 
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(padding)
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                TopIconButton(R.drawable.ic_qr_code_2, R.string.action_generate, onOpenGenerator)
+                TopIconButton(R.drawable.ic_history, R.string.action_history, onOpenHistory)
+            }
+
             (phase as? Phase.Picking)?.let { picking ->
-                PickOverlay(picking.frame, picking.detections, onPick = vm::pick, onClose = vm::resume)
+                PickOverlay(picking.frame, picking.detections, picking.alreadyShown, onPick = vm::pick, onClose = vm::resume)
             }
         }
     }
 
     fun onResult(result: ActionResult) {
         when (result) {
-            ActionResult.Handoff -> activity.finish()
+            ActionResult.Handoff -> {
+                haptics.tap()
+                activity.finish()
+            }
             ActionResult.Copied -> {
+                haptics.confirm()
                 // Android 13 and later confirm clipboard writes with their own overlay.
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
                     scope.launch { snackbar.showSnackbar(context.getString(R.string.copied)) }
                 }
             }
             ActionResult.Unavailable -> {
+                haptics.reject()
                 scope.launch { snackbar.showSnackbar(context.getString(R.string.no_app)) }
             }
-            ActionResult.Done -> {}
+            ActionResult.Done -> haptics.tap()
         }
     }
 
@@ -210,14 +234,23 @@ fun ScanScreen(vm: ScanViewModel) {
 
 /** A labeled round button; labels keep the less familiar reset action discoverable. */
 @Composable
-private fun ControlButton(@DrawableRes icon: Int, @StringRes label: Int, onClick: () -> Unit) {
+private fun ControlButton(
+    @DrawableRes icon: Int,
+    @StringRes label: Int,
+    pressFeedback: Boolean = true,
+    onClick: () -> Unit,
+) {
+    val haptics = rememberHaptics()
     Column(
         modifier = Modifier.width(CONTROL_LABEL_WIDTH),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         FilledTonalIconButton(
-            onClick = onClick,
+            onClick = {
+                if (pressFeedback) haptics.tap()
+                onClick()
+            },
             shapes = IconButtonDefaults.shapes(),
             modifier = Modifier.size(IconButtonDefaults.mediumContainerSize()),
         ) {
@@ -237,7 +270,19 @@ private fun ControlButton(@DrawableRes icon: Int, @StringRes label: Int, onClick
 }
 
 @Composable
+private fun TopIconButton(@DrawableRes icon: Int, @StringRes label: Int, onClick: () -> Unit) {
+    val haptics = rememberHaptics()
+    FilledTonalIconButton(
+        onClick = { haptics.tap(); onClick() },
+        shapes = IconButtonDefaults.shapes(),
+    ) {
+        Icon(painterResource(icon), contentDescription = stringResource(label))
+    }
+}
+
+@Composable
 private fun TorchButton(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    val haptics = rememberHaptics()
     Column(
         modifier = Modifier.width(CONTROL_LABEL_WIDTH),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -245,7 +290,7 @@ private fun TorchButton(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     ) {
         FilledIconToggleButton(
             checked = checked,
-            onCheckedChange = onCheckedChange,
+            onCheckedChange = { haptics.toggle(it); onCheckedChange(it) },
             shapes = IconButtonDefaults.toggleableShapes(),
             modifier = Modifier.size(IconButtonDefaults.mediumContainerSize()),
         ) {

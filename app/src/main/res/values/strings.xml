@@ -65,4 +65,44 @@
     <string name="wifi_password">Password: %1$s</string>
     <string name="wifi_hidden">Hidden network</string>
     <string name="format_label">Format: %1$s</string>
+
+    <string name="back">Back</string>
+    <string name="clear">Clear</string>
+    <string name="cancel">Cancel</string>
+    <string name="list_separator">", "</string>
+
+    <string name="action_history">Scan history</string>
+    <string name="history_title">History</string>
+    <plurals name="history_count">
+        <item quantity="one">%1$d scan</item>
+        <item quantity="other">%1$d scans</item>
+    </plurals>
+    <string name="history_today">Today</string>
+    <string name="history_yesterday">Yesterday</string>
+    <string name="history_clear">Clear history</string>
+    <string name="history_clear_title">Clear all history?</string>
+    <string name="history_clear_body">Every saved scan on this phone will be removed. This cannot be undone.</string>
+    <string name="history_cleared">History cleared</string>
+    <string name="history_empty_title">No scans yet</string>
+    <string name="history_empty_body">Scanned codes are kept on this phone only, and you can clear them at any time.</string>
+
+    <string name="action_generate">Create code</string>
+    <string name="generate_title">Create code</string>
+    <string name="generate_input">Content</string>
+    <string name="generate_placeholder">Type or paste text</string>
+    <string name="generate_clear">Clear text</string>
+    <string name="generate_empty">Your code appears here as you type</string>
+    <string name="generate_copy">Copy image</string>
+    <string name="generate_save">Save to Pictures</string>
+    <string name="generate_copied">Image copied</string>
+    <string name="generate_copy_failed">Could not copy the image</string>
+    <string name="generate_saved">Saved to Pictures/FerryQR</string>
+    <string name="generate_save_failed">Could not save the image</string>
+    <string name="generate_too_long">Too long for %1$s. %2$s can hold it.</string>
+    <string name="generate_too_long_all">Too long for any code type</string>
+    <string name="generate_clip_label">QR code</string>
+    <string name="type_qr">QR Code</string>
+    <string name="type_aztec" translatable="false">Aztec</string>
+    <string name="type_data_matrix" translatable="false">Data Matrix</string>
+    <string name="type_pdf417" translatable="false">PDF417</string>
 </resources>

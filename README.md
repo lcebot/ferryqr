@@ -24,6 +24,14 @@ FerryQR is a QR code scanner for Android. Point the camera at a code and FerryQR
 
 **Anything else:** Shown as text.
 
+## History
+
+The history button at the top right lists the codes you have scanned, grouped by day. Tap one to copy, open or share it again. The clear button at the top of the history page removes every entry.
+
+## Creating codes
+
+The create button at the top right turns text into a code. When it opens, it fills in text from the clipboard and shows the code right away, and the code updates as you edit the text. Besides regular QR codes you can choose Aztec, Data Matrix or PDF417. If the text is too long for the chosen type, a message below the text field says so. You can copy the code to the clipboard or save it to Pictures/FerryQR.
+
 ## Tips
 
 A code does not need to be in the middle of the picture. FerryQR reads it anywhere in view.
@@ -42,6 +50,8 @@ You can add FerryQR as a Quick Settings tile to open it quickly.
 
 FerryQR only asks for camera access and has no internet access. It never sends the content of a code to anyone other than the app you open it in. Without camera access, you can still scan codes in gallery images.
 
+Scan history stays on your phone. The create page reads the clipboard once, when it opens.
+
 ## License
 
-[MIT](LICENSE). FerryQR uses [zxing-cpp](https://github.com/zxing-cpp/zxing-cpp) and [WeChatQRCode](https://github.com/jenly1314/WeChatQRCode), both licensed under Apache 2.0.
+[MIT](LICENSE). FerryQR uses [zxing-cpp](https://github.com/zxing-cpp/zxing-cpp), [ZXing](https://github.com/zxing/zxing) and [WeChatQRCode](https://github.com/jenly1314/WeChatQRCode), all licensed under Apache 2.0.

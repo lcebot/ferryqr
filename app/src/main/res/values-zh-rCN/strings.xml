@@ -64,4 +64,40 @@
     <string name="wifi_password">密码：%1$s</string>
     <string name="wifi_hidden">隐藏网络</string>
     <string name="format_label">码制：%1$s</string>
+
+    <string name="back">返回</string>
+    <string name="clear">清空</string>
+    <string name="cancel">取消</string>
+    <string name="list_separator">、</string>
+
+    <string name="action_history">扫码历史</string>
+    <string name="history_title">扫码历史</string>
+    <plurals name="history_count">
+        <item quantity="other">%1$d 条记录</item>
+    </plurals>
+    <string name="history_today">今天</string>
+    <string name="history_yesterday">昨天</string>
+    <string name="history_clear">清空历史</string>
+    <string name="history_clear_title">清空全部扫码历史？</string>
+    <string name="history_clear_body">本机保存的所有扫码记录都会被删除，且无法恢复。</string>
+    <string name="history_cleared">已清空历史</string>
+    <string name="history_empty_title">还没有扫码记录</string>
+    <string name="history_empty_body">扫过的码只保存在本机，可以随时清空。</string>
+
+    <string name="action_generate">生成二维码</string>
+    <string name="generate_title">生成二维码</string>
+    <string name="generate_input">内容</string>
+    <string name="generate_placeholder">输入或粘贴文字</string>
+    <string name="generate_clear">清除文字</string>
+    <string name="generate_empty">输入内容后，这里会显示生成的码</string>
+    <string name="generate_copy">复制图片</string>
+    <string name="generate_save">保存到相册</string>
+    <string name="generate_copied">已复制图片</string>
+    <string name="generate_copy_failed">无法复制图片</string>
+    <string name="generate_saved">已保存到 Pictures/FerryQR</string>
+    <string name="generate_save_failed">无法保存图片</string>
+    <string name="generate_too_long">内容超出%1$s的容量，可改用%2$s。</string>
+    <string name="generate_too_long_all">内容超出所有码制的容量</string>
+    <string name="generate_clip_label">二维码</string>
+    <string name="type_qr">二维码</string>
 </resources>

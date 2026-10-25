@@ -3,13 +3,17 @@
 package com.lcebot.ferryqr.ui
 
 import android.graphics.Bitmap
-import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.graphicsLayer
 import kotlinx.coroutines.delay
+import kotlin.coroutines.cancellation.CancellationException
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -50,12 +54,31 @@ private const val STAGGER_MS = 70L
 fun PickOverlay(
     frame: Bitmap,
     detections: List<Detection>,
+    alreadyShown: Set<String>,
     onPick: (Detection) -> Unit,
     onClose: () -> Unit,
 ) {
-    BackHandler(onBack = onClose)
+    var backProgress by remember { mutableFloatStateOf(0f) }
+    PredictiveBackHandler { progress ->
+        try {
+            progress.collect { backProgress = it.progress }
+            onClose()
+        } catch (e: CancellationException) {
+            backProgress = 0f
+        }
+    }
+    val haptics = rememberHaptics()
     val image = remember(frame) { frame.asImageBitmap() }
-    BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
+    BoxWithConstraints(
+        Modifier
+            .fillMaxSize()
+            .graphicsLayer {
+                alpha = 1f - backProgress * 0.6f
+                scaleX = 1f - backProgress * 0.08f
+                scaleY = 1f - backProgress * 0.08f
+            }
+            .background(Color.Black)
+    ) {
         val viewWidth = constraints.maxWidth.toFloat()
         val viewHeight = constraints.maxHeight.toFloat()
         // Same math as ContentScale.Crop with centered alignment.
@@ -68,18 +91,22 @@ fun PickOverlay(
         Image(image, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f)))
 
-        detections.forEachIndexed { index, detection ->
+        val fresh = detections.filter { it.text !in alreadyShown }
+        detections.forEach { detection ->
             val center = detection.center
             val x = (center.x * scale + dx).coerceIn(half, viewWidth - half)
             val y = (center.y * scale + dy).coerceIn(half, viewHeight - half)
-            // Markers pop in one after another so the eye catches each code in turn.
-            val pop = remember(detection) { Animatable(0f) }
+            // A code that already had a marker while the camera ran keeps it without popping again;
+            // codes that arrived with the frozen frame pop in one after another.
+            val wasShown = detection.text in alreadyShown
+            val pop = remember(detection) { Animatable(if (wasShown) 1f else 0f) }
             LaunchedEffect(detection) {
-                delay(index * STAGGER_MS)
+                if (wasShown) return@LaunchedEffect
+                delay(fresh.indexOf(detection) * STAGGER_MS)
                 pop.animateTo(1f, popSpec)
             }
             FilledIconButton(
-                onClick = { onPick(detection) },
+                onClick = { haptics.tap(); onPick(detection) },
                 shapes = IconButtonDefaults.shapes(),
                 modifier = Modifier
                     .offset { IntOffset((x - half).roundToInt(), (y - half).roundToInt()) }
@@ -100,7 +127,7 @@ fun PickOverlay(
             modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 24.dp),
         )
         FilledTonalIconButton(
-            onClick = onClose,
+            onClick = { haptics.tap(); onClose() },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()

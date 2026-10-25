@@ -24,6 +24,14 @@ FerryQR 是一个 Android 扫码应用。把摄像头对准二维码，FerryQR �
 
 **其他内容：** 以文本显示。
 
+## 扫码历史
+
+右上角的历史按钮可以查看扫过的码，按日期分组，点开即可再次复制、打开或分享。右上角的清空按钮会删除全部记录。
+
+## 生成二维码
+
+右上角的生成按钮可以把文字转换为二维码。打开时会自动读取剪贴板中的文字并生成；输入框内容改变时，二维码随之刷新。除常规二维码外，还可以选择 Aztec、Data Matrix 和 PDF417。内容超出所选码制的容量时，输入框下方会给出提示。生成的码可以复制到剪贴板，或保存到相册的 Pictures/FerryQR 目录。
+
 ## 使用提示
 
 二维码不必对准画面中央，出现在画面中任何位置都能识别。
@@ -42,6 +50,8 @@ FerryQR 是一个 Android 扫码应用。把摄像头对准二维码，FerryQR �
 
 FerryQR 只申请相机权限，无联网能力，不会将二维码内容发送到除目标应用外的第三方。不授予相机权限时，仍然可以识别相册图片中的二维码。
 
+扫码历史只保存在本机。生成二维码页面只在打开时读取一次剪贴板。
+
 ## 许可证
 
-[MIT](LICENSE)。FerryQR 使用了 [zxing-cpp](https://github.com/zxing-cpp/zxing-cpp) 和 [WeChatQRCode](https://github.com/jenly1314/WeChatQRCode)，二者采用 Apache 2.0 许可证。
+[MIT](LICENSE)。FerryQR 使用了 [zxing-cpp](https://github.com/zxing-cpp/zxing-cpp)、[ZXing](https://github.com/zxing/zxing) 和 [WeChatQRCode](https://github.com/jenly1314/WeChatQRCode)，三者均采用 Apache 2.0 许可证。
