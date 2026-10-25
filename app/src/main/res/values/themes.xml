@@ -3,4 +3,11 @@
     <style name="Theme.FerryQR" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@android:color/black</item>
     </style>
+
+    <!-- A see-through window: only the sheet is visible over the app the image came from. -->
+    <style name="Theme.FerryQR.Sheet" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
 </resources>

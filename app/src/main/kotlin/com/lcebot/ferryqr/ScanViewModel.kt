@@ -15,17 +15,15 @@ import com.lcebot.ferryqr.scan.LiveAnalyzer
 import com.lcebot.ferryqr.scan.Sighting
 import com.lcebot.ferryqr.scan.WeChatEngine
 import com.lcebot.ferryqr.scan.ZxingEngine
-import com.lcebot.ferryqr.scan.decodeStill
-import com.lcebot.ferryqr.scan.mergedWith
+import com.lcebot.ferryqr.scan.StillResult
+import com.lcebot.ferryqr.scan.readStillImage
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 /** A code that was just dismissed is ignored until it has been out of view this long. */
 private const val SUPPRESS_MS = 1500L
@@ -149,21 +147,23 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         analyzer.paused = true
         _phase.value = Phase.Decoding
         viewModelScope.launch {
-            val frame = withContext(Dispatchers.IO) { decodeStill(getApplication<Application>(), uri) }
-            if (frame == null) {
-                message(R.string.image_unreadable)
-                resume()
-                return@launch
-            }
-            // Still images are decoded once, so both engines always run on them.
-            val found = withContext(Dispatchers.Default) { zxing.read(frame).mergedWith(wechat.decode(frame)) }
-            when (found.size) {
-                0 -> {
-                    message(R.string.no_code_found)
+            when (val read = readStillImage(getApplication<Application>(), uri, zxing, wechat)) {
+                StillResult.Unreadable -> {
+                    message(R.string.image_unreadable)
                     resume()
                 }
-                1 -> _phase.value = Phase.Routing(found.single())
-                else -> _phase.value = Phase.Picking(frame, found)
+                is StillResult.Read -> when (read.detections.size) {
+                    0 -> {
+                        message(R.string.no_code_found)
+                        resume()
+                    }
+                    1 -> {
+                        _phase.value = Phase.Routing(read.detections.single())
+                    }
+                    else -> {
+                        _phase.value = Phase.Picking(read.frame, read.detections)
+                    }
+                }
             }
         }
     }

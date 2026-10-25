@@ -14,6 +14,14 @@
     <string name="no_code_found">图片中没有找到二维码</string>
     <string name="image_unreadable">无法打开这张图片</string>
     <string name="no_camera">没有可用的摄像头</string>
+    <string name="close">关闭</string>
+    <string name="image_reading">正在识别图片…</string>
+    <string name="image_no_code_title">没有找到二维码</string>
+    <string name="image_no_code_body">可以换一张更清晰的图片，或确认整个码都在画面里。</string>
+    <string name="image_unreadable_body">图片无法打开，可能是不支持的格式。</string>
+    <plurals name="image_code_count">
+        <item quantity="other">图片中有 %1$d 个码</item>
+    </plurals>
 
     <string name="camera_permission_title">需要相机权限</string>
     <string name="camera_permission_body">FerryQR 用相机扫码。不授权也可以识别图片中的二维码。</string>

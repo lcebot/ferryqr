@@ -44,79 +44,88 @@ fun ResultSheet(card: ResultCard, onDismiss: () -> Unit, onAction: (CardAction) 
         enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded),
     )
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = state) {
-        Column(
+        ResultCardContent(
+            card = card,
+            onAction = onAction,
             modifier = Modifier
-                .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp)
                 .padding(bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(painterResource(card.icon), contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    stringResource(card.kind),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
+        )
+    }
+}
+
+/** The body of a result card, shared by the scanner's sheet and the image sheet. */
+@Composable
+fun ResultCardContent(card: ResultCard, onAction: (CardAction) -> Unit, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(painterResource(card.icon), contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                stringResource(card.kind),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        SelectionContainer {
+            Text(
+                card.headline,
+                style = if (card.headline.length > 60) MaterialTheme.typography.titleMedium
+                else MaterialTheme.typography.headlineSmall,
+                maxLines = 8,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        card.body?.let { body ->
             SelectionContainer {
                 Text(
-                    card.headline,
-                    style = if (card.headline.length > 60) MaterialTheme.typography.titleMedium
-                    else MaterialTheme.typography.headlineSmall,
-                    maxLines = 8,
-                    overflow = TextOverflow.Ellipsis,
+                    body,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            card.body?.let { body ->
-                SelectionContainer {
-                    Text(
-                        body,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+        }
+        card.notes.forEach { note ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    painterResource(R.drawable.ic_warning),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    stringResource(note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                )
             }
-            card.notes.forEach { note ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        painterResource(R.drawable.ic_warning),
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.tertiary,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        stringResource(note),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.tertiary,
-                    )
-                }
-            }
-            val primary = card.actions.firstOrNull()
-            if (primary != null) {
-                Button(
-                    onClick = { onAction(primary) },
-                    shapes = ButtonDefaults.shapes(),
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                ) {
-                    Icon(painterResource(primary.icon), contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
-                    Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-                    Text(stringResource(primary.label))
-                }
-            }
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+        }
+        val primary = card.actions.firstOrNull()
+        if (primary != null) {
+            Button(
+                onClick = { onAction(primary) },
+                shapes = ButtonDefaults.shapes(),
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
             ) {
-                card.actions.drop(1).forEach { action ->
-                    FilledTonalButton(onClick = { onAction(action) }, shapes = ButtonDefaults.shapes()) {
-                        Icon(painterResource(action.icon), contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
-                        Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-                        Text(stringResource(action.label))
-                    }
+                Icon(painterResource(primary.icon), contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
+                Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                Text(stringResource(primary.label))
+            }
+        }
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            card.actions.drop(1).forEach { action ->
+                FilledTonalButton(onClick = { onAction(action) }, shapes = ButtonDefaults.shapes()) {
+                    Icon(painterResource(action.icon), contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
+                    Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                    Text(stringResource(action.label))
                 }
             }
         }

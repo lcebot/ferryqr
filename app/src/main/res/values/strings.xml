@@ -15,6 +15,15 @@
     <string name="no_code_found">No code found in the image</string>
     <string name="image_unreadable">Could not open the image</string>
     <string name="no_camera">No usable camera found</string>
+    <string name="close">Close</string>
+    <string name="image_reading">Reading the image…</string>
+    <string name="image_no_code_title">No code found</string>
+    <string name="image_no_code_body">Try a sharper image, or make sure the whole code is in the picture.</string>
+    <string name="image_unreadable_body">The image could not be opened. It may be in an unsupported format.</string>
+    <plurals name="image_code_count">
+        <item quantity="one">%1$d code in this image</item>
+        <item quantity="other">%1$d codes in this image</item>
+    </plurals>
 
     <string name="camera_permission_title">Camera access needed</string>
     <string name="camera_permission_body">FerryQR uses the camera to scan codes. Codes in images can still be scanned without it.</string>

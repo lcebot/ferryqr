@@ -42,7 +42,7 @@ If a code still will not scan, tap the reset button to return to the default zoo
 
 In low light, use the flashlight button.
 
-You can pick an image from your gallery to scan in FerryQR, or share an image to FerryQR from another app.
+You can pick an image from your gallery to scan in FerryQR, share an image to FerryQR from another app, or open an image with FerryQR. A shared or opened image does not start the camera; its result pops up as a card, and when the image holds several codes you choose one at the top of the card.
 
 You can add FerryQR as a Quick Settings tile to open it quickly.
 

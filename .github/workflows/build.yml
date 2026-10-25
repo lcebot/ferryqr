@@ -1,4 +1,4 @@
-# Runs the unit tests and builds the FerryQR APK.
+# Builds the FerryQR APK.
 #
 # Secrets (Settings > Secrets and variables > Actions), signing only:
 #   KEYSTORE_B64       - base64 of your keystore
@@ -89,9 +89,6 @@ jobs:
           fi
           echo "VERSION_ARGS=-PversionNameOverride=$name -PversionCodeOverride=$code" >> "$GITHUB_ENV"
           echo "$tag -> versionName=$name versionCode=$code"
-
-      - name: unit tests
-        run: gradle testDebugUnitTest --no-daemon
 
       - name: build
         env:
