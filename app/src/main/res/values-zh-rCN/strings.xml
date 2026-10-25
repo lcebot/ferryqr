@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tile_label">扫码</string>
+    <string name="share_label">用 FerryQR 识别</string>
+
+    <string name="hint_aim">将摄像头对准二维码</string>
+    <string name="hint_hold">请保持稳定</string>
+    <string name="hint_looking">正在仔细识别…</string>
+    <string name="action_torch">手电筒</string>
+    <string name="action_gallery">识别图片</string>
+    <string name="action_reset">重置</string>
+    <string name="reset_done">已重置扫码</string>
+    <string name="zoom_label">%1$.1f×</string>
+    <string name="no_code_found">图片中没有找到二维码</string>
+    <string name="image_unreadable">无法打开这张图片</string>
+    <string name="no_camera">没有可用的摄像头</string>
+
+    <string name="camera_permission_title">需要相机权限</string>
+    <string name="camera_permission_body">FerryQR 用相机扫码。不授权也可以识别图片中的二维码。</string>
+    <string name="camera_permission_grant">允许使用相机</string>
+    <string name="camera_permission_settings">打开设置</string>
+
+    <string name="pick_title">点击要打开的二维码</string>
+    <string name="pick_close">返回扫码</string>
+
+    <string name="kind_link">链接</string>
+    <string name="kind_app_link">应用链接</string>
+    <string name="kind_text">文本</string>
+    <string name="kind_wifi">Wi-Fi 网络</string>
+    <string name="kind_contact">联系人</string>
+    <string name="kind_event">日程</string>
+    <string name="kind_esim">eSIM 激活码</string>
+    <string name="kind_fido">通行密钥登录</string>
+    <string name="kind_dpp">Wi-Fi 简易连接</string>
+
+    <string name="warn_http">未加密（HTTP）</string>
+    <string name="warn_idn">国际化域名，请留意形近字符仿冒</string>
+    <string name="warn_ip">指向一个 IP 地址</string>
+    <string name="scheme_unhandled">没有已安装的应用能打开这个链接。</string>
+    <string name="esim_unhandled">没有 eSIM 管理程序接受这个激活码。请复制后在 SIM 卡设置中添加 eSIM。</string>
+    <string name="fido_unhandled">没有通行密钥提供程序接受这个二维码。</string>
+    <string name="dpp_unsupported">这台设备不支持 Wi-Fi 简易连接。</string>
+    <string name="wifi_connect_unsupported">这种加密方式无法自动添加，请复制密码后在 Wi-Fi 设置中连接。</string>
+
+    <string name="open">打开</string>
+    <string name="open_in_alipay">在支付宝中打开</string>
+    <string name="scan_in_wechat">在微信中扫码</string>
+    <string name="copy">复制</string>
+    <string name="copied">已复制</string>
+    <string name="share">分享</string>
+    <string name="search">搜索</string>
+    <string name="connect">连接</string>
+    <string name="copy_password">复制密码</string>
+    <string name="add_contact">添加到通讯录</string>
+    <string name="add_event">添加到日历</string>
+    <string name="open_sim_settings">SIM 卡设置</string>
+    <string name="no_app">没有应用可以处理</string>
+
+    <string name="wifi_security_open">开放网络</string>
+    <string name="wifi_security_wep">WEP</string>
+    <string name="wifi_security_wpa">WPA/WPA2</string>
+    <string name="wifi_security_sae">WPA3</string>
+    <string name="wifi_security_eap">企业级（EAP）</string>
+    <string name="wifi_password">密码：%1$s</string>
+    <string name="wifi_hidden">隐藏网络</string>
+    <string name="format_label">码制：%1$s</string>
+</resources>

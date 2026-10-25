@@ -1,0 +1,145 @@
+# Runs the unit tests and builds the FerryQR APK.
+#
+# Secrets (Settings > Secrets and variables > Actions), signing only:
+#   KEYSTORE_B64       - base64 of your keystore
+#   KEYSTORE_PASSWORD  - store password
+#   KEY_ALIAS          - optional, defaults to the store's only alias
+#   KEY_PASSWORD       - optional, defaults to KEYSTORE_PASSWORD
+#
+# Output: workflow artifact "ferryqr" (APK). Publishing a release attaches the
+# APK to that release.
+name: build
+on:
+  push:
+    branches: ["**"]
+    paths: ["app/**", "*.gradle.kts", "gradle/**", ".github/workflows/build.yml"]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: install SDK components
+        run: |
+          SDKMANAGER=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | tail -n1)
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "platforms;android-37.1" "build-tools;36.0.0" >/dev/null
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.8.2"
+
+      - name: decode keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "no keystore secret: the release APK will be unsigned"
+            exit 0
+          fi
+          clean=$(printf '%s' "$KEYSTORE_B64" | tr -cd 'A-Za-z0-9+/=')
+          printf '%s' "$clean" | base64 -d > "$RUNNER_TEMP/keystore.p12" 2>/dev/null || true
+          if ! head -c2 "$RUNNER_TEMP/keystore.p12" | od -An -tx1 | grep -q '30 82'; then
+            echo "KEYSTORE_B64 does not decode to a valid keystore"
+            exit 1
+          fi
+          echo "KEYSTORE_FILE=$RUNNER_TEMP/keystore.p12" >> "$GITHUB_ENV"
+
+      - name: derive version
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "release" ]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            tag=$(git describe --tags --abbrev=0 2>/dev/null || true)
+            if [ -z "$tag" ]; then
+              echo "no tag: using the fallback in build.gradle.kts"
+              exit 0
+            fi
+          fi
+          if ! printf '%s' "$tag" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            if [ "$GITHUB_EVENT_NAME" = "release" ]; then
+              echo "tag '$tag' is not vX.Y.Z"
+              exit 1
+            fi
+            echo "latest tag '$tag' is not vX.Y.Z: using fallback"
+            exit 0
+          fi
+          name="${tag#v}"
+          major=$((10#$(printf '%s' "$name" | cut -d. -f1)))
+          minor=$((10#$(printf '%s' "$name" | cut -d. -f2)))
+          patch=$((10#$(printf '%s' "$name" | cut -d. -f3)))
+          code=$(( major * 1000 + minor * 100 + patch ))
+          if [ "$GITHUB_EVENT_NAME" != "release" ]; then
+            name="$name+$(git rev-parse --short HEAD)"
+          fi
+          echo "VERSION_ARGS=-PversionNameOverride=$name -PversionCodeOverride=$code" >> "$GITHUB_ENV"
+          echo "$tag -> versionName=$name versionCode=$code"
+
+      - name: unit tests
+        run: gradle testDebugUnitTest --no-daemon
+
+      - name: build
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: gradle assembleRelease --no-daemon $VERSION_ARGS
+
+      - name: collect APK
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/release/*.apk dist/
+          ls -l dist
+
+      # The app promises not to use the network; a dependency must not slip the permission in.
+      - name: check permissions
+        run: |
+          AAPT2=$(ls -d "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -n1)
+          for apk in dist/*.apk; do
+            "$AAPT2" dump permissions "$apk"
+            if "$AAPT2" dump permissions "$apk" | grep -qE "android\.permission\.(INTERNET|ACCESS_NETWORK_STATE)'"; then
+              echo "$apk requests network access"
+              exit 1
+            fi
+          done
+
+      - uses: actions/upload-artifact@v4
+        id: upload
+        with:
+          name: ferryqr
+          path: dist/
+          retention-days: 1
+
+      - name: attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+
+      - name: delete older artifacts
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP: ${{ steps.upload.outputs.artifact-id }}
+        run: |
+          if [ -z "$KEEP" ]; then exit 0; fi
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/artifacts?name=ferryqr&per_page=100" \
+            --jq ".artifacts[] | select(.id != $KEEP) | .id" |
+          while read -r id; do
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$id" && echo "deleted artifact $id"
+          done

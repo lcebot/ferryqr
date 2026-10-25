@@ -1,0 +1,75 @@
+package com.lcebot.ferryqr.dispatch
+
+import android.app.Activity
+import android.content.ComponentName
+import android.content.Intent
+import android.net.Uri
+
+private const val NEW_TASK_CLEAR_TOP = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+
+/** Alipay accepts the scanned content itself, so its own scanner flow continues seamlessly. */
+internal object Alipay {
+    const val PACKAGE = "com.eg.android.AlipayGphone"
+    private val QR_LINK = Regex("^https?://qr\\.alipay\\.com/.*", RegexOption.IGNORE_CASE)
+
+    fun claims(text: String) = QR_LINK.matches(text)
+
+    fun handoff(activity: Activity, text: String): Boolean = Launch.start(
+        activity,
+        Intent(Intent.ACTION_VIEW, Uri.parse("alipayqr://platformapi/startapp?saId=10000007&qrcode=" + Uri.encode(text)))
+            .addFlags(NEW_TASK_CLEAR_TOP),
+    )
+}
+
+/** WeChat has no public entry that takes scanned content, so the best it can do is open its scanner. */
+internal object WeChat {
+    const val PACKAGE = "com.tencent.mm"
+    private val CODES = Regex(
+        "^(?:https?://weixin\\.qq\\.com/.*|weixin://.*|https://wx\\.tenpay\\.com/f2f.*" +
+            "|https://payapp\\.wechatpay\\.cn/sjt/qr/.*|wxp\\s*:.*)$",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+    )
+
+    fun claims(text: String) = CODES.matches(text) || text.contains("wechat/oauth2")
+
+    fun openScanner(activity: Activity): Boolean = Launch.start(
+        activity,
+        Intent(Intent.ACTION_VIEW)
+            .setComponent(ComponentName(PACKAGE, "com.tencent.mm.ui.LauncherUI"))
+            .putExtra("LauncherUI.From.Scaner.Shortcut", true)
+            .addFlags(NEW_TASK_CLEAR_TOP),
+    )
+}
+
+/** Xiaomi apps reached through private intents that no generic link resolution can find. */
+internal object Xiaomi {
+    private val ACCOUNT_LOGIN = Regex("^https://[^/]+\\.account\\.xiaomi\\.com/longPolling/login\\?.*")
+    private val MI_HOME_PREFIXES = listOf(
+        "https://home.mi.com/do/home.html?f=xz",
+        "https://home.mi.com/do/home.html?f=fnetsuoiea",
+        "https://home.mi.com/do/home.html?a=",
+    )
+
+    fun claim(activity: Activity, url: String): Boolean = when {
+        ACCOUNT_LOGIN.matches(url) -> Launch.start(
+            activity,
+            Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                .setClassName("com.xiaomi.account", "com.xiaomi.account.ui.AccountWebActivity"),
+        )
+        MI_HOME_PREFIXES.any { url.startsWith(it) } -> Launch.start(activity, miHome(url))
+        else -> false
+    }
+
+    /** Mi Home reads the query parameters as extras; '+' and '/' must survive query decoding. */
+    private fun miHome(url: String): Intent {
+        var escaped = url.replace("+", "%2B")
+        val queryStart = escaped.indexOf('?')
+        if (queryStart >= 0) {
+            escaped = escaped.substring(0, queryStart) + escaped.substring(queryStart).replace("/", "%2F")
+        }
+        val uri = Uri.parse(escaped)
+        val intent = Intent("com.xiaomi.smarthome.mitvconnect").setPackage("com.xiaomi.smarthome")
+        for (name in uri.queryParameterNames) intent.putExtra(name, uri.getQueryParameter(name))
+        return intent
+    }
+}

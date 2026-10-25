@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name" translatable="false">FerryQR</string>
+    <string name="tile_label">Scan code</string>
+    <string name="share_label">Scan with FerryQR</string>
+
+    <string name="hint_aim">Point the camera at a code</string>
+    <string name="hint_hold">Hold steady</string>
+    <string name="hint_looking">Looking closer…</string>
+    <string name="action_torch">Flashlight</string>
+    <string name="action_gallery">Scan an image</string>
+    <string name="action_reset">Reset</string>
+    <string name="reset_done">Scanner reset</string>
+    <string name="zoom_label">%1$.1f×</string>
+    <string name="no_code_found">No code found in the image</string>
+    <string name="image_unreadable">Could not open the image</string>
+    <string name="no_camera">No usable camera found</string>
+
+    <string name="camera_permission_title">Camera access needed</string>
+    <string name="camera_permission_body">FerryQR uses the camera to scan codes. Codes in images can still be scanned without it.</string>
+    <string name="camera_permission_grant">Allow camera</string>
+    <string name="camera_permission_settings">Open settings</string>
+
+    <string name="pick_title">Tap the code to open</string>
+    <string name="pick_close">Back to scanning</string>
+
+    <string name="kind_link">Link</string>
+    <string name="kind_app_link">App link</string>
+    <string name="kind_text">Text</string>
+    <string name="kind_wifi">Wi-Fi network</string>
+    <string name="kind_contact">Contact</string>
+    <string name="kind_event">Event</string>
+    <string name="kind_esim">eSIM activation code</string>
+    <string name="kind_fido">Passkey sign-in</string>
+    <string name="kind_dpp">Wi-Fi Easy Connect</string>
+
+    <string name="warn_http">Not encrypted (HTTP)</string>
+    <string name="warn_idn">Internationalized domain, check for look-alike characters</string>
+    <string name="warn_ip">Points to a bare IP address</string>
+    <string name="scheme_unhandled">No installed app accepts this link.</string>
+    <string name="esim_unhandled">No eSIM manager accepted this code. Copy it and add the eSIM from the SIM settings.</string>
+    <string name="fido_unhandled">No passkey provider accepted this code.</string>
+    <string name="dpp_unsupported">This device does not support Wi-Fi Easy Connect.</string>
+    <string name="wifi_connect_unsupported">This security type cannot be added automatically. Copy the password and connect from the Wi-Fi settings.</string>
+
+    <string name="open">Open</string>
+    <string name="open_in_alipay">Open in Alipay</string>
+    <string name="scan_in_wechat">Scan in WeChat</string>
+    <string name="copy">Copy</string>
+    <string name="copied">Copied</string>
+    <string name="share">Share</string>
+    <string name="search">Search</string>
+    <string name="connect">Connect</string>
+    <string name="copy_password">Copy password</string>
+    <string name="add_contact">Add to contacts</string>
+    <string name="add_event">Add to calendar</string>
+    <string name="open_sim_settings">SIM settings</string>
+    <string name="no_app">No app can handle this</string>
+
+    <string name="wifi_security_open">Open network</string>
+    <string name="wifi_security_wep">WEP</string>
+    <string name="wifi_security_wpa">WPA/WPA2</string>
+    <string name="wifi_security_sae">WPA3</string>
+    <string name="wifi_security_eap">Enterprise (EAP)</string>
+    <string name="wifi_password">Password: %1$s</string>
+    <string name="wifi_hidden">Hidden network</string>
+    <string name="format_label">Format: %1$s</string>
+</resources>
