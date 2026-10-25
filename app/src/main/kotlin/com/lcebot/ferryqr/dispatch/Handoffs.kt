@@ -10,9 +10,16 @@ private const val NEW_TASK_CLEAR_TOP = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.F
 /** Alipay accepts the scanned content itself, so its own scanner flow continues seamlessly. */
 internal object Alipay {
     const val PACKAGE = "com.eg.android.AlipayGphone"
-    private val QR_LINK = Regex("^https?://qr\\.alipay\\.com/.*", RegexOption.IGNORE_CASE)
+    /**
+     * Payment and collection codes on qr, the scanner landing page on ds, the short links Alipay
+     * mini programs share on ur, and campaign pages such as red packet codes on render.
+     */
+    private val CODES = Regex(
+        "^https?://(?:(?:qr|ds|ur)\\.alipay\\.com/|render\\.alipay\\.com/p/).*",
+        RegexOption.IGNORE_CASE,
+    )
 
-    fun claims(text: String) = QR_LINK.matches(text)
+    fun claims(text: String) = CODES.matches(text)
 
     fun handoff(activity: Activity, text: String): Boolean = Launch.start(
         activity,
@@ -24,9 +31,16 @@ internal object Alipay {
 /** WeChat has no public entry that takes scanned content, so the best it can do is open its scanner. */
 internal object WeChat {
     const val PACKAGE = "com.tencent.mm"
+    /**
+     * Profile, group and official account codes, the international profile host, mini program codes
+     * that carry a plain link, website and web client login codes, and WeChat Pay merchant codes.
+     */
     private val CODES = Regex(
-        "^(?:https?://weixin\\.qq\\.com/.*|weixin://.*|https://wx\\.tenpay\\.com/f2f.*" +
-            "|https://payapp\\.wechatpay\\.cn/sjt/qr/.*|wxp\\s*:.*)$",
+        "^(?:https?://weixin\\.qq\\.com/.*|https?://u\\.wechat\\.com/.*|weixin://.*|wxp\\s*:.*" +
+            "|https?://mp\\.weixin\\.qq\\.com/a/.*" +
+            "|https://open\\.weixin\\.qq\\.com/connect/confirm.*|https://login\\.weixin\\.qq\\.com/l/.*" +
+            "|https://wx\\.tenpay\\.com/f2f.*|https://payapp\\.weixin\\.qq\\.com/.*" +
+            "|https://payapp\\.wechatpay\\.cn/sjt/qr/.*|https://wxpay\\.wxutil\\.com/mch/pay/.*)$",
         setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
     )
 
