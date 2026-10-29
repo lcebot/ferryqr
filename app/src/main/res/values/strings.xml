@@ -56,6 +56,14 @@
     <string name="open">Open</string>
     <string name="open_in_alipay">Open in Alipay</string>
     <string name="scan_in_wechat">Scan in WeChat</string>
+    <string name="open_in_wechat">Open in WeChat</string>
+    <string name="kind_mini_program">Mini program code</string>
+    <string name="mini_headline">Possibly a WeChat mini program code</string>
+    <string name="mini_body_helper">FerryQR cannot read this kind of code, but WeChat can. Its scanner will be shown this part of the image, and if it finds nothing there, this was not a mini program code.</string>
+    <string name="mini_body_album">FerryQR cannot read this kind of code, but WeChat can. In the WeChat scanner, choose this image from the album.</string>
+    <string name="mini_body_scan">FerryQR cannot read this kind of code, but WeChat can. Scan it again in the WeChat scanner.</string>
+    <string name="mini_open_scanner">Open WeChat scanner</string>
+    <string name="mini_no_wechat">WeChat is not installed</string>
     <string name="copy">Copy</string>
     <string name="copied">Copied</string>
     <string name="share">Share</string>
@@ -108,6 +116,9 @@
     <string name="generate_copy_failed">Could not copy the image</string>
     <string name="generate_saved">Saved to Pictures/FerryQR</string>
     <string name="generate_save_failed">Could not save the image</string>
+    <string name="generate_send_alipay">Send to Alipay</string>
+    <string name="generate_send_wechat">Send to WeChat</string>
+    <string name="generate_wechat_needs_helper">Sending to WeChat needs the FerryQR LSPosed module</string>
     <string name="generate_too_long">Too long for %1$s. %2$s can hold it.</string>
     <string name="generate_too_long_all">Too long for any code type</string>
     <string name="generate_clip_label">QR code</string>

@@ -5,6 +5,7 @@ import android.graphics.Rect
 import android.os.SystemClock
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import kotlin.math.hypot
 import kotlin.math.max
 
 /** Minimum gap between two WeChat runs, measured from the end of the previous run. */
@@ -21,6 +22,22 @@ private const val COLLECT_DEEP_INTERVAL_MS = 150L
 
 private const val MIN_REGION_PADDING = 48
 
+/**
+ * zxing-cpp never flags a mini program code as a suspect, so while a frame shows nothing QR-like
+ * the detector looks for one on its own at this interval. It is a rate limit, not the time a look
+ * takes: each costs tens of milliseconds, and looking on every frame would keep a core busy.
+ */
+private const val MINI_INTERVAL_MS = 400L
+
+/**
+ * A code is reported once two looks in a row agree. The second look runs on the next frame, so the
+ * agreement costs one frame rather than another interval.
+ */
+private const val MINI_CONFIRMATIONS = 2
+
+/** Looks further apart than this do not count as agreeing, and a muted code is free again after it. */
+private const val MINI_KEEP_MS = 1500L
+
 /** Runs on a single analysis thread; only [paused] and [reset] are touched from elsewhere. */
 class LiveAnalyzer(
     private val zxing: ZxingEngine,
@@ -28,6 +45,7 @@ class LiveAnalyzer(
     private val autoZoom: AutoZoom,
     private val onSighting: (Sighting?) -> Unit,
     private val onHit: (frame: Bitmap, detections: List<Detection>, alreadyShown: Set<String>) -> Unit,
+    private val onMiniCode: (crop: Bitmap) -> Unit,
 ) : ImageAnalysis.Analyzer {
 
     /** Set before every hit so a burst of frames cannot report the same code twice. */
@@ -46,10 +64,27 @@ class LiveAnalyzer(
     /** Collected codes already sent to the screen in a sighting during this collection. */
     private val announced = HashSet<String>()
 
+    private var lastMiniAt = 0L
+    private var miniSeen: MiniCode? = null
+    private var miniSeenAt = 0L
+    private var miniHits = 0
+
+    /** Set after the user dismissed a mini program code, until that code has been out of view. */
+    @Volatile
+    private var miniMuted = false
+    private var miniMutedSeenAt = 0L
+
     /** Starts over as if the analyzer had just been created. */
     fun reset() {
         clearRequested = true
+        miniMuted = false
         paused = false
+    }
+
+    /** The mini program code just dismissed is not reported again until it leaves the view. */
+    fun muteMiniCode() {
+        miniMutedSeenAt = SystemClock.elapsedRealtime()
+        miniMuted = true
     }
 
     override fun analyze(image: ImageProxy) {
@@ -68,6 +103,7 @@ class LiveAnalyzer(
             announced.clear()
             collectingSince = 0L
             lastDeepAt = 0L
+            forgetMiniCode()
         }
         val outcome = try {
             zxing.read(image)
@@ -89,10 +125,15 @@ class LiveAnalyzer(
         if (unresolved == 0) {
             onSighting(null)
             // Nothing else is waiting to be decoded, so a lone code goes out without delay.
-            if (collected.isNotEmpty()) finish(image, null, shownBefore)
-            else autoZoom.observe(emptyList(), frameWidth, frameHeight)
+            if (collected.isNotEmpty()) {
+                finish(image, null, shownBefore)
+            } else {
+                autoZoom.observe(emptyList(), frameWidth, frameHeight)
+                lookForMiniCode(image, now)
+            }
             return
         }
+        expireMiniCode(now)
 
         val bounds = outcome.suspects.union()
         onSighting(sighting(frameWidth, frameHeight, bounds, deep = false))
@@ -122,6 +163,52 @@ class LiveAnalyzer(
         if (unresolved <= 0 || now - collectingSince >= COLLECT_MS) finish(image, frame, shownBefore) else frame?.recycle()
     }
 
+    private fun lookForMiniCode(image: ImageProxy, now: Long) {
+        val pending = miniHits in 1 until MINI_CONFIRMATIONS
+        if (!pending && now - lastMiniAt < MINI_INTERVAL_MS) {
+            expireMiniCode(now)
+            return
+        }
+        val frame = image.toUprightBitmap()
+        try {
+            val found = wechat.locateMiniCodes(frame).maxByOrNull { it.radius }
+            lastMiniAt = SystemClock.elapsedRealtime()
+            if (miniMuted) {
+                if (found != null) miniMutedSeenAt = now
+                else if (now - miniMutedSeenAt > MINI_KEEP_MS) miniMuted = false
+                return
+            }
+            if (found == null) {
+                forgetMiniCode()
+                return
+            }
+            val previous = miniSeen
+            val same = previous != null && now - miniSeenAt <= MINI_KEEP_MS &&
+                hypot(found.center.x - previous.center.x, found.center.y - previous.center.y) < previous.radius
+            miniHits = if (same) miniHits + 1 else 1
+            miniSeen = found
+            miniSeenAt = now
+            if (miniHits >= MINI_CONFIRMATIONS) {
+                val crop = found.crop(frame) ?: return
+                forgetMiniCode()
+                paused = true
+                onSighting(null)
+                onMiniCode(crop)
+            }
+        } finally {
+            frame.recycle()
+        }
+    }
+
+    private fun expireMiniCode(now: Long) {
+        if (miniSeen != null && now - miniSeenAt > MINI_KEEP_MS) forgetMiniCode()
+    }
+
+    private fun forgetMiniCode() {
+        miniSeen = null
+        miniHits = 0
+    }
+
     private fun sighting(frameWidth: Int, frameHeight: Int, bounds: Rect, deep: Boolean): Sighting {
         announced.addAll(collected.keys)
         return Sighting(frameWidth, frameHeight, bounds, deep, found = collected.values.toList())
@@ -134,6 +221,7 @@ class LiveAnalyzer(
         collectingSince = 0L
         paused = true
         onSighting(null)
+        forgetMiniCode()
         onHit(frame ?: image.toUprightBitmap(), detections, shown)
     }
 }

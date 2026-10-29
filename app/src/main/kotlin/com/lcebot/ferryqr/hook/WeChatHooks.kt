@@ -63,8 +63,11 @@ internal object WeChatHooks {
                 when (intent.action) {
                     HelperProtocol.ACTION_PROBE -> resultCode = HelperProtocol.RESULT_ACCEPTED
                     HelperProtocol.ACTION_HANDOFF -> {
-                        val text = intent.getStringExtra(HelperProtocol.EXTRA_TEXT) ?: return
-                        val armed = FrameFeed.arm(text, intent.getLongExtra(HelperProtocol.EXTRA_ID, 0L))
+                        val armed = FrameFeed.arm(
+                            intent.getStringExtra(HelperProtocol.EXTRA_TEXT),
+                            intent.getByteArrayExtra(HelperProtocol.EXTRA_IMAGE),
+                            intent.getLongExtra(HelperProtocol.EXTRA_ID, 0L),
+                        )
                         resultCode = if (armed) HelperProtocol.RESULT_ACCEPTED else HelperProtocol.RESULT_DECLINED
                     }
                 }

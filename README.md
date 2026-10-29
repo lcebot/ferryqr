@@ -12,7 +12,9 @@ FerryQR is a QR code scanner for Android. Point the camera at a code and FerryQR
 
 **Alipay and WeChat codes:** Alipay codes open directly in Alipay. WeChat does not accept scan results from other apps, so when FerryQR detects a WeChat code it can only take you to the WeChat scanner, where you scan the code again.
 
-**Optional LSPosed helper:** FerryQR is also an LSPosed module. Enable it with WeChat as its scope and restart WeChat, and the WeChat scanner is shown the code you scanned for a few seconds in place of the camera image, so it reads that code at once, without aiming again or choosing between several codes. The scanner screen confirms briefly when the helper is ready. Without LSPosed, FerryQR works as described above.
+**Optional LSPosed helper:** FerryQR is also an LSPosed module. Enable it with WeChat as its scope and restart WeChat, and the WeChat scanner is shown the code you scanned for a few seconds in place of the camera image, so it reads that code at once, without aiming again or choosing between several codes. With the helper, result cards offer Open in WeChat in place of Scan in WeChat. The scanner screen confirms briefly when the helper is ready. Without LSPosed, FerryQR works as described above.
+
+**WeChat mini program codes:** the round codes with three eye markers have no public description, so FerryQR cannot read them, but it can recognise one by its shape. When the camera sees such a code in two looks in a row, the scanner stops and shows it in a result sheet whose only action hands it to WeChat; nothing is sent until you tap it, and a dismissed code is not offered again until it leaves the view. An image that holds nothing readable but such a code gets the same sheet. With the helper, the WeChat scanner is shown that part of the picture and opens the code at once; without it, the scanner opens and the code is scanned there, or for an image, picked from the scanner's album.
 
 **Wi-Fi:** Shows the network name and password. Most networks can be connected to directly.
 
@@ -32,7 +34,7 @@ The history button at the top right lists the codes you have scanned, grouped by
 
 ## Creating codes
 
-The create button at the top right turns text into a code. When it opens, it fills in text from the clipboard and shows the code right away, and the code updates as you edit the text. Besides regular QR codes you can choose Aztec, Data Matrix or PDF417. If the text is too long for the chosen type, a message below the text field says so. You can copy the code to the clipboard or save it to Pictures/FerryQR.
+The create button at the top right turns text into a code. When it opens, it fills in text from the clipboard and shows the code right away, and the code updates as you edit the text. Besides regular QR codes you can choose Aztec, Data Matrix or PDF417. If the text is too long for the chosen type, a message below the text field says so. You can copy the code to the clipboard or save it to Pictures/FerryQR. The text can also be sent straight to Alipay, and with the LSPosed helper to WeChat as well.
 
 ## Tips
 

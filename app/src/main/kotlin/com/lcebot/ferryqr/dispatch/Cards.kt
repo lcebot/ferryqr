@@ -1,6 +1,7 @@
 package com.lcebot.ferryqr.dispatch
 
 import android.app.Activity
+import android.graphics.Bitmap
 import android.text.format.DateUtils
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
@@ -16,6 +17,7 @@ import com.lcebot.ferryqr.content.TextPayload
 import com.lcebot.ferryqr.content.WebPayload
 import com.lcebot.ferryqr.content.WifiPayload
 import com.lcebot.ferryqr.content.WifiSecurity
+import com.lcebot.ferryqr.helper.WeChatHelper
 
 enum class ActionResult {
     /** Another app took over; the scanner can close. */
@@ -31,13 +33,18 @@ enum class ActionResult {
     Unavailable,
 }
 
+/** [app] is the package the action hands off to; its own icon then replaces [icon]. */
 data class CardAction(
     @param:StringRes val label: Int,
     @param:DrawableRes val icon: Int,
+    val app: String? = null,
     val run: (Activity) -> ActionResult,
 )
 
-/** What the result sheet shows. The first action is the primary one. */
+/**
+ * What the result sheet shows. The first action is the primary one. [image] shows a code that was
+ * located but could not be read, since there is no content to show instead.
+ */
 data class ResultCard(
     val raw: String,
     @param:StringRes val kind: Int,
@@ -46,6 +53,7 @@ data class ResultCard(
     val body: String?,
     val notes: List<Int>,
     val actions: List<CardAction>,
+    val image: Bitmap? = null,
 )
 
 data class Kind(@param:StringRes val label: Int, @param:DrawableRes val icon: Int)
@@ -62,6 +70,39 @@ object Cards {
         is ContactPayload -> Kind(R.string.kind_contact, R.drawable.ic_person_add)
         is EventPayload -> Kind(R.string.kind_event, R.drawable.ic_event)
         is TextPayload -> Kind(R.string.kind_text, R.drawable.ic_notes)
+    }
+
+    /**
+     * A probable WeChat mini program code, shown as [crop]. With the WeChat helper the crop goes to
+     * WeChat's scanner, which then simply opens it. Without the helper, a code the camera saw
+     * ([live]) is scanned again in WeChat; an image FerryQR holds cannot reach WeChat's camera, so
+     * the user is pointed to the scanner's own album button instead.
+     */
+    fun miniProgram(activity: Activity, crop: Bitmap, helperReady: Boolean, live: Boolean): ResultCard {
+        val installed = Launch.isInstalled(activity, WeChat.PACKAGE)
+        val label = when {
+            helperReady -> R.string.open_in_wechat
+            live -> R.string.scan_in_wechat
+            else -> R.string.mini_open_scanner
+        }
+        val body = when {
+            helperReady -> R.string.mini_body_helper
+            live -> R.string.mini_body_scan
+            else -> R.string.mini_body_album
+        }
+        val action = CardAction(label, R.drawable.ic_open_in_new, WeChat.PACKAGE) {
+            if (WeChat.openScanner(it, crop)) ActionResult.Handoff else ActionResult.Unavailable
+        }
+        return ResultCard(
+            raw = "",
+            kind = R.string.kind_mini_program,
+            icon = R.drawable.ic_qr_code_scanner,
+            headline = activity.getString(R.string.mini_headline),
+            body = activity.getString(body),
+            notes = if (installed) emptyList() else listOf(R.string.mini_no_wechat),
+            actions = if (installed) listOf(action) else emptyList(),
+            image = crop,
+        )
     }
 
     private val IP_LITERAL = Regex("^(\\d{1,3}\\.){3}\\d{1,3}$|^\\[.*]$")
@@ -113,12 +154,18 @@ object Cards {
                 if (Launch.browser(it, payload.url)) ActionResult.Handoff else ActionResult.Unavailable
             })
             if (Launch.isInstalled(activity, Alipay.PACKAGE)) {
-                add(CardAction(R.string.open_in_alipay, R.drawable.ic_account_balance_wallet) {
+                add(CardAction(R.string.open_in_alipay, R.drawable.ic_open_in_new, Alipay.PACKAGE) {
                     if (Alipay.handoff(it, payload.raw)) ActionResult.Handoff else ActionResult.Unavailable
                 })
             }
             if (Launch.isInstalled(activity, WeChat.PACKAGE)) {
-                add(CardAction(R.string.scan_in_wechat, R.drawable.ic_qr_code_scanner) {
+                // With the helper WeChat reads the code at once, so to the user it simply opens there.
+                val opens = WeChatHelper.ready.value
+                add(CardAction(
+                    if (opens) R.string.open_in_wechat else R.string.scan_in_wechat,
+                    R.drawable.ic_open_in_new,
+                    WeChat.PACKAGE,
+                ) {
                     if (WeChat.openScanner(it, payload.raw)) ActionResult.Handoff else ActionResult.Unavailable
                 })
             }

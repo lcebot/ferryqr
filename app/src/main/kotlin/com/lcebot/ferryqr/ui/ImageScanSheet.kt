@@ -97,6 +97,7 @@ private const val THUMBNAIL_MARGIN = 0.15f
 fun ImageScanSheet(vm: ImageScanViewModel, onClose: () -> Unit) {
     val haptics = rememberHaptics()
     val result by vm.result.collectAsStateWithLifecycle()
+    val helperReady by vm.helperReady.collectAsStateWithLifecycle()
     val sheetState = rememberBottomSheetState(
         initialValue = SheetValue.Hidden,
         enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded),
@@ -111,7 +112,8 @@ fun ImageScanSheet(vm: ImageScanViewModel, onClose: () -> Unit) {
         when (val read = result) {
             null -> {}
             StillResult.Unreadable -> haptics.reject()
-            is StillResult.Read -> if (read.detections.isEmpty()) haptics.reject() else haptics.confirm()
+            is StillResult.Read ->
+                if (read.detections.isEmpty() && read.miniCodes.isEmpty()) haptics.reject() else haptics.confirm()
         }
     }
 
@@ -119,13 +121,21 @@ fun ImageScanSheet(vm: ImageScanViewModel, onClose: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onClose, sheetState = sheetState) {
         AnimatedContent(
             targetState = result,
-            contentKey = { read -> if (read is StillResult.Read) read.detections.isEmpty() else read },
+            contentKey = { read ->
+                when {
+                    read !is StillResult.Read -> read
+                    read.detections.isNotEmpty() -> "codes"
+                    read.miniCodes.isNotEmpty() -> "mini"
+                    else -> "none"
+                }
+            },
             transitionSpec = { (fadeIn(fade) togetherWith fadeOut(fade)).using(SizeTransform(clip = false)) },
             label = "image-sheet",
         ) { read ->
             when {
                 read == null -> Reading()
                 read is StillResult.Read && read.detections.isNotEmpty() -> Found(read, onHandoff = onClose)
+                read is StillResult.Read && read.miniCodes.isNotEmpty() -> MiniFound(read, helperReady, onHandoff = onClose)
                 read is StillResult.Read -> SheetMessage(
                     icon = R.drawable.ic_search_off,
                     title = R.string.image_no_code_title,
@@ -259,6 +269,36 @@ private fun Found(read: StillResult.Read, onHandoff: () -> Unit) {
             )
         }
     }
+}
+
+/** A probable mini program code, the only thing found in the image, offered to WeChat. */
+@Composable
+private fun MiniFound(read: StillResult.Read, helperReady: Boolean, onHandoff: () -> Unit) {
+    val activity = LocalActivity.current ?: return
+    val context = LocalContext.current
+    val haptics = rememberHaptics()
+    val crop = remember(read) { read.miniCodes.first().crop(read.frame) } ?: return
+    val card = remember(crop, helperReady) { Cards.miniProgram(activity, crop, helperReady, live = false) }
+    ResultCardContent(
+        card = card,
+        onAction = { action ->
+            when (action.run(activity)) {
+                ActionResult.Handoff -> {
+                    haptics.tap()
+                    onHandoff()
+                }
+                ActionResult.Unavailable -> {
+                    haptics.reject()
+                    Toast.makeText(context, R.string.no_app, Toast.LENGTH_SHORT).show()
+                }
+                else -> haptics.tap()
+            }
+        },
+        modifier = Modifier
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp)
+            .padding(bottom = 24.dp),
+    )
 }
 
 /** Shown above the card only when the image holds several codes. */

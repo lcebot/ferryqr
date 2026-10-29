@@ -85,6 +85,7 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
     val sighting by vm.sighting.collectAsStateWithLifecycle()
     val session by vm.cameraSession.collectAsStateWithLifecycle()
     val helperNotice by vm.helperNotice.collectAsStateWithLifecycle()
+    val helperReady by vm.helperReady.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var torch by rememberSaveable { mutableStateOf(false) }
@@ -103,6 +104,11 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
     }
 
     LaunchedEffect(phase) {
+        (phase as? Phase.MiniCodeFound)?.let { found ->
+            haptics.found()
+            vm.show(Cards.miniProgram(activity, found.crop, helperReady, live = found.live))
+            return@LaunchedEffect
+        }
         val routing = phase as? Phase.Routing ?: return@LaunchedEffect
         vm.record(routing.detection)
         val payload = Classifier.classify(routing.detection.text)

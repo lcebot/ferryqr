@@ -6,6 +6,8 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.os.Build
+import androidx.activity.compose.LocalActivity
+import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.compose.foundation.Image
 import androidx.compose.animation.animateContentSize
@@ -23,6 +25,7 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -53,6 +56,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -74,10 +78,14 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.lcebot.ferryqr.R
+import com.lcebot.ferryqr.dispatch.Alipay
+import com.lcebot.ferryqr.dispatch.Launch
+import com.lcebot.ferryqr.dispatch.WeChat
 import com.lcebot.ferryqr.generate.CodeExport
 import com.lcebot.ferryqr.generate.CodeGenerator
 import com.lcebot.ferryqr.generate.CodeType
 import com.lcebot.ferryqr.generate.Generated
+import com.lcebot.ferryqr.helper.WeChatHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -107,6 +115,7 @@ private const val TILT_GAIN = 1.02f
 @Composable
 fun GeneratorScreen(onBack: () -> Unit) {
     val context = LocalContext.current
+    val activity = LocalActivity.current
     val haptics = rememberHaptics()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -115,6 +124,13 @@ fun GeneratorScreen(onBack: () -> Unit) {
     var type by rememberSaveable { mutableStateOf(CodeType.QR) }
     var prefilled by rememberSaveable { mutableStateOf(false) }
     var result by remember { mutableStateOf<Generated?>(null) }
+    val alipayInstalled = remember { Launch.isInstalled(context, Alipay.PACKAGE) }
+    val wechatInstalled = remember { Launch.isInstalled(context, WeChat.PACKAGE) }
+    val helperReady by WeChatHelper.ready.collectAsState()
+    val sendRow = alipayInstalled || wechatInstalled
+
+    // The scanner probes on start, but the generator can be reached before that probe has answered.
+    LaunchedEffect(Unit) { if (!WeChatHelper.ready.value) WeChatHelper.probe(context) }
 
     // Android only lets the focused app read the clipboard, so wait for focus before reading it.
     LaunchedEffect(Unit) {
@@ -197,7 +213,8 @@ fun GeneratorScreen(onBack: () -> Unit) {
             ) - navigationBar
             val keyboard = with(density) { keyboardPx.coerceAtLeast(0).toDp() }
             val lineHeight = with(density) { MaterialTheme.typography.bodyLarge.lineHeight.toDp() }
-            val roomBesideCode = maxHeight - keyboard - CHIPS_HEIGHT - BUTTONS_HEIGHT - GAP * 3 - maxWidth
+            val buttonRows = if (sendRow) 2 else 1
+            val roomBesideCode = maxHeight - keyboard - CHIPS_HEIGHT - (BUTTONS_HEIGHT + GAP) * buttonRows - GAP * 2 - maxWidth
             val fieldLines = (MAX_FIELD_LINES downTo 1).firstOrNull { lines ->
                 FIELD_ONE_LINE + lineHeight * (lines - 1) + SUPPORTING_HEIGHT <= roomBesideCode
             } ?: 1
@@ -273,8 +290,62 @@ fun GeneratorScreen(onBack: () -> Unit) {
                         Text(stringResource(R.string.generate_save))
                     }
                 }
+
+                if (sendRow && activity != null) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        if (alipayInstalled) {
+                            SendButton(R.string.generate_send_alipay, Alipay.PACKAGE, R.drawable.ic_open_in_new, text.isNotEmpty(), looksEnabled = true) {
+                                haptics.tap()
+                                if (!Alipay.handoff(activity, text)) scope.launch { snackbar.showSnackbar(context.getString(R.string.no_app)) }
+                            }
+                        }
+                        if (wechatInstalled) {
+                            // Without the helper WeChat could only open its scanner on nothing, so the
+                            // button looks disabled but still explains why when tapped.
+                            SendButton(R.string.generate_send_wechat, WeChat.PACKAGE, R.drawable.ic_open_in_new, text.isNotEmpty(), looksEnabled = helperReady) {
+                                if (!helperReady) {
+                                    haptics.reject()
+                                    scope.launch { snackbar.showSnackbar(context.getString(R.string.generate_wechat_needs_helper)) }
+                                } else {
+                                    haptics.tap()
+                                    if (!WeChat.openScanner(activity, text)) scope.launch { snackbar.showSnackbar(context.getString(R.string.no_app)) }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
+    }
+}
+
+/**
+ * Hands the text to another app. [looksEnabled] false draws the disabled colours while the button
+ * still takes taps, so it can say why it does nothing.
+ */
+@Composable
+private fun RowScope.SendButton(
+    @StringRes label: Int,
+    app: String,
+    @DrawableRes fallback: Int,
+    enabled: Boolean,
+    looksEnabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val colors = if (looksEnabled) ButtonDefaults.filledTonalButtonColors() else ButtonDefaults.filledTonalButtonColors(
+        containerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
+        contentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+    )
+    FilledTonalButton(
+        onClick = onClick,
+        enabled = enabled,
+        colors = colors,
+        shapes = ButtonDefaults.shapes(),
+        modifier = Modifier.weight(1f),
+    ) {
+        AppIcon(app, fallback, Modifier.size(ButtonDefaults.IconSize))
+        Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+        Text(stringResource(label), maxLines = 1)
     }
 }
 

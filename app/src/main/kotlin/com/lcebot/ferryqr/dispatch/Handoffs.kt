@@ -3,6 +3,7 @@ package com.lcebot.ferryqr.dispatch
 import android.app.Activity
 import android.content.ComponentName
 import android.content.Intent
+import android.graphics.Bitmap
 import android.net.Uri
 import com.lcebot.ferryqr.helper.WeChatHelper
 
@@ -31,7 +32,7 @@ internal object Alipay {
 
 /**
  * WeChat has no public entry that takes scanned content, so its scanner is opened. With the
- * optional LSPosed helper, the scanner is then shown [openScanner]'s text in place of the camera.
+ * optional LSPosed helper, the scanner is then shown the code in place of the camera image.
  */
 internal object WeChat {
     const val PACKAGE = "com.tencent.mm"
@@ -50,17 +51,20 @@ internal object WeChat {
 
     fun claims(text: String) = CODES.matches(text) || text.contains("wechat/oauth2")
 
-    fun openScanner(activity: Activity, text: String): Boolean {
-        val launched = Launch.start(
-            activity,
-            Intent(Intent.ACTION_VIEW)
-                .setComponent(ComponentName(PACKAGE, "com.tencent.mm.ui.LauncherUI"))
-                .putExtra("LauncherUI.From.Scaner.Shortcut", true)
-                .addFlags(NEW_TASK_CLEAR_TOP),
-        )
-        if (launched) WeChatHelper.handoff(activity, text)
-        return launched
-    }
+    fun openScanner(activity: Activity, text: String): Boolean =
+        launchScanner(activity).also { if (it) WeChatHelper.handoff(activity, text) }
+
+    /** For a located code FerryQR cannot read, such as a mini program code: [image] is its region. */
+    fun openScanner(activity: Activity, image: Bitmap): Boolean =
+        launchScanner(activity).also { if (it) WeChatHelper.handoff(activity, image) }
+
+    private fun launchScanner(activity: Activity): Boolean = Launch.start(
+        activity,
+        Intent(Intent.ACTION_VIEW)
+            .setComponent(ComponentName(PACKAGE, "com.tencent.mm.ui.LauncherUI"))
+            .putExtra("LauncherUI.From.Scaner.Shortcut", true)
+            .addFlags(NEW_TASK_CLEAR_TOP),
+    )
 }
 
 /** Xiaomi apps reached through private intents that no generic link resolution can find. */

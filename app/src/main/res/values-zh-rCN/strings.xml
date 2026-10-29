@@ -6,7 +6,7 @@
     <string name="hint_aim">将摄像头对准二维码</string>
     <string name="hint_hold">请保持稳定</string>
     <string name="hint_looking">正在仔细识别…</string>
-    <string name="helper_ready">微信二维码将直接交给微信扫一扫</string>
+    <string name="helper_ready">微信二维码将直接在微信中打开</string>
     <string name="action_torch">手电筒</string>
     <string name="action_gallery">识别图片</string>
     <string name="action_reset">重置</string>
@@ -54,6 +54,14 @@
     <string name="open">打开</string>
     <string name="open_in_alipay">在支付宝中打开</string>
     <string name="scan_in_wechat">在微信中扫码</string>
+    <string name="open_in_wechat">在微信中打开</string>
+    <string name="kind_mini_program">小程序码</string>
+    <string name="mini_headline">可能是微信小程序码</string>
+    <string name="mini_body_helper">FerryQR 无法识别这类码，但微信可以。微信扫一扫将看到图中的这一部分；如果它没有识别出内容，说明这并不是小程序码。</string>
+    <string name="mini_body_album">FerryQR 无法识别这类码，但微信可以。请在微信扫一扫中从相册选择这张图片。</string>
+    <string name="mini_body_scan">FerryQR 无法识别这类码，但微信可以。请在微信扫一扫中再次扫描。</string>
+    <string name="mini_open_scanner">打开微信扫一扫</string>
+    <string name="mini_no_wechat">未安装微信</string>
     <string name="copy">复制</string>
     <string name="copied">已复制</string>
     <string name="share">分享</string>
@@ -105,10 +113,13 @@
     <string name="generate_copy_failed">无法复制图片</string>
     <string name="generate_saved">已保存到 Pictures/FerryQR</string>
     <string name="generate_save_failed">无法保存图片</string>
+    <string name="generate_send_alipay">在支付宝中打开</string>
+    <string name="generate_send_wechat">在微信中打开</string>
+    <string name="generate_wechat_needs_helper">在微信中打开需要启用 FerryQR 的 LSPosed 模块</string>
     <string name="generate_too_long">内容超出%1$s的容量，可改用%2$s。</string>
     <string name="generate_too_long_all">内容超出所有码制的容量</string>
     <string name="generate_clip_label">二维码</string>
     <string name="type_qr">二维码</string>
 
-    <string name="xposed_description">将微信二维码直接交给微信扫一扫，无需再次扫描</string>
+    <string name="xposed_description">直接在微信中打开微信二维码，无需再次扫描</string>
 </resources>

@@ -51,6 +51,12 @@ sealed interface Phase {
         val wasShown: Boolean = false,
     ) : Phase
     data class Routing(val detection: Detection) : Phase
+
+    /**
+     * Probably a mini program code, which FerryQR cannot read, shown as [crop]. [live] is set when
+     * the camera saw it, so WeChat's own scanner can still see it too.
+     */
+    data class MiniCodeFound(val crop: Bitmap, val live: Boolean) : Phase
     data class Showing(val card: ResultCard) : Phase
 }
 
@@ -77,9 +83,24 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     private val _helperNotice = MutableStateFlow(false)
     val helperNotice = _helperNotice.asStateFlow()
 
+    /** Whether the WeChat helper answered, which decides how WeChat codes are handed over. */
+    val helperReady = WeChatHelper.ready
+
+    /** Set while a card for a live mini program code is shown, so dismissing it mutes that code. */
+    @Volatile
+    private var showingLiveMiniCode = false
+
     val analysisExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     val autoZoom = AutoZoom()
-    val analyzer = LiveAnalyzer(zxing, wechat, autoZoom, onSighting = { _sighting.value = it }, onHit = ::onLiveHit)
+    val analyzer = LiveAnalyzer(
+        zxing, wechat, autoZoom,
+        onSighting = { _sighting.value = it },
+        onHit = ::onLiveHit,
+        onMiniCode = { crop ->
+            showingLiveMiniCode = true
+            _phase.value = Phase.MiniCodeFound(crop, live = true)
+        },
+    )
 
     init {
         viewModelScope.launch {
@@ -136,6 +157,10 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
             else -> suppressed
         }
         suppressedSeenAt = SystemClock.elapsedRealtime()
+        if (showingLiveMiniCode) {
+            showingLiveMiniCode = false
+            analyzer.muteMiniCode()
+        }
         autoZoom.reset()
         _phase.value = Phase.Scanning
         analyzer.paused = false
@@ -173,8 +198,13 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 is StillResult.Read -> when (read.detections.size) {
                     0 -> {
-                        message(R.string.no_code_found)
-                        resume()
+                        val crop = read.miniCodes.firstOrNull()?.crop(read.frame)
+                        if (crop != null) {
+                            _phase.value = Phase.MiniCodeFound(crop, live = false)
+                        } else {
+                            message(R.string.no_code_found)
+                            resume()
+                        }
                     }
                     1 -> {
                         _phase.value = Phase.Routing(read.detections.single())

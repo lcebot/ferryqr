@@ -16,9 +16,15 @@ internal object HelperProtocol {
     /** Answered by every WeChat process the module is loaded in. */
     const val ACTION_PROBE = "com.lcebot.ferryqr.action.PROBE"
 
-    /** Answered by WeChat's main process, which then feeds [EXTRA_TEXT] to the next camera frames. */
+    /**
+     * Answered by WeChat's main process, which then feeds the next camera frames either a QR code
+     * of [EXTRA_TEXT] or the picture in [EXTRA_IMAGE], for codes FerryQR located but cannot read.
+     */
     const val ACTION_HANDOFF = "com.lcebot.ferryqr.action.HANDOFF"
     const val EXTRA_TEXT = "text"
+
+    /** JPEG bytes, kept to a few tens of kilobytes so retried broadcasts stay far below binder limits. */
+    const val EXTRA_IMAGE = "image"
 
     /** Identifies one handoff across its retries, so a late retry cannot restart the feed. */
     const val EXTRA_ID = "id"

@@ -2,7 +2,10 @@
 
 package com.lcebot.ferryqr.ui
 
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -13,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -27,8 +31,14 @@ import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -71,6 +81,25 @@ fun ResultCardContent(card: ResultCard, onAction: (CardAction) -> Unit, modifier
                 color = MaterialTheme.colorScheme.primary,
             )
         }
+        card.image?.let { bitmap ->
+            val image = remember(bitmap) { bitmap.asImageBitmap() }
+            Box(
+                modifier = Modifier
+                    .size(160.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Color.White)
+                    .align(Alignment.CenterHorizontally),
+                contentAlignment = Alignment.Center,
+            ) {
+                Image(
+                    bitmap = image,
+                    contentDescription = null,
+                    contentScale = ContentScale.Fit,
+                    filterQuality = FilterQuality.Medium,
+                    modifier = Modifier.size(160.dp),
+                )
+            }
+        }
         SelectionContainer {
             Text(
                 card.headline,
@@ -112,7 +141,7 @@ fun ResultCardContent(card: ResultCard, onAction: (CardAction) -> Unit, modifier
                 shapes = ButtonDefaults.shapes(),
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
             ) {
-                Icon(painterResource(primary.icon), contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
+                ActionIcon(primary)
                 Spacer(Modifier.width(ButtonDefaults.IconSpacing))
                 Text(stringResource(primary.label))
             }
@@ -123,11 +152,18 @@ fun ResultCardContent(card: ResultCard, onAction: (CardAction) -> Unit, modifier
         ) {
             card.actions.drop(1).forEach { action ->
                 FilledTonalButton(onClick = { onAction(action) }, shapes = ButtonDefaults.shapes()) {
-                    Icon(painterResource(action.icon), contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
+                    ActionIcon(action)
                     Spacer(Modifier.width(ButtonDefaults.IconSpacing))
                     Text(stringResource(action.label))
                 }
             }
         }
     }
+}
+
+@Composable
+private fun ActionIcon(action: CardAction) {
+    val app = action.app
+    if (app != null) AppIcon(app, action.icon, Modifier.size(ButtonDefaults.IconSize))
+    else Icon(painterResource(action.icon), contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
 }
