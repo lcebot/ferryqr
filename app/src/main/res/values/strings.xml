@@ -7,6 +7,7 @@
     <string name="hint_aim">Point the camera at a code</string>
     <string name="hint_hold">Hold steady</string>
     <string name="hint_looking">Looking closer…</string>
+    <string name="helper_ready">WeChat codes go straight to its scanner</string>
     <string name="action_torch">Flashlight</string>
     <string name="action_gallery">Scan an image</string>
     <string name="action_reset">Reset</string>
@@ -114,4 +115,6 @@
     <string name="type_aztec" translatable="false">Aztec</string>
     <string name="type_data_matrix" translatable="false">Data Matrix</string>
     <string name="type_pdf417" translatable="false">PDF417</string>
+
+    <string name="xposed_description">Hands WeChat codes to the WeChat scanner directly</string>
 </resources>

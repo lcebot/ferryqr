@@ -15,6 +15,11 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -52,6 +57,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -76,6 +84,7 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
     val phase by vm.phase.collectAsStateWithLifecycle()
     val sighting by vm.sighting.collectAsStateWithLifecycle()
     val session by vm.cameraSession.collectAsStateWithLifecycle()
+    val helperNotice by vm.helperNotice.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var torch by rememberSaveable { mutableStateOf(false) }
@@ -151,6 +160,16 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
                 verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {
                 if (camera.granted) {
+                    // The column grows upwards, so the notice appearing moves nothing below it.
+                    AnimatedVisibility(
+                        visible = helperNotice,
+                        enter = fadeIn(MaterialTheme.motionScheme.slowEffectsSpec()) +
+                            scaleIn(MaterialTheme.motionScheme.defaultSpatialSpec(), initialScale = 0.8f),
+                        exit = fadeOut(MaterialTheme.motionScheme.slowEffectsSpec()) +
+                            scaleOut(MaterialTheme.motionScheme.defaultSpatialSpec(), targetScale = 0.9f),
+                    ) {
+                        HelperNotice()
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         StatusPill(
                             stringResource(
@@ -306,6 +325,26 @@ private fun TorchButton(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
             color = Color.White,
             textAlign = TextAlign.Center,
         )
+    }
+}
+
+/** Tells the user that WeChat codes skip the second scan, because the LSPosed helper answered. */
+@Composable
+private fun HelperNotice() {
+    Surface(
+        shape = MaterialTheme.shapes.extraLarge,
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+        modifier = Modifier.padding(horizontal = 24.dp).semantics { liveRegion = LiveRegionMode.Polite },
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 16.dp, end = 20.dp, top = 12.dp, bottom = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(painterResource(R.drawable.ic_qr_code_scanner), contentDescription = null, modifier = Modifier.size(20.dp))
+            Text(stringResource(R.string.helper_ready), style = MaterialTheme.typography.titleSmallEmphasized)
+        }
     }
 }
 

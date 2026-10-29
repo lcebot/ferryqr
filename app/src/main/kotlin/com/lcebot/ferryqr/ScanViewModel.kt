@@ -8,6 +8,7 @@ import androidx.annotation.StringRes
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.lcebot.ferryqr.dispatch.ResultCard
+import com.lcebot.ferryqr.helper.WeChatHelper
 import com.lcebot.ferryqr.history.HistoryStore
 import com.lcebot.ferryqr.scan.AutoZoom
 import com.lcebot.ferryqr.scan.Detection
@@ -19,6 +20,7 @@ import com.lcebot.ferryqr.scan.StillResult
 import com.lcebot.ferryqr.scan.readStillImage
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -27,6 +29,9 @@ import kotlinx.coroutines.launch
 
 /** A code that was just dismissed is ignored until it has been out of view this long. */
 private const val SUPPRESS_MS = 1500L
+
+/** How long the notice that the WeChat helper is ready stays on screen. */
+private const val HELPER_NOTICE_MS = 3000L
 
 sealed interface Phase {
     data object Scanning : Phase
@@ -68,9 +73,23 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     private val _cameraSession = MutableStateFlow(0)
     val cameraSession = _cameraSession.asStateFlow()
 
+    /** True for a few seconds after the optional WeChat helper answered, once per scanner start. */
+    private val _helperNotice = MutableStateFlow(false)
+    val helperNotice = _helperNotice.asStateFlow()
+
     val analysisExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     val autoZoom = AutoZoom()
     val analyzer = LiveAnalyzer(zxing, wechat, autoZoom, onSighting = { _sighting.value = it }, onHit = ::onLiveHit)
+
+    init {
+        viewModelScope.launch {
+            if (WeChatHelper.probe(app)) {
+                _helperNotice.value = true
+                delay(HELPER_NOTICE_MS)
+                _helperNotice.value = false
+            }
+        }
+    }
 
     @Volatile
     private var suppressed: Set<String> = emptySet()

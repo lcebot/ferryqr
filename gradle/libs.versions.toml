@@ -11,6 +11,7 @@ coroutines = "1.11.0"
 zxingCpp = "3.1.1"
 zxingCore = "3.5.4"
 wechatQrcode = "2.6.0"
+libxposed = "102.0.0"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -34,6 +35,7 @@ zxing-core = { module = "com.google.zxing:core", version.ref = "zxingCore" }
 wechat-opencv = { module = "com.github.jenly1314.WeChatQRCode:opencv", version.ref = "wechatQrcode" }
 wechat-opencv-arm64 = { module = "com.github.jenly1314.WeChatQRCode:opencv-armv64", version.ref = "wechatQrcode" }
 wechat-qrcode = { module = "com.github.jenly1314.WeChatQRCode:wechat-qrcode", version.ref = "wechatQrcode" }
+libxposed-api = { module = "io.github.libxposed:api", version.ref = "libxposed" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

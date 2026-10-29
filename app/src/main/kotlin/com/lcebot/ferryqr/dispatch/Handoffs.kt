@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.ComponentName
 import android.content.Intent
 import android.net.Uri
+import com.lcebot.ferryqr.helper.WeChatHelper
 
 private const val NEW_TASK_CLEAR_TOP = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
 
@@ -28,7 +29,10 @@ internal object Alipay {
     )
 }
 
-/** WeChat has no public entry that takes scanned content, so the best it can do is open its scanner. */
+/**
+ * WeChat has no public entry that takes scanned content, so its scanner is opened. With the
+ * optional LSPosed helper, the scanner is then shown [openScanner]'s text in place of the camera.
+ */
 internal object WeChat {
     const val PACKAGE = "com.tencent.mm"
     /**
@@ -46,13 +50,17 @@ internal object WeChat {
 
     fun claims(text: String) = CODES.matches(text) || text.contains("wechat/oauth2")
 
-    fun openScanner(activity: Activity): Boolean = Launch.start(
-        activity,
-        Intent(Intent.ACTION_VIEW)
-            .setComponent(ComponentName(PACKAGE, "com.tencent.mm.ui.LauncherUI"))
-            .putExtra("LauncherUI.From.Scaner.Shortcut", true)
-            .addFlags(NEW_TASK_CLEAR_TOP),
-    )
+    fun openScanner(activity: Activity, text: String): Boolean {
+        val launched = Launch.start(
+            activity,
+            Intent(Intent.ACTION_VIEW)
+                .setComponent(ComponentName(PACKAGE, "com.tencent.mm.ui.LauncherUI"))
+                .putExtra("LauncherUI.From.Scaner.Shortcut", true)
+                .addFlags(NEW_TASK_CLEAR_TOP),
+        )
+        if (launched) WeChatHelper.handoff(activity, text)
+        return launched
+    }
 }
 
 /** Xiaomi apps reached through private intents that no generic link resolution can find. */

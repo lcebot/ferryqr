@@ -17,11 +17,11 @@ object Dispatcher {
     fun autoLaunch(activity: Activity, payload: Payload): Boolean = when (payload) {
         is WebPayload -> when {
             Alipay.claims(payload.url) -> Alipay.handoff(activity, payload.url)
-            WeChat.claims(payload.url) -> WeChat.openScanner(activity)
+            WeChat.claims(payload.url) -> WeChat.openScanner(activity, payload.raw)
             else -> Xiaomi.claim(activity, payload.url) || Launch.nonBrowser(activity, payload.url)
         }
         is SchemePayload -> Launch.scheme(activity, payload.uri, payload.scheme) ||
-            (WeChat.claims(payload.raw) && WeChat.openScanner(activity))
+            (WeChat.claims(payload.raw) && WeChat.openScanner(activity, payload.raw))
         is FidoPayload -> Launch.fido(activity, payload.raw)
         is EsimPayload -> Launch.esim(activity, payload.raw)
         is DppPayload -> Launch.dpp(activity, payload.raw)

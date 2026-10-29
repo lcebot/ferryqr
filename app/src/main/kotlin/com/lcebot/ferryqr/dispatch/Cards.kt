@@ -119,7 +119,7 @@ object Cards {
             }
             if (Launch.isInstalled(activity, WeChat.PACKAGE)) {
                 add(CardAction(R.string.scan_in_wechat, R.drawable.ic_qr_code_scanner) {
-                    if (WeChat.openScanner(it)) ActionResult.Handoff else ActionResult.Unavailable
+                    if (WeChat.openScanner(it, payload.raw)) ActionResult.Handoff else ActionResult.Unavailable
                 })
             }
             add(copy(payload.raw))

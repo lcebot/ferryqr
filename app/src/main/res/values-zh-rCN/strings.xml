@@ -6,6 +6,7 @@
     <string name="hint_aim">将摄像头对准二维码</string>
     <string name="hint_hold">请保持稳定</string>
     <string name="hint_looking">正在仔细识别…</string>
+    <string name="helper_ready">微信二维码将直接交给微信扫一扫</string>
     <string name="action_torch">手电筒</string>
     <string name="action_gallery">识别图片</string>
     <string name="action_reset">重置</string>
@@ -108,4 +109,6 @@
     <string name="generate_too_long_all">内容超出所有码制的容量</string>
     <string name="generate_clip_label">二维码</string>
     <string name="type_qr">二维码</string>
+
+    <string name="xposed_description">将微信二维码直接交给微信扫一扫，无需再次扫描</string>
 </resources>

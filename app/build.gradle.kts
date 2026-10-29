@@ -87,6 +87,9 @@ android {
 }
 
 dependencies {
+    // The optional LSPosed half; the framework provides the API at runtime, so it is not packaged.
+    compileOnly(libs.libxposed.api)
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)

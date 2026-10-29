@@ -12,6 +12,8 @@ FerryQR is a QR code scanner for Android. Point the camera at a code and FerryQR
 
 **Alipay and WeChat codes:** Alipay codes open directly in Alipay. WeChat does not accept scan results from other apps, so when FerryQR detects a WeChat code it can only take you to the WeChat scanner, where you scan the code again.
 
+**Optional LSPosed helper:** FerryQR is also an LSPosed module. Enable it with WeChat as its scope and restart WeChat, and the WeChat scanner is shown the code you scanned for a few seconds in place of the camera image, so it reads that code at once, without aiming again or choosing between several codes. The scanner screen confirms briefly when the helper is ready. Without LSPosed, FerryQR works as described above.
+
 **Wi-Fi:** Shows the network name and password. Most networks can be connected to directly.
 
 **Contacts and events:** Can be saved to your contacts or calendar.
