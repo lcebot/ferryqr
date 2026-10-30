@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.scan.Detection
+import io.github.lcebot.ferryqr.scan.isLocatedMiniCode
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -116,7 +117,10 @@ fun PickOverlay(
                         scaleY = pop.value
                     },
             ) {
-                Icon(painterResource(R.drawable.ic_arrow_forward), contentDescription = detection.text)
+                Icon(
+                    painterResource(R.drawable.ic_arrow_forward),
+                    contentDescription = if (detection.isLocatedMiniCode) stringResource(R.string.mini_headline) else detection.text,
+                )
             }
         }
 

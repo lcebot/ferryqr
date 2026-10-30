@@ -13,6 +13,8 @@ import io.github.lcebot.ferryqr.helper.WeChatHelper
 import io.github.lcebot.ferryqr.history.HistoryStore
 import io.github.lcebot.ferryqr.scan.AutoZoom
 import io.github.lcebot.ferryqr.scan.Detection
+import io.github.lcebot.ferryqr.scan.isLocatedMiniCode
+import io.github.lcebot.ferryqr.scan.locatedCrop
 import io.github.lcebot.ferryqr.scan.LiveAnalyzer
 import io.github.lcebot.ferryqr.scan.Sighting
 import io.github.lcebot.ferryqr.scan.WeChatEngine
@@ -141,7 +143,15 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun pick(detection: Detection) {
-        _phase.value = Phase.Routing(detection, (_phase.value as? Phase.Picking)?.origin ?: Origin.CAMERA)
+        val picking = _phase.value as? Phase.Picking
+        val origin = picking?.origin ?: Origin.CAMERA
+        if (detection.isLocatedMiniCode) {
+            // A mini program code that could not be read is offered to WeChat as its picture.
+            val crop = picking?.frame?.let { detection.locatedCrop(it) }
+            if (crop != null) _phase.value = Phase.MiniCodeFound(crop, live = origin == Origin.CAMERA) else resume()
+            return
+        }
+        _phase.value = Phase.Routing(detection, origin)
     }
 
     fun record(detection: Detection) {

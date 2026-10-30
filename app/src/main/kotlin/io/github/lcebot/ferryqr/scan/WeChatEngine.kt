@@ -15,26 +15,48 @@ import org.opencv.core.Size
 import org.opencv.dnn.Dnn
 import org.opencv.dnn.Net
 import org.opencv.imgproc.Imgproc
+import kotlin.math.hypot
 import kotlin.math.min
 import kotlin.math.sqrt
 
-/** The detector's own input area, as OpenCV's WeChatQRCode sizes it. */
-private const val DETECTOR_AREA = 400.0 * 400.0
+/**
+ * How hard a [WeChatEngine.survey] looks. The detector's input area decides how small a code it
+ * still proposes: on camera frames 400 x 400, OpenCV's own size, finds codes a sixth of the frame
+ * tall anywhere in view, and 800 x 800 also most of those half that size, at about four times the
+ * cost. A full page screenshot shrinks a mini program code further still, and on one the detector
+ * often proposes only the QR code beside it, so still images also search the whole image.
+ */
+enum class Look(val detectorArea: Double, val wholeImageSearch: Boolean) {
+    QUICK(400.0 * 400.0, false),
+    WIDE(800.0 * 800.0, false),
+    THOROUGH(800.0 * 800.0, true),
+}
 
 /** Low on purpose: the structural check decides, the detector only proposes where to look. */
 private const val MIN_PROPOSAL_SCORE = 0.2f
-private const val MAX_PROPOSALS = 4
 
-/** Mini program codes in an image: [read] ones as detections, and those only [located]. */
-data class MiniCodes(val read: List<Detection>, val located: List<MiniCode>) {
+/** Pages full of product pictures yield many proposals, and a code may rank low among them. */
+private const val MAX_PROPOSALS = 8
+
+/**
+ * A proposal that is not a mini program code is decoded as a QR code only from this score up, since
+ * that decode costs far more than the mini program code check.
+ */
+private const val QR_REGION_SCORE = 0.5f
+
+/**
+ * What a look at an image found beyond what zxing-cpp reads: mini program codes that were [read]
+ * and those only [located], and other code-like [regions], mostly QR codes zxing-cpp missed.
+ */
+class Survey(val read: List<Detection>, val located: List<MiniCode>, val regions: List<Rect>) {
     companion object {
-        val NONE = MiniCodes(emptyList(), emptyList())
+        val NONE = Survey(emptyList(), emptyList(), emptyList())
     }
 }
 
 /**
- * CNN based QR detector from WeChat. It is far slower than zxing-cpp, so it only runs on regions
- * zxing-cpp flagged as suspected codes, and on still images.
+ * WeChat's CNN code detector, run directly as a proposer, and OpenCV's WeChatQRCode as a second QR
+ * decoder for regions zxing-cpp cannot read.
  */
 class WeChatEngine(context: Context) {
 
@@ -83,30 +105,32 @@ class WeChatEngine(context: Context) {
     }
 
     /**
-     * Mini program codes in [bitmap] that pass [MiniCodeCheck], at the places the detector proposes,
-     * split into those whose content was read and those only located. With [search], an image
-     * where it proposes nothing is also searched as a whole, which is too slow for live frames but
-     * finds codes the detector misses on clean, rendered images.
+     * Looks at [bitmap] with the detector, as hard as [look] says. Mini program codes pass
+     * [MiniCodeCheck] at its proposals and are read where they can be; other confident proposals
+     * come back as [Survey.regions] for a QR decode.
      */
-    fun readMiniCodes(bitmap: Bitmap, search: Boolean = false): MiniCodes {
-        if (!ensureReady()) return MiniCodes.NONE
+    fun survey(bitmap: Bitmap, look: Look): Survey {
+        if (!ensureReady()) return Survey.NONE
         val rgba = Mat()
         val gray = Mat()
         return try {
             Utils.bitmapToMat(bitmap, rgba)
             Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY)
-            val proposed = synchronized(lock) { proposals(gray) }
-                .mapNotNull { MiniCodeCheck.inRegion(gray, it) }
-                .distinctBy(::cellOf)
-            val found = if (proposed.isEmpty() && search) listOfNotNull(MiniCodeCheck.inImage(gray)) else proposed
-            if (found.isEmpty()) return MiniCodes.NONE
+            val boxes = synchronized(lock) { proposals(gray, look.detectorArea) }
+            val proposed = boxes.mapNotNull { MiniCodeCheck.inRegion(gray, it.second) }.distinctBy(::cellOf)
+            val searched = if (look.wholeImageSearch) MiniCodeCheck.inImage(gray)?.takeIf { code -> proposed.none { it.overlaps(code) } } else null
+            val mini = proposed + listOfNotNull(searched)
+            val regions = boxes
+                .filter { (score, box) -> score >= QR_REGION_SCORE && mini.none { it.covers(box) } }
+                .map { it.second }
+            if (mini.isEmpty()) return Survey(emptyList(), emptyList(), regions)
             val pixels = ByteArray(gray.cols() * gray.rows())
             gray.get(0, 0, pixels)
             val frame = LumaImage(pixels, gray.cols(), gray.rows())
-            val read = found.associateWith { it.read(frame) }
-            MiniCodes(read.values.filterNotNull(), read.filterValues { it == null }.keys.toList())
+            val read = mini.associateWith { it.read(frame) }
+            Survey(read.values.filterNotNull(), read.filterValues { it == null }.keys.toList(), regions)
         } catch (t: Throwable) {
-            MiniCodes.NONE
+            Survey.NONE
         } finally {
             rgba.release()
             gray.release()
@@ -119,12 +143,23 @@ class WeChatEngine(context: Context) {
         return (code.center.x / cell).toInt() to (code.center.y / cell).toInt()
     }
 
-    /** Called under [lock]. Mirrors OpenCV's WeChatQRCode::applyDetector and SSDDetector::forward. */
-    private fun proposals(gray: Mat): List<Rect> {
+    /** The same code found twice, once at a proposal and once by the whole image search. */
+    private fun MiniCode.overlaps(other: MiniCode): Boolean =
+        hypot(center.x - other.center.x, center.y - other.center.y) < maxOf(radius, other.radius)
+
+    /** Whether a detector box is this mini program code rather than another code. */
+    private fun MiniCode.covers(box: Rect): Boolean =
+        hypot(center.x - box.exactCenterX(), center.y - box.exactCenterY()) < radius
+
+    /**
+     * Called under [lock]. Mirrors OpenCV's WeChatQRCode::applyDetector and SSDDetector::forward.
+     * Returns the best [MAX_PROPOSALS] boxes with their scores.
+     */
+    private fun proposals(gray: Mat, area: Double): List<Pair<Float, Rect>> {
         val net = detector() ?: return emptyList()
         val w = gray.cols()
         val h = gray.rows()
-        val scale = min(1.0, sqrt(DETECTOR_AREA / (w.toDouble() * h)))
+        val scale = min(1.0, sqrt(area / (w.toDouble() * h)))
         val small = Mat()
         Imgproc.resize(gray, small, Size((w * scale).toInt().toDouble(), (h * scale).toInt().toDouble()), 0.0, 0.0, Imgproc.INTER_CUBIC)
         val blob = Dnn.blobFromImage(small, 1.0 / 255, Size(small.cols().toDouble(), small.rows().toDouble()), Scalar(0.0), false, false)
@@ -148,7 +183,7 @@ class WeChatEngine(context: Context) {
                 )
                 if (!box.isEmpty) boxes += values[o + 2] to box
             }
-            return boxes.sortedByDescending { it.first }.take(MAX_PROPOSALS).map { it.second }
+            return boxes.sortedByDescending { it.first }.take(MAX_PROPOSALS)
         } finally {
             small.release()
             blob.release()

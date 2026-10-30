@@ -3,6 +3,9 @@ package io.github.lcebot.ferryqr.scan
 import android.graphics.Rect
 import android.os.SystemClock
 import androidx.camera.core.Camera
+import androidx.camera.core.FocusMeteringAction
+import androidx.camera.core.SurfaceOrientedMeteringPointFactory
+import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -42,11 +45,18 @@ private const val EDGE_MARGIN = 0.85f
 
 private const val BASE_ZOOM = 1f
 
+/** A code waiting to be read gets focus and exposure at most this often, so the lens can settle. */
+private const val FOCUS_INTERVAL_MS = 1500L
+
+/** How long the camera holds that focus and exposure before returning to its own. */
+private const val FOCUS_HOLD_S = 3L
+
 /**
- * Zooms toward small QR codes that zxing-cpp located but could not decode. On a logical
- * multi-camera the zoom ratio also drives the switch to the telephoto lens.
+ * Points the camera at codes located but not yet read: zooms toward small ones, and focuses and
+ * meters on one, since blur and glare on the code, not its position, decide most failed reads.
+ * On a logical multi-camera the zoom ratio also drives the switch to the telephoto lens.
  *
- * [observe] runs on the analysis thread; the other methods run on the main thread.
+ * [observe] and [focusOn] run on the analysis thread; the other methods run on the main thread.
  */
 class AutoZoom {
 
@@ -85,6 +95,9 @@ class AutoZoom {
 
     @Volatile
     private var lastRequested = 0f
+
+    @Volatile
+    private var lastFocusAt = 0L
 
     /**
      * Returns true while zooming in is still expected to help, so the caller can postpone the far
@@ -155,6 +168,31 @@ class AutoZoom {
         return true
     }
 
+    /**
+     * Focuses and meters on [region] of the upright frame. The metering point factory expects the
+     * sensor-oriented buffer, so the region's centre is turned back by [rotationDegrees].
+     */
+    fun focusOn(region: Rect, frameWidth: Int, frameHeight: Int, rotationDegrees: Int) {
+        val cam = camera ?: return
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastFocusAt < FOCUS_INTERVAL_MS) return
+        lastFocusAt = now
+        val u = region.exactCenterX() / frameWidth
+        val v = region.exactCenterY() / frameHeight
+        val (x, y) = when ((rotationDegrees % 360 + 360) % 360) {
+            90 -> v to 1f - u
+            180 -> 1f - u to 1f - v
+            270 -> 1f - v to u
+            else -> u to v
+        }
+        val size = max(region.width().toFloat() / frameWidth, region.height().toFloat() / frameHeight).coerceIn(0.05f, 0.5f)
+        val point = SurfaceOrientedMeteringPointFactory(1f, 1f).createPoint(x.coerceIn(0f, 1f), y.coerceIn(0f, 1f), size)
+        val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
+            .setAutoCancelDuration(FOCUS_HOLD_S, TimeUnit.SECONDS)
+            .build()
+        cam.cameraControl.startFocusAndMetering(action)
+    }
+
     private fun highZoomTimedOut(cam: Camera, now: Long): Boolean {
         val ratio = cam.cameraInfo.zoomState.value?.zoomRatio ?: return false
         if (ratio < HIGH_ZOOM) {
@@ -195,6 +233,7 @@ class AutoZoom {
         highZoomSince = 0L
         lastStepAt = 0L
         lastRequested = 0f
+        lastFocusAt = 0L
     }
 }
 

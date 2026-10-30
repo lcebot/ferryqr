@@ -75,9 +75,12 @@ import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.content.Classifier
 import io.github.lcebot.ferryqr.dispatch.ActionResult
 import io.github.lcebot.ferryqr.dispatch.Cards
+import io.github.lcebot.ferryqr.dispatch.Kind
 import io.github.lcebot.ferryqr.dispatch.Origin
 import io.github.lcebot.ferryqr.history.HistoryStore
 import io.github.lcebot.ferryqr.scan.Detection
+import io.github.lcebot.ferryqr.scan.isLocatedMiniCode
+import io.github.lcebot.ferryqr.scan.locatedCrop
 import io.github.lcebot.ferryqr.scan.StillResult
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -135,7 +138,7 @@ fun ImageScanSheet(vm: ImageScanViewModel, onClose: () -> Unit) {
         ) { read ->
             when {
                 read == null -> Reading()
-                read is StillResult.Read && read.detections.isNotEmpty() -> Found(read, onHandoff = onClose)
+                read is StillResult.Read && read.detections.isNotEmpty() -> Found(read, helperReady, onHandoff = onClose)
                 read is StillResult.Read && read.miniCodes.isNotEmpty() -> MiniFound(read, helperReady, onHandoff = onClose)
                 read is StillResult.Read -> SheetMessage(
                     icon = R.drawable.ic_search_off,
@@ -213,17 +216,22 @@ private fun SheetMessage(@DrawableRes icon: Int, @StringRes title: Int, @StringR
 }
 
 @Composable
-private fun Found(read: StillResult.Read, onHandoff: () -> Unit) {
+private fun Found(read: StillResult.Read, helperReady: Boolean, onHandoff: () -> Unit) {
     val activity = LocalActivity.current ?: return
     val context = LocalContext.current
     val haptics = rememberHaptics()
     var selected by rememberSaveable { mutableIntStateOf(0) }
     val detection = read.detections[selected.coerceIn(read.detections.indices)]
-    val card = remember(detection) {
-        Cards.build(activity, Classifier.classify(detection.text, detection.format), detection.format, Origin.IMAGE)
+    val card = remember(detection, helperReady) {
+        // A mini program code that could not be read has no content to route; WeChat gets its picture.
+        val crop = if (detection.isLocatedMiniCode) detection.locatedCrop(read.frame) else null
+        if (crop != null) Cards.miniProgram(activity, crop, helperReady, live = false)
+        else Cards.build(activity, Classifier.classify(detection.text, detection.format), detection.format, Origin.IMAGE)
     }
 
-    LaunchedEffect(detection) { HistoryStore.get(context).add(detection.text, detection.format) }
+    LaunchedEffect(detection) {
+        if (!detection.isLocatedMiniCode) HistoryStore.get(context).add(detection.text, detection.format)
+    }
 
     // The sheet has no snackbar host, so the few messages it needs are toasts.
     fun onResult(result: ActionResult) {
@@ -328,7 +336,11 @@ private fun CodeChooser(frame: Bitmap, detections: List<Detection>, selected: In
 @Composable
 private fun CodeTile(frame: Bitmap, detection: Detection, selected: Boolean, onClick: () -> Unit) {
     val thumbnail = remember(frame, detection) { thumbnail(frame, detection)?.asImageBitmap() }
-    val kind = remember(detection) { Cards.kindOf(Classifier.classify(detection.text, detection.format)) }
+    val kind = remember(detection) {
+        if (detection.isLocatedMiniCode) Kind(R.string.kind_mini_program, R.drawable.ic_qr_code_scanner)
+        else Cards.kindOf(Classifier.classify(detection.text, detection.format))
+    }
+    val description = if (detection.isLocatedMiniCode) stringResource(R.string.mini_headline) else detection.text
     val effects = MaterialTheme.motionScheme.defaultEffectsSpec<Color>()
     val container by animateColorAsState(
         if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
@@ -358,7 +370,7 @@ private fun CodeTile(frame: Bitmap, detection: Detection, selected: Boolean, onC
                 if (thumbnail != null) {
                     Image(
                         bitmap = thumbnail,
-                        contentDescription = detection.text,
+                        contentDescription = description,
                         contentScale = ContentScale.Fit,
                         filterQuality = FilterQuality.Medium,
                         modifier = Modifier.size(THUMBNAIL_SIZE),
@@ -366,7 +378,7 @@ private fun CodeTile(frame: Bitmap, detection: Detection, selected: Boolean, onC
                 } else {
                     Icon(
                         painterResource(R.drawable.ic_qr_code_2),
-                        contentDescription = detection.text,
+                        contentDescription = description,
                         tint = Color.Black,
                         modifier = Modifier.size(40.dp),
                     )
