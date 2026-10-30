@@ -111,7 +111,7 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
         }
         val routing = phase as? Phase.Routing ?: return@LaunchedEffect
         vm.record(routing.detection)
-        val payload = Classifier.classify(routing.detection.text)
+        val payload = Classifier.classify(routing.detection.text, routing.detection.format)
         if (Dispatcher.autoLaunch(activity, payload)) activity.finish()
         else vm.show(Cards.build(activity, payload, routing.detection.format))
     }

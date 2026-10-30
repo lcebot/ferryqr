@@ -114,4 +114,6 @@ dependencies {
     implementation(libs.wechat.opencv)
     implementation(libs.wechat.opencv.arm64)
     implementation(libs.wechat.qrcode)
+
+    implementation(project(":wxcode"))
 }

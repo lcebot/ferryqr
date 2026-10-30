@@ -10,8 +10,9 @@ sealed interface StillResult {
     data object Unreadable : StillResult
 
     /**
-     * [detections] may be empty when the image holds no code. [miniCodes] are looked for only
-     * when nothing decoded, since a decoded code always takes precedence over a guess.
+     * [detections] may be empty when the image holds no code; mini program codes that were read
+     * are among them. [miniCodes] are those located but not read, kept only when nothing was read,
+     * since a read code always takes precedence over a guess.
      */
     data class Read(
         val frame: Bitmap,
@@ -25,6 +26,8 @@ suspend fun readStillImage(context: Context, uri: Uri, zxing: ZxingEngine, wecha
     val frame = withContext(Dispatchers.IO) { decodeStill(context, uri) } ?: return StillResult.Unreadable
     return withContext(Dispatchers.Default) {
         val found = zxing.read(frame).mergedWith(wechat.decode(frame))
-        StillResult.Read(frame, found, if (found.isEmpty()) wechat.locateMiniCodes(frame, search = true) else emptyList())
+        val mini = wechat.readMiniCodes(frame, search = found.isEmpty())
+        val detections = found.mergedWith(mini.read)
+        StillResult.Read(frame, detections, if (detections.isEmpty()) mini.located else emptyList())
     }
 }

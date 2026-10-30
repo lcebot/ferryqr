@@ -30,8 +30,9 @@ private const val MIN_REGION_PADDING = 48
 private const val MINI_INTERVAL_MS = 400L
 
 /**
- * A code is reported once two looks in a row agree. The second look runs on the next frame, so the
- * agreement costs one frame rather than another interval.
+ * A located code that could not be read is offered to WeChat once two looks in a row agree. The
+ * second look runs on the next frame, so the agreement costs one frame rather than another
+ * interval. A code that was read is reported at once.
  */
 private const val MINI_CONFIRMATIONS = 2
 
@@ -170,9 +171,18 @@ class LiveAnalyzer(
             return
         }
         val frame = image.toUprightBitmap()
+        var handedOn = false
         try {
-            val found = wechat.locateMiniCodes(frame).maxByOrNull { it.radius }
+            val codes = wechat.readMiniCodes(frame)
             lastMiniAt = SystemClock.elapsedRealtime()
+            // A code that was read needs no second look: its error correction already vouches for it.
+            if (codes.read.isNotEmpty()) {
+                codes.read.forEach { collected.putIfAbsent(it.text, it) }
+                handedOn = true
+                finish(image, frame, emptySet())
+                return
+            }
+            val found = codes.located.maxByOrNull { it.radius }
             if (miniMuted) {
                 if (found != null) miniMutedSeenAt = now
                 else if (now - miniMutedSeenAt > MINI_KEEP_MS) miniMuted = false
@@ -196,7 +206,7 @@ class LiveAnalyzer(
                 onMiniCode(crop)
             }
         } finally {
-            frame.recycle()
+            if (!handedOn) frame.recycle()
         }
     }
 
@@ -215,6 +225,12 @@ class LiveAnalyzer(
     }
 
     private fun finish(image: ImageProxy, frame: Bitmap?, shown: Set<String>) {
+        val upright = frame ?: image.toUprightBitmap()
+        // zxing-cpp never reports a mini program code, so a frame of QR codes is looked over once
+        // more for one, which makes the hit include every code in view.
+        if (collected.values.none { it.format == MINI_PROGRAM_FORMAT }) {
+            wechat.readMiniCodes(upright).read.forEach { collected.putIfAbsent(it.text, it) }
+        }
         val detections = collected.values.toList()
         collected.clear()
         announced.clear()
@@ -222,7 +238,7 @@ class LiveAnalyzer(
         paused = true
         onSighting(null)
         forgetMiniCode()
-        onHit(frame ?: image.toUprightBitmap(), detections, shown)
+        onHit(upright, detections, shown)
     }
 }
 

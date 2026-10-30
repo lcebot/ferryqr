@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "FerryQR"
 include(":app")
+include(":wxcode")

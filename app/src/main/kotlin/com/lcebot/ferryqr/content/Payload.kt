@@ -30,6 +30,9 @@ data class EventPayload(override val raw: String, val event: CalendarEvent) : Pa
 
 data class TextPayload(override val raw: String) : Payload
 
+/** A WeChat mini program code's content, an identifier only WeChat resolves. */
+data class MiniProgramPayload(override val raw: String) : Payload
+
 enum class WifiSecurity { OPEN, WEP, WPA, SAE, EAP }
 
 data class Contact(

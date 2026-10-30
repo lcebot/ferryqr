@@ -1,5 +1,6 @@
 package com.lcebot.ferryqr.content
 
+import com.lcebot.ferryqr.scan.MINI_PROGRAM_FORMAT
 import java.net.URLEncoder
 
 object Classifier {
@@ -17,7 +18,9 @@ object Classifier {
     /** Schemes that must never be handed to another app from untrusted input. */
     private val BLOCKED_SCHEMES = setOf("file", "content", "javascript", "data", "about", "blob")
 
-    fun classify(raw: String): Payload {
+    /** [format] is the symbology the content came from, which settles it for mini program codes. */
+    fun classify(raw: String, format: String = ""): Payload {
+        if (format == MINI_PROGRAM_FORMAT) return MiniProgramPayload(raw)
         val text = raw.trim()
         fun has(prefix: String) = text.startsWith(prefix, ignoreCase = true)
         return when {

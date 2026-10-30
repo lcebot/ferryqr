@@ -11,12 +11,14 @@ import com.lcebot.ferryqr.content.DppPayload
 import com.lcebot.ferryqr.content.EsimPayload
 import com.lcebot.ferryqr.content.EventPayload
 import com.lcebot.ferryqr.content.FidoPayload
+import com.lcebot.ferryqr.content.MiniProgramPayload
 import com.lcebot.ferryqr.content.Payload
 import com.lcebot.ferryqr.content.SchemePayload
 import com.lcebot.ferryqr.content.TextPayload
 import com.lcebot.ferryqr.content.WebPayload
 import com.lcebot.ferryqr.content.WifiPayload
 import com.lcebot.ferryqr.content.WifiSecurity
+import com.lcebot.ferryqr.generate.MiniCodeArt
 import com.lcebot.ferryqr.helper.WeChatHelper
 
 enum class ActionResult {
@@ -70,13 +72,14 @@ object Cards {
         is ContactPayload -> Kind(R.string.kind_contact, R.drawable.ic_person_add)
         is EventPayload -> Kind(R.string.kind_event, R.drawable.ic_event)
         is TextPayload -> Kind(R.string.kind_text, R.drawable.ic_notes)
+        is MiniProgramPayload -> Kind(R.string.kind_mini_program, R.drawable.ic_qr_code_scanner)
     }
 
     /**
-     * A probable WeChat mini program code, shown as [crop]. With the WeChat helper the crop goes to
-     * WeChat's scanner, which then simply opens it. Without the helper, a code the camera saw
-     * ([live]) is scanned again in WeChat; an image FerryQR holds cannot reach WeChat's camera, so
-     * the user is pointed to the scanner's own album button instead.
+     * A probable WeChat mini program code that could not be read, shown as [crop]. With the WeChat
+     * helper the crop goes to WeChat's scanner, which then simply opens it. Without the helper, a
+     * code the camera saw ([live]) is scanned again in WeChat; an image FerryQR holds cannot reach
+     * WeChat's camera, so the user is pointed to the scanner's own album button instead.
      */
     fun miniProgram(activity: Activity, crop: Bitmap, helperReady: Boolean, live: Boolean): ResultCard {
         val installed = Launch.isInstalled(activity, WeChat.PACKAGE)
@@ -140,6 +143,40 @@ object Cards {
         is ContactPayload -> contact(payload)
         is EventPayload -> event(activity, payload)
         is TextPayload -> text(activity, payload, format)
+        is MiniProgramPayload -> miniProgramCode(activity, payload)
+    }
+
+    /**
+     * A mini program code that was read. Its content means nothing outside WeChat, so the card
+     * shows the code drawn again from it. With the helper, WeChat's scanner is shown that drawing
+     * and opens the mini program; without it, the user scans the code again in WeChat.
+     */
+    private fun miniProgramCode(activity: Activity, payload: MiniProgramPayload): ResultCard {
+        val image = MiniCodeArt.draw(payload.raw)
+        val installed = Launch.isInstalled(activity, WeChat.PACKAGE)
+        val helperReady = WeChatHelper.ready.value
+        val actions = buildList {
+            if (installed && image != null) {
+                add(CardAction(
+                    if (helperReady) R.string.open_in_wechat else R.string.mini_open_scanner,
+                    R.drawable.ic_open_in_new,
+                    WeChat.PACKAGE,
+                ) {
+                    if (WeChat.openScanner(it, image)) ActionResult.Handoff else ActionResult.Unavailable
+                })
+            }
+            add(copy(payload.raw))
+        }
+        return ResultCard(
+            raw = payload.raw,
+            kind = R.string.kind_mini_program,
+            icon = R.drawable.ic_qr_code_scanner,
+            headline = activity.getString(R.string.mini_read_headline),
+            body = activity.getString(if (helperReady) R.string.mini_read_body_helper else R.string.mini_read_body),
+            notes = if (installed) emptyList() else listOf(R.string.mini_no_wechat),
+            actions = actions,
+            image = image,
+        )
     }
 
     private fun web(activity: Activity, payload: WebPayload): ResultCard {

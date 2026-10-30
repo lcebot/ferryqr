@@ -12,7 +12,7 @@ name: build
 on:
   push:
     branches: ["**"]
-    paths: ["app/**", "*.gradle.kts", "gradle/**", ".github/workflows/build.yml"]
+    paths: ["app/**", "wxcode/**", "*.gradle.kts", "gradle/**", ".github/workflows/build.yml"]
   release:
     types: [published]
   workflow_dispatch:
@@ -89,6 +89,9 @@ jobs:
           fi
           echo "VERSION_ARGS=-PversionNameOverride=$name -PversionCodeOverride=$code" >> "$GITHUB_ENV"
           echo "$tag -> versionName=$name versionCode=$code"
+
+      - name: test
+        run: gradle :wxcode:test --no-daemon
 
       - name: build
         env:

@@ -3,6 +3,9 @@ package com.lcebot.ferryqr.scan
 import android.graphics.Bitmap
 import android.graphics.PointF
 import android.graphics.Rect
+import com.lcebot.wxcode.LumaImage
+import com.lcebot.wxcode.WxDecoder
+import com.lcebot.wxcode.Point as CodePoint
 import org.opencv.core.Mat
 import org.opencv.core.MatOfPoint
 import org.opencv.core.MatOfPoint2f
@@ -24,12 +27,21 @@ private const val EXTENT = 1.45f
 /** The longest side of the crop handed to WeChat, which is plenty for its scanner. */
 private const val MAX_CROP_SIDE = 640
 
+/** The [Detection.format] of a mini program code that was read. */
+const val MINI_PROGRAM_FORMAT = "WX_CODE"
+
 /**
- * A WeChat mini program code that was located but cannot be decoded, since no description of the
- * format exists. [center] and [radius], the circumradius of its three eyes, are in the pixel space
- * of the upright frame or image it was found in.
+ * A located WeChat mini program code. [center] and [radius], the circumradius of its three
+ * [eyes], are in the pixel space of the upright frame or image it was found in.
  */
-data class MiniCode(val center: PointF, val radius: Float) {
+data class MiniCode(val center: PointF, val radius: Float, val eyes: List<PointF>) {
+
+    /** The code's content, read from [frame], the image it was located in; null when unreadable. */
+    fun read(frame: LumaImage): Detection? {
+        val code = WxDecoder.decode(frame, eyes.map { CodePoint(it.x.toDouble(), it.y.toDouble()) }) ?: return null
+        return Detection(code.text, MINI_PROGRAM_FORMAT, code.corners.map { PointF(it.x.toFloat(), it.y.toFloat()) })
+    }
+
 
     /** The square holding the whole code with a margin, clipped to a [width] by [height] image. */
     fun bounds(width: Int, height: Int): Rect {
@@ -116,10 +128,7 @@ internal object MiniCodeCheck {
         try {
             val block = max(15, (min(region.cols(), region.rows()) / 10) or 1)
             val found = find(region, block) ?: return null
-            return MiniCode(
-                PointF((x0 + found.center.x / scale).toFloat(), (y0 + found.center.y / scale).toFloat()),
-                (found.radius / scale).toFloat(),
-            )
+            return found.toMiniCode(scale, x0, y0)
         } finally {
             region.release()
         }
@@ -134,16 +143,19 @@ internal object MiniCodeCheck {
         try {
             // Eyes span a few to a few dozen pixels here, so several neighbourhood sizes are tried.
             val found = listOf(15, 31, 51).firstNotNullOfOrNull { find(image, it) } ?: return null
-            return MiniCode(
-                PointF((found.center.x / scale).toFloat(), (found.center.y / scale).toFloat()),
-                (found.radius / scale).toFloat(),
-            )
+            return found.toMiniCode(scale, 0, 0)
         } finally {
             if (image !== gray) image.release()
         }
     }
 
-    private class Found(val center: Point, val radius: Double, val marks: Int)
+    private class Found(val center: Point, val radius: Double, val marks: Int, val eyes: List<Eye>) {
+        /** In the pixels of the image this was found in at [scale], offset there by ([x0], [y0]). */
+        fun toMiniCode(scale: Double, x0: Int, y0: Int): MiniCode {
+            fun at(x: Double, y: Double) = PointF((x0 + x / scale).toFloat(), (y0 + y / scale).toFloat())
+            return MiniCode(at(center.x, center.y), (radius / scale).toFloat(), eyes.map { at(it.x, it.y) })
+        }
+    }
 
     private fun find(gray: Mat, block: Int): Found? {
         val binary = Mat()
@@ -312,7 +324,7 @@ internal object MiniCodeCheck {
                 if (abs(dot) > COS_RADIAL) radial++
             }
             if (count < MIN_MARKS || elongated < MIN_ELONGATED || radial < MIN_RADIAL * elongated) continue
-            if (best == null || count > best.marks) best = Found(centre, radius, count)
+            if (best == null || count > best.marks) best = Found(centre, radius, count, listOf(e1, e2, e3))
         }
         return best
     }

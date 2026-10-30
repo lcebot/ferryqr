@@ -57,11 +57,14 @@
     <string name="open_in_wechat">在微信中打开</string>
     <string name="kind_mini_program">小程序码</string>
     <string name="mini_headline">可能是微信小程序码</string>
-    <string name="mini_body_helper">FerryQR 无法识别这类码，但微信可以。微信扫一扫将看到图中的这一部分；如果它没有识别出内容，说明这并不是小程序码。</string>
-    <string name="mini_body_album">FerryQR 无法识别这类码，但微信可以。请在微信扫一扫中从相册选择这张图片。</string>
-    <string name="mini_body_scan">FerryQR 无法识别这类码，但微信可以。请在微信扫一扫中再次扫描。</string>
+    <string name="mini_body_helper">FerryQR 未能读出这个码，但微信或许可以。微信扫一扫将看到图中的这一部分；如果它没有识别出内容，说明这并不是小程序码。</string>
+    <string name="mini_body_album">FerryQR 未能读出这个码，但微信或许可以。请在微信扫一扫中从相册选择这张图片。</string>
+    <string name="mini_body_scan">FerryQR 未能读出这个码，但微信或许可以。请在微信扫一扫中再次扫描。</string>
     <string name="mini_open_scanner">打开微信扫一扫</string>
     <string name="mini_no_wechat">未安装微信</string>
+    <string name="mini_read_headline">微信小程序码</string>
+    <string name="mini_read_body_helper">小程序只能在微信中打开。微信扫一扫将看到根据 FerryQR 读出的内容重新绘制的这个码，并打开对应的小程序。</string>
+    <string name="mini_read_body">小程序只能在微信中打开。请在微信扫一扫中再次扫描这个码。</string>
     <string name="copy">复制</string>
     <string name="copied">已复制</string>
     <string name="share">分享</string>

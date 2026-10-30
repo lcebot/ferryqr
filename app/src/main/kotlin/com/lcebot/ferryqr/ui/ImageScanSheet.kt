@@ -218,7 +218,9 @@ private fun Found(read: StillResult.Read, onHandoff: () -> Unit) {
     val haptics = rememberHaptics()
     var selected by rememberSaveable { mutableIntStateOf(0) }
     val detection = read.detections[selected.coerceIn(read.detections.indices)]
-    val card = remember(detection) { Cards.build(activity, Classifier.classify(detection.text), detection.format) }
+    val card = remember(detection) {
+        Cards.build(activity, Classifier.classify(detection.text, detection.format), detection.format)
+    }
 
     LaunchedEffect(detection) { HistoryStore.get(context).add(detection.text, detection.format) }
 
@@ -325,7 +327,7 @@ private fun CodeChooser(frame: Bitmap, detections: List<Detection>, selected: In
 @Composable
 private fun CodeTile(frame: Bitmap, detection: Detection, selected: Boolean, onClick: () -> Unit) {
     val thumbnail = remember(frame, detection) { thumbnail(frame, detection)?.asImageBitmap() }
-    val kind = remember(detection) { Cards.kindOf(Classifier.classify(detection.text)) }
+    val kind = remember(detection) { Cards.kindOf(Classifier.classify(detection.text, detection.format)) }
     val effects = MaterialTheme.motionScheme.defaultEffectsSpec<Color>()
     val container by animateColorAsState(
         if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,

@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.PointF
 import android.graphics.Rect
 import com.king.wechat.qrcode.WeChatQRCodeDetector
+import com.lcebot.wxcode.LumaImage
 import org.opencv.OpenCV
 import org.opencv.android.Utils
 import org.opencv.core.Mat
@@ -23,6 +24,13 @@ private const val DETECTOR_AREA = 400.0 * 400.0
 /** Low on purpose: the structural check decides, the detector only proposes where to look. */
 private const val MIN_PROPOSAL_SCORE = 0.2f
 private const val MAX_PROPOSALS = 4
+
+/** Mini program codes in an image: [read] ones as detections, and those only [located]. */
+data class MiniCodes(val read: List<Detection>, val located: List<MiniCode>) {
+    companion object {
+        val NONE = MiniCodes(emptyList(), emptyList())
+    }
+}
 
 /**
  * CNN based QR detector from WeChat. It is far slower than zxing-cpp, so it only runs on regions
@@ -75,23 +83,30 @@ class WeChatEngine(context: Context) {
     }
 
     /**
-     * Mini program codes in [bitmap] that pass [MiniCodeCheck], at the places the detector proposes.
-     * With [search], an image where it proposes nothing is also searched as a whole, which is too
-     * slow for live frames but finds codes the detector misses on clean, rendered images.
+     * Mini program codes in [bitmap] that pass [MiniCodeCheck], at the places the detector proposes,
+     * split into those whose content was read and those only located. With [search], an image
+     * where it proposes nothing is also searched as a whole, which is too slow for live frames but
+     * finds codes the detector misses on clean, rendered images.
      */
-    fun locateMiniCodes(bitmap: Bitmap, search: Boolean = false): List<MiniCode> {
-        if (!ensureReady()) return emptyList()
+    fun readMiniCodes(bitmap: Bitmap, search: Boolean = false): MiniCodes {
+        if (!ensureReady()) return MiniCodes.NONE
         val rgba = Mat()
         val gray = Mat()
         return try {
             Utils.bitmapToMat(bitmap, rgba)
             Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY)
-            val found = synchronized(lock) { proposals(gray) }
+            val proposed = synchronized(lock) { proposals(gray) }
                 .mapNotNull { MiniCodeCheck.inRegion(gray, it) }
                 .distinctBy(::cellOf)
-            if (found.isEmpty() && search) listOfNotNull(MiniCodeCheck.inImage(gray)) else found
+            val found = if (proposed.isEmpty() && search) listOfNotNull(MiniCodeCheck.inImage(gray)) else proposed
+            if (found.isEmpty()) return MiniCodes.NONE
+            val pixels = ByteArray(gray.cols() * gray.rows())
+            gray.get(0, 0, pixels)
+            val frame = LumaImage(pixels, gray.cols(), gray.rows())
+            val read = found.associateWith { it.read(frame) }
+            MiniCodes(read.values.filterNotNull(), read.filterValues { it == null }.keys.toList())
         } catch (t: Throwable) {
-            emptyList()
+            MiniCodes.NONE
         } finally {
             rgba.release()
             gray.release()

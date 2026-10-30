@@ -134,7 +134,8 @@ fun HistoryScreen(onBack: () -> Unit) {
                             shape = segmentShape(index, items.size),
                             onClick = {
                                 haptics.tap()
-                                showing = Cards.build(activity, Classifier.classify(entry.text), entry.format)
+                                val payload = Classifier.classify(entry.text, entry.format)
+                                showing = Cards.build(activity, payload, entry.format)
                             },
                         )
                     }
@@ -216,7 +217,7 @@ private fun DayHeader(day: LocalDate, sample: Long) {
 @Composable
 private fun HistoryRow(entry: HistoryEntry, shape: Shape, onClick: () -> Unit) {
     val context = LocalContext.current
-    val kind = remember(entry.text) { Cards.kindOf(Classifier.classify(entry.text)) }
+    val kind = remember(entry) { Cards.kindOf(Classifier.classify(entry.text, entry.format)) }
     val time = remember(entry.time) { DateFormat.getTimeFormat(context).format(Date(entry.time)) }
     ListItem(
         onClick = onClick,

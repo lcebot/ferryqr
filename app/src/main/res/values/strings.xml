@@ -59,11 +59,14 @@
     <string name="open_in_wechat">Open in WeChat</string>
     <string name="kind_mini_program">Mini program code</string>
     <string name="mini_headline">Possibly a WeChat mini program code</string>
-    <string name="mini_body_helper">FerryQR cannot read this kind of code, but WeChat can. Its scanner will be shown this part of the image, and if it finds nothing there, this was not a mini program code.</string>
-    <string name="mini_body_album">FerryQR cannot read this kind of code, but WeChat can. In the WeChat scanner, choose this image from the album.</string>
-    <string name="mini_body_scan">FerryQR cannot read this kind of code, but WeChat can. Scan it again in the WeChat scanner.</string>
+    <string name="mini_body_helper">FerryQR could not read this code, but WeChat may. Its scanner will be shown this part of the image, and if it finds nothing there, this was not a mini program code.</string>
+    <string name="mini_body_album">FerryQR could not read this code, but WeChat may. In the WeChat scanner, choose this image from the album.</string>
+    <string name="mini_body_scan">FerryQR could not read this code, but WeChat may. Scan it again in the WeChat scanner.</string>
     <string name="mini_open_scanner">Open WeChat scanner</string>
     <string name="mini_no_wechat">WeChat is not installed</string>
+    <string name="mini_read_headline">WeChat mini program code</string>
+    <string name="mini_read_body_helper">Only WeChat opens mini programs. Its scanner will be shown this code, drawn again from what FerryQR read, and open the mini program.</string>
+    <string name="mini_read_body">Only WeChat opens mini programs. Scan the code again in the WeChat scanner.</string>
     <string name="copy">Copy</string>
     <string name="copied">Copied</string>
     <string name="share">Share</string>
