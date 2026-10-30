@@ -7,7 +7,7 @@
     <string name="hint_aim">Point the camera at a code</string>
     <string name="hint_hold">Hold steady</string>
     <string name="hint_looking">Looking closer…</string>
-    <string name="helper_ready">WeChat codes go straight to its scanner</string>
+    <string name="helper_ready">WeChat codes open directly in WeChat</string>
     <string name="action_torch">Flashlight</string>
     <string name="action_gallery">Scan an image</string>
     <string name="action_reset">Reset</string>
@@ -15,58 +15,58 @@
     <string name="zoom_label">%1$.1f×</string>
     <string name="no_code_found">No code found in the image</string>
     <string name="image_unreadable">Could not open the image</string>
-    <string name="no_camera">No usable camera found</string>
+    <string name="no_camera">No camera available</string>
     <string name="close">Close</string>
     <string name="image_reading">Reading the image…</string>
     <string name="image_no_code_title">No code found</string>
-    <string name="image_no_code_body">Try a sharper image, or make sure the whole code is in the picture.</string>
-    <string name="image_unreadable_body">The image could not be opened. It may be in an unsupported format.</string>
+    <string name="image_no_code_body">Make sure the whole code is in the image and clearly visible.</string>
+    <string name="image_unreadable_body">The image could not be opened. Its format may not be supported.</string>
     <plurals name="image_code_count">
-        <item quantity="one">%1$d code in this image</item>
-        <item quantity="other">%1$d codes in this image</item>
+        <item quantity="one">%1$d code found</item>
+        <item quantity="other">%1$d codes found</item>
     </plurals>
 
     <string name="camera_permission_title">Camera access needed</string>
-    <string name="camera_permission_body">FerryQR uses the camera to scan codes. Codes in images can still be scanned without it.</string>
+    <string name="camera_permission_body">FerryQR scans codes with the camera. Without the camera, codes in local images can still be read.</string>
     <string name="camera_permission_grant">Allow camera</string>
     <string name="camera_permission_settings">Open settings</string>
 
-    <string name="pick_title">Tap the code to open</string>
+    <string name="pick_title">Choose the code to open</string>
     <string name="pick_close">Back to scanning</string>
 
     <string name="kind_link">Link</string>
     <string name="kind_app_link">App link</string>
     <string name="kind_text">Text</string>
-    <string name="kind_wifi">Wi-Fi network</string>
+    <string name="kind_wifi">Wi-Fi</string>
     <string name="kind_contact">Contact</string>
     <string name="kind_event">Event</string>
     <string name="kind_esim">eSIM activation code</string>
-    <string name="kind_fido">Passkey sign-in</string>
-    <string name="kind_dpp">Wi-Fi Easy Connect</string>
+    <string name="kind_fido">Passkey</string>
+    <string name="kind_dpp" translatable="false">Wi-Fi Easy Connect</string>
 
-    <string name="warn_http">Not encrypted (HTTP)</string>
-    <string name="warn_idn">Internationalized domain, check for look-alike characters</string>
+    <string name="warn_http">Link not encrypted (HTTP)</string>
+    <string name="warn_idn">Internationalized domain, watch for look-alike letters</string>
     <string name="warn_ip">Points to a bare IP address</string>
-    <string name="scheme_unhandled">No installed app accepts this link.</string>
-    <string name="esim_unhandled">No eSIM manager accepted this code. Copy it and add the eSIM from the SIM settings.</string>
-    <string name="fido_unhandled">No passkey provider accepted this code.</string>
+    <string name="scheme_unhandled">No app can open this link.</string>
+    <string name="esim_unhandled">No eSIM manager accepted this activation code. Copy it and add the eSIM in SIM settings.</string>
+    <string name="fido_unhandled">No passkey manager is installed, or none accepted this passkey.</string>
     <string name="dpp_unsupported">This device does not support Wi-Fi Easy Connect.</string>
     <string name="wifi_connect_unsupported">This security type cannot be added automatically. Copy the password and connect from the Wi-Fi settings.</string>
 
     <string name="open">Open</string>
     <string name="open_in_alipay">Open in Alipay</string>
-    <string name="scan_in_wechat">Scan in WeChat</string>
+    <string name="scan_in_wechat">Scan again in WeChat</string>
     <string name="open_in_wechat">Open in WeChat</string>
     <string name="kind_mini_program">Mini program code</string>
     <string name="mini_headline">Possibly a WeChat mini program code</string>
-    <string name="mini_body_helper">FerryQR could not read this code, but WeChat may. Its scanner will be shown this part of the image, and if it finds nothing there, this was not a mini program code.</string>
-    <string name="mini_body_album">FerryQR could not read this code, but WeChat may. In the WeChat scanner, choose this image from the album.</string>
-    <string name="mini_body_scan">FerryQR could not read this code, but WeChat may. Scan it again in the WeChat scanner.</string>
+    <string name="mini_body_helper">FerryQR could not read this code. Try opening it in WeChat.</string>
+    <string name="mini_body_album">FerryQR could not read this code. Try choosing this image again from the album in the WeChat scanner.</string>
+    <string name="mini_body_scan">FerryQR could not read this code. Try scanning it again in WeChat.</string>
     <string name="mini_open_scanner">Open WeChat scanner</string>
     <string name="mini_no_wechat">WeChat is not installed</string>
     <string name="mini_read_headline">WeChat mini program code</string>
-    <string name="mini_read_body_helper">Only WeChat opens mini programs. Its scanner will be shown this code, drawn again from what FerryQR read, and open the mini program.</string>
-    <string name="mini_read_body">Only WeChat opens mini programs. Scan the code again in the WeChat scanner.</string>
+    <string name="mini_read_body_helper">Mini programs can only be opened in WeChat. You will be taken to WeChat.</string>
+    <string name="mini_read_body">Mini programs can only be opened in WeChat. Scan the code again in WeChat.</string>
     <string name="copy">Copy</string>
     <string name="copied">Copied</string>
     <string name="share">Share</string>
@@ -102,10 +102,10 @@
     <string name="history_yesterday">Yesterday</string>
     <string name="history_clear">Clear history</string>
     <string name="history_clear_title">Clear all history?</string>
-    <string name="history_clear_body">Every saved scan on this phone will be removed. This cannot be undone.</string>
+    <string name="history_clear_body">All history will be deleted. This cannot be undone.</string>
     <string name="history_cleared">History cleared</string>
-    <string name="history_empty_title">No scans yet</string>
-    <string name="history_empty_body">Scanned codes are kept on this phone only, and you can clear them at any time.</string>
+    <string name="history_empty_title">No history yet</string>
+    <string name="history_empty_body">Scanned codes are saved on this device only. You can clear them at any time.</string>
 
     <string name="action_generate">Create code</string>
     <string name="generate_title">Create code</string>
@@ -119,9 +119,9 @@
     <string name="generate_copy_failed">Could not copy the image</string>
     <string name="generate_saved">Saved to Pictures/FerryQR</string>
     <string name="generate_save_failed">Could not save the image</string>
-    <string name="generate_send_alipay">Send to Alipay</string>
-    <string name="generate_send_wechat">Send to WeChat</string>
-    <string name="generate_wechat_needs_helper">Sending to WeChat needs the FerryQR LSPosed module</string>
+    <string name="generate_send_alipay">Open in Alipay</string>
+    <string name="generate_send_wechat">Open in WeChat</string>
+    <string name="generate_wechat_needs_helper">Opening in WeChat needs FerryQR enabled in LSPosed</string>
     <string name="generate_too_long">Too long for %1$s. %2$s can hold it.</string>
     <string name="generate_too_long_all">Too long for any code type</string>
     <string name="generate_clip_label">QR code</string>
@@ -130,5 +130,5 @@
     <string name="type_data_matrix" translatable="false">Data Matrix</string>
     <string name="type_pdf417" translatable="false">PDF417</string>
 
-    <string name="xposed_description">Hands WeChat codes to the WeChat scanner directly</string>
+    <string name="xposed_description">Opens WeChat codes directly in WeChat</string>
 </resources>
