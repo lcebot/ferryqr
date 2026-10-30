@@ -5,6 +5,6 @@
 
 # The optional LSPosed entry, named in META-INF/xposed/java_init.list and created reflectively by
 # the framework, so it keeps its name and its public no-arg constructor.
--keep class com.lcebot.ferryqr.hook.HookEntry { *; }
+-keep class io.github.lcebot.ferryqr.hook.HookEntry { *; }
 -adaptresourcefilecontents META-INF/xposed/java_init.list
 -dontwarn io.github.libxposed.annotation.**

@@ -10,10 +10,10 @@
     <!-- The WeChat side of the optional LSPosed helper only accepts broadcasts from holders of this,
          so no other app can make WeChat scan a code it chose. -->
     <permission
-        android:name="com.lcebot.ferryqr.permission.WECHAT_HELPER"
+        android:name="io.github.lcebot.ferryqr.permission.WECHAT_HELPER"
         android:protectionLevel="signature" />
 
-    <uses-permission android:name="com.lcebot.ferryqr.permission.WECHAT_HELPER" />
+    <uses-permission android:name="io.github.lcebot.ferryqr.permission.WECHAT_HELPER" />
 
     <queries>
         <package android:name="com.tencent.mm" />

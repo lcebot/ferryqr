@@ -23,7 +23,7 @@ val keystoreAlias = signingValue("KEY_ALIAS") ?: keystoreFile?.let { path ->
 }
 
 android {
-    namespace = "com.lcebot.ferryqr"
+    namespace = "io.github.lcebot.ferryqr"
     compileSdk {
         version = release(37) {
             minorApiLevel = 1
@@ -31,7 +31,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.lcebot.ferryqr"
+        applicationId = "io.github.lcebot.ferryqr"
         minSdk = 30
         targetSdk = 37
         versionCode = releaseVersionCode ?: 100
