@@ -7,6 +7,7 @@ import android.os.SystemClock
 import androidx.annotation.StringRes
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import io.github.lcebot.ferryqr.dispatch.Origin
 import io.github.lcebot.ferryqr.dispatch.ResultCard
 import io.github.lcebot.ferryqr.helper.WeChatHelper
 import io.github.lcebot.ferryqr.history.HistoryStore
@@ -41,6 +42,7 @@ sealed interface Phase {
         val frame: Bitmap,
         val detections: List<Detection>,
         val alreadyShown: Set<String> = emptySet(),
+        val origin: Origin = Origin.CAMERA,
     ) : Phase
 
     /** A live scan just succeeded; the screen confirms it on the code before handing it off. */
@@ -50,7 +52,7 @@ sealed interface Phase {
         val frameHeight: Int,
         val wasShown: Boolean = false,
     ) : Phase
-    data class Routing(val detection: Detection) : Phase
+    data class Routing(val detection: Detection, val origin: Origin) : Phase
 
     /**
      * Probably a mini program code, which FerryQR cannot read, shown as [crop]. [live] is set when
@@ -135,11 +137,11 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun confirmed(detection: Detection) {
-        if (_phase.value is Phase.Confirming) _phase.value = Phase.Routing(detection)
+        if (_phase.value is Phase.Confirming) _phase.value = Phase.Routing(detection, Origin.CAMERA)
     }
 
     fun pick(detection: Detection) {
-        _phase.value = Phase.Routing(detection)
+        _phase.value = Phase.Routing(detection, (_phase.value as? Phase.Picking)?.origin ?: Origin.CAMERA)
     }
 
     fun record(detection: Detection) {
@@ -207,10 +209,10 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                         }
                     }
                     1 -> {
-                        _phase.value = Phase.Routing(read.detections.single())
+                        _phase.value = Phase.Routing(read.detections.single(), Origin.IMAGE)
                     }
                     else -> {
-                        _phase.value = Phase.Picking(read.frame, read.detections)
+                        _phase.value = Phase.Picking(read.frame, read.detections, origin = Origin.IMAGE)
                     }
                 }
             }

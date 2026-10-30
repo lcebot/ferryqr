@@ -17,14 +17,16 @@ object Dispatcher {
      * Hands the payload straight to the app that owns it, without showing anything. Returns false
      * when nothing claimed it, in which case the caller shows a result card instead.
      */
-    fun autoLaunch(activity: Activity, payload: Payload): Boolean = when (payload) {
+    fun autoLaunch(activity: Activity, payload: Payload, origin: Origin): Boolean = when (payload) {
         is WebPayload -> when {
             Alipay.claims(payload.url) -> Alipay.handoff(activity, payload.url)
-            WeChat.claims(payload.url) -> WeChat.openScanner(activity, payload.raw)
+            // A WeChat code in an image would leave the user facing WeChat's camera with nothing to
+            // scan, so without the helper it gets a card that says how to pick it from the album.
+            WeChat.claims(payload.url) -> wechatSees(origin) && WeChat.openScanner(activity, payload.raw)
             else -> Xiaomi.claim(activity, payload.url) || Launch.nonBrowser(activity, payload.url)
         }
         is SchemePayload -> Launch.scheme(activity, payload.uri, payload.scheme) ||
-            (WeChat.claims(payload.raw) && WeChat.openScanner(activity, payload.raw))
+            (wechatSees(origin) && WeChat.claims(payload.raw) && WeChat.openScanner(activity, payload.raw))
         is FidoPayload -> Launch.fido(activity, payload.raw)
         is EsimPayload -> Launch.esim(activity, payload.raw)
         is DppPayload -> Launch.dpp(activity, payload.raw)
@@ -33,4 +35,7 @@ object Dispatcher {
             MiniCodeArt.draw(payload.raw)?.let { WeChat.openScanner(activity, it) } == true
         else -> false
     }
+
+    /** Whether WeChat's scanner can see the code: through the helper, or because the camera still can. */
+    private fun wechatSees(origin: Origin) = WeChatHelper.ready.value || origin == Origin.CAMERA
 }

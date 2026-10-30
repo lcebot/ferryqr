@@ -50,23 +50,24 @@
     <string name="scheme_unhandled">No app can open this link.</string>
     <string name="esim_unhandled">No eSIM manager accepted this activation code. Copy it and add the eSIM in SIM settings.</string>
     <string name="fido_unhandled">No passkey manager is installed, or none accepted this passkey.</string>
-    <string name="dpp_unsupported">This device does not support Wi-Fi Easy Connect.</string>
+    <string name="dpp_unsupported">Could not start Wi-Fi Easy Connect. This device may not support it.</string>
     <string name="wifi_connect_unsupported">This security type cannot be added automatically. Copy the password and connect from the Wi-Fi settings.</string>
+    <string name="wifi_password_invalid">Invalid password, cannot connect automatically</string>
 
-    <string name="open">Open</string>
+    <string name="open">Open in browser</string>
     <string name="open_in_alipay">Open in Alipay</string>
     <string name="scan_in_wechat">Scan again in WeChat</string>
     <string name="open_in_wechat">Open in WeChat</string>
+    <string name="wechat_pick_from_album">Choose this image from the album in the WeChat scanner.</string>
     <string name="kind_mini_program">Mini program code</string>
     <string name="mini_headline">Possibly a WeChat mini program code</string>
     <string name="mini_body_helper">FerryQR could not read this code. Try opening it in WeChat.</string>
     <string name="mini_body_album">FerryQR could not read this code. Try choosing this image again from the album in the WeChat scanner.</string>
     <string name="mini_body_scan">FerryQR could not read this code. Try scanning it again in WeChat.</string>
-    <string name="mini_open_scanner">Open WeChat scanner</string>
+    <string name="open_wechat_scanner">Open WeChat scanner</string>
     <string name="mini_no_wechat">WeChat is not installed</string>
     <string name="mini_read_headline">WeChat mini program code</string>
-    <string name="mini_read_body_helper">Mini programs can only be opened in WeChat. You will be taken to WeChat.</string>
-    <string name="mini_read_body">Mini programs can only be opened in WeChat. Scan the code again in WeChat.</string>
+    <string name="mini_read_body">Mini programs can only be opened in WeChat.</string>
     <string name="copy">Copy</string>
     <string name="copied">Copied</string>
     <string name="share">Share</string>
@@ -95,8 +96,8 @@
     <string name="action_history">Scan history</string>
     <string name="history_title">History</string>
     <plurals name="history_count">
-        <item quantity="one">%1$d scan</item>
-        <item quantity="other">%1$d scans</item>
+        <item quantity="one">%1$d entry</item>
+        <item quantity="other">%1$d entries</item>
     </plurals>
     <string name="history_today">Today</string>
     <string name="history_yesterday">Yesterday</string>
@@ -121,10 +122,10 @@
     <string name="generate_save_failed">Could not save the image</string>
     <string name="generate_send_alipay">Open in Alipay</string>
     <string name="generate_send_wechat">Open in WeChat</string>
-    <string name="generate_wechat_needs_helper">Opening in WeChat needs FerryQR enabled in LSPosed</string>
+    <string name="wechat_needs_module">Opening in WeChat needs FerryQR enabled in LSPosed</string>
     <string name="generate_too_long">Too long for %1$s. %2$s can hold it.</string>
     <string name="generate_too_long_all">Too long for any code type</string>
-    <string name="generate_clip_label">QR code</string>
+    <string name="generate_clip_label">Barcode</string>
     <string name="type_qr">QR Code</string>
     <string name="type_aztec" translatable="false">Aztec</string>
     <string name="type_data_matrix" translatable="false">Data Matrix</string>

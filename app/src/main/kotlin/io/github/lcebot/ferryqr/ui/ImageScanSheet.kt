@@ -75,6 +75,7 @@ import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.content.Classifier
 import io.github.lcebot.ferryqr.dispatch.ActionResult
 import io.github.lcebot.ferryqr.dispatch.Cards
+import io.github.lcebot.ferryqr.dispatch.Origin
 import io.github.lcebot.ferryqr.history.HistoryStore
 import io.github.lcebot.ferryqr.scan.Detection
 import io.github.lcebot.ferryqr.scan.StillResult
@@ -219,7 +220,7 @@ private fun Found(read: StillResult.Read, onHandoff: () -> Unit) {
     var selected by rememberSaveable { mutableIntStateOf(0) }
     val detection = read.detections[selected.coerceIn(read.detections.indices)]
     val card = remember(detection) {
-        Cards.build(activity, Classifier.classify(detection.text, detection.format), detection.format)
+        Cards.build(activity, Classifier.classify(detection.text, detection.format), detection.format, Origin.IMAGE)
     }
 
     LaunchedEffect(detection) { HistoryStore.get(context).add(detection.text, detection.format) }

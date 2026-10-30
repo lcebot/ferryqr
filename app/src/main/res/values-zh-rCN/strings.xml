@@ -47,23 +47,24 @@
     <string name="scheme_unhandled">没有支持打开此链接的应用。</string>
     <string name="esim_unhandled">激活码未被任何 eSIM 管理软件接受。请复制后在 SIM 卡设置中添加 eSIM。</string>
     <string name="fido_unhandled">无通行密钥管理软件，或管理软件未接受此通行密钥。</string>
-    <string name="dpp_unsupported">设备不支持 Wi-Fi Easy Connect。</string>
+    <string name="dpp_unsupported">无法启动 Wi-Fi Easy Connect，设备可能不支持。</string>
     <string name="wifi_connect_unsupported">此加密方式无法自动添加，请复制密码后在 Wi-Fi 设置中连接。</string>
+    <string name="wifi_password_invalid">密码无效，无法自动连接</string>
 
-    <string name="open">打开</string>
+    <string name="open">在浏览器中打开</string>
     <string name="open_in_alipay">在支付宝中打开</string>
     <string name="scan_in_wechat">在微信中再次扫码</string>
     <string name="open_in_wechat">在微信中打开</string>
+    <string name="wechat_pick_from_album">请在微信扫一扫中从相册选择这张图片。</string>
     <string name="kind_mini_program">小程序码</string>
     <string name="mini_headline">可能是微信小程序码</string>
     <string name="mini_body_helper">FerryQR 未能解析此二维码。可尝试在微信中打开。</string>
     <string name="mini_body_album">FerryQR 未能解析此二维码。可尝试在微信扫一扫中从相册再次选择这张图片。</string>
     <string name="mini_body_scan">FerryQR 未能解析此二维码。可尝试在微信中再次扫描。</string>
-    <string name="mini_open_scanner">打开微信扫一扫</string>
+    <string name="open_wechat_scanner">打开微信扫一扫</string>
     <string name="mini_no_wechat">未安装微信</string>
     <string name="mini_read_headline">微信小程序码</string>
-    <string name="mini_read_body_helper">小程序只能在微信中打开。将跳转至微信。</string>
-    <string name="mini_read_body">小程序只能在微信中打开。请在微信中再次扫描。</string>
+    <string name="mini_read_body">小程序只能在微信中打开。</string>
     <string name="copy">复制</string>
     <string name="copied">已复制</string>
     <string name="share">分享</string>
@@ -117,11 +118,11 @@
     <string name="generate_save_failed">无法保存图片</string>
     <string name="generate_send_alipay">在支付宝中打开</string>
     <string name="generate_send_wechat">在微信中打开</string>
-    <string name="generate_wechat_needs_helper">在微信中打开需要在 LSPosed 中启用 FerryQR</string>
+    <string name="wechat_needs_module">在微信中打开需要在 LSPosed 中启用 FerryQR</string>
     <string name="generate_too_long">内容超出%1$s的容量，可改用%2$s。</string>
     <string name="generate_too_long_all">内容超出所有码制的容量</string>
     <string name="generate_clip_label">二维码</string>
-    <string name="type_qr">二维码</string>
+    <string name="type_qr">QR 码</string>
 
     <string name="xposed_description">直接在微信中打开微信二维码，无需再次扫描</string>
 </resources>

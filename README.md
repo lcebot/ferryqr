@@ -16,9 +16,9 @@ FerryQR needs Android 11 or later on a 64-bit ARM (arm64-v8a) phone. Download th
 
 **Alipay codes:** Open directly in Alipay.
 
-**WeChat codes:** WeChat does not accept scan results from other apps, so when FerryQR detects a WeChat code it can only take you to the WeChat scanner, where you scan the code again. With the [LSPosed module](#lsposed-module), the code opens directly in WeChat without another scan.
+**WeChat codes:** WeChat does not accept scan results from other apps, so when the camera finds a WeChat code, FerryQR can only take you to the WeChat scanner, where you scan the code again; for a code in an image, the result card tells you to choose the image from the album in the WeChat scanner. With the [LSPosed module](#lsposed-module), the code opens directly in WeChat without another scan.
 
-**WeChat mini program codes:** FerryQR reads the round mini program codes with three eye markers. Mini programs only open in WeChat: with the LSPosed module the code opens directly in WeChat; without it, the result card shows the code drawn again from its content, and you scan it again in the WeChat scanner. The few mini program codes that cannot be read are still recognised by their shape, and a result card lets you decide whether to open them in WeChat; nothing is sent until you tap it.
+**WeChat mini program codes:** FerryQR reads the round mini program codes with three eye markers. Mini programs only open in WeChat: with the LSPosed module the code opens directly in WeChat; without it, the result card shows the code drawn again from its content: scan a code the camera found again in the WeChat scanner, and for a code in an image, choose the image from the scanner's album. The few mini program codes that cannot be read are still recognised by their shape, and a result card lets you decide whether to open them in WeChat; nothing is sent until you tap it.
 
 **Wi-Fi:** Shows the network name and password. Most networks can be connected to directly.
 
@@ -46,7 +46,8 @@ To enable it:
 
 With the module:
 
-- Result cards and history offer Open in WeChat in place of Scan again in WeChat.
+- Result cards offer Open in WeChat in place of Scan again in WeChat and Open WeChat scanner.
+- WeChat codes and mini program codes in history open directly in WeChat; without the module, they cannot be opened in WeChat from history.
 - WeChat mini program codes open directly in WeChat.
 - The create page can open its text in WeChat.
 

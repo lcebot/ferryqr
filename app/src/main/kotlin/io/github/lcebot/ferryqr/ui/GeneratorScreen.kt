@@ -305,7 +305,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
                             SendButton(R.string.generate_send_wechat, WeChat.PACKAGE, R.drawable.ic_open_in_new, text.isNotEmpty(), looksEnabled = helperReady) {
                                 if (!helperReady) {
                                     haptics.reject()
-                                    scope.launch { snackbar.showSnackbar(context.getString(R.string.generate_wechat_needs_helper)) }
+                                    scope.launch { snackbar.showSnackbar(context.getString(R.string.wechat_needs_module)) }
                                 } else {
                                     haptics.tap()
                                     if (!WeChat.openScanner(activity, text)) scope.launch { snackbar.showSnackbar(context.getString(R.string.no_app)) }

@@ -57,6 +57,7 @@ import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.content.Classifier
 import io.github.lcebot.ferryqr.dispatch.ActionResult
 import io.github.lcebot.ferryqr.dispatch.Cards
+import io.github.lcebot.ferryqr.dispatch.Origin
 import io.github.lcebot.ferryqr.dispatch.ResultCard
 import io.github.lcebot.ferryqr.history.HistoryEntry
 import io.github.lcebot.ferryqr.history.HistoryStore
@@ -135,7 +136,7 @@ fun HistoryScreen(onBack: () -> Unit) {
                             onClick = {
                                 haptics.tap()
                                 val payload = Classifier.classify(entry.text, entry.format)
-                                showing = Cards.build(activity, payload, entry.format)
+                                showing = Cards.build(activity, payload, entry.format, Origin.HISTORY)
                             },
                         )
                     }
