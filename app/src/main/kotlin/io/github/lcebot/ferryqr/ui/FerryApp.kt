@@ -60,12 +60,17 @@ fun FerryApp(vm: ScanViewModel, openFavorite: String? = null, onFavoriteOpened: 
     }
 
     // The back gesture scrubs the real transition, so the scan screen is revealed as the user swipes.
+    // A cancelled gesture cancels the coroutine running this block, and so does a new gesture
+    // starting, so both endings animate in the screen's own scope. Awaited in here, the animation
+    // would be cancelled along with the gesture and leave the transition partway: a sliver of the
+    // camera would stay visible, and later gestures would act on a transition that never settles.
     PredictiveBackHandler(enabled = state.currentState != Screen.Scan) { progress ->
         try {
             progress.collect { event -> state.seekTo(event.progress, targetState = Screen.Scan) }
-            state.animateTo(Screen.Scan)
+            scope.launch { state.animateTo(Screen.Scan) }
         } catch (e: CancellationException) {
-            state.animateTo(state.currentState)
+            scope.launch { state.animateTo(state.currentState) }
+            throw e
         }
     }
 
