@@ -7,17 +7,9 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.os.Build
 import androidx.activity.compose.LocalActivity
-import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.compose.foundation.Image
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
-import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -32,25 +24,18 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -78,7 +63,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -86,6 +70,21 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.layout.height
+import androidx.compose.material3.FloatingToolbarDefaults
+import androidx.compose.material3.HorizontalFloatingToolbar
+import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.PlainTooltip
+import androidx.compose.material3.TooltipAnchorPosition
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.VerticalDivider
+import androidx.compose.material3.rememberTooltipState
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.dispatch.Alipay
 import io.github.lcebot.ferryqr.dispatch.Launch
@@ -100,26 +99,21 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlin.math.cos
-import kotlin.math.min
-import kotlin.math.sin
 
 /** Longer text is regenerated only after typing pauses, so each keystroke stays responsive. */
 private const val LARGE_TEXT = 800
 private const val LARGE_TEXT_DELAY_MS = 350L
 
+/** Below this width the toolbar drops the divider between its groups, so that it still fits. */
+private val DIVIDED_TOOLBAR_WIDTH = 336.dp
+
 /** Layout estimates used only to decide how many lines the text field can keep. */
 private val GAP = 12.dp
 private val CHIPS_HEIGHT = 48.dp
-private val BUTTONS_HEIGHT = 48.dp
+private val TOOLBAR_HEIGHT = FloatingToolbarDefaults.ContainerSize
 private val FIELD_ONE_LINE = 64.dp
 private val SUPPORTING_HEIGHT = 24.dp
 private const val MAX_FIELD_LINES = 4
-
-/** White margin around a tilted PDF417, matching the quiet zone readers expect. */
-private val TILTED_MARGIN = 8.dp
-private const val MAX_TILT = 75
-private const val TILT_GAIN = 1.02f
 
 @Composable
 fun GeneratorScreen(onBack: () -> Unit) {
@@ -136,7 +130,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
     val alipayInstalled = remember { Launch.isInstalled(context, Alipay.PACKAGE) }
     val wechatInstalled = remember { Launch.isInstalled(context, WeChat.PACKAGE) }
     val helperReady by WeChatHelper.ready.collectAsState()
-    val sendRow = alipayInstalled || wechatInstalled
+    val sendApps = alipayInstalled || wechatInstalled
 
     // The scanner probes on start, but the generator can be reached before that probe has answered.
     LaunchedEffect(Unit) { if (!WeChatHelper.ready.value) WeChatHelper.probe(context) }
@@ -188,6 +182,20 @@ fun GeneratorScreen(onBack: () -> Unit) {
         }
     }
 
+    fun share() {
+        val bitmap = code ?: return
+        scope.launch {
+            val chooser = withContext(Dispatchers.IO) { CodeExport.share(context, bitmap) }
+            if (chooser != null) {
+                haptics.tap()
+                context.startActivity(chooser)
+            } else {
+                haptics.reject()
+                snackbar.showSnackbar(context.getString(R.string.generate_share_failed))
+            }
+        }
+    }
+
     Scaffold(
         // The scaffold lifts the snackbar only above the system bars, and the keyboard would cover it.
         snackbarHost = {
@@ -200,16 +208,6 @@ fun GeneratorScreen(onBack: () -> Unit) {
                 navigationIcon = {
                     IconButton(onClick = { haptics.tap(); onBack() }) {
                         Icon(painterResource(R.drawable.ic_arrow_back), stringResource(R.string.back))
-                    }
-                },
-                actions = {
-                    // Kept codes are shown again from history, drawn the same way as here.
-                    AnimatedVisibility(
-                        visible = code != null,
-                        enter = scaleIn(MaterialTheme.motionScheme.fastSpatialSpec()) + fadeIn(MaterialTheme.motionScheme.fastEffectsSpec()),
-                        exit = scaleOut(MaterialTheme.motionScheme.fastSpatialSpec()) + fadeOut(MaterialTheme.motionScheme.fastEffectsSpec()),
-                    ) {
-                        FavoriteToggle(text, type.format.name)
                     }
                 },
             )
@@ -235,8 +233,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
             ) - navigationBar
             val keyboard = with(density) { keyboardPx.coerceAtLeast(0).toDp() }
             val lineHeight = with(density) { MaterialTheme.typography.bodyLarge.lineHeight.toDp() }
-            val buttonRows = if (sendRow) 2 else 1
-            val roomBesideCode = maxHeight - keyboard - CHIPS_HEIGHT - (BUTTONS_HEIGHT + GAP) * buttonRows - GAP * 2 - maxWidth
+            val roomBesideCode = maxHeight - keyboard - CHIPS_HEIGHT - TOOLBAR_HEIGHT - GAP * 3 - maxWidth
             val fieldLines = (MAX_FIELD_LINES downTo 1).firstOrNull { lines ->
                 FIELD_ONE_LINE + lineHeight * (lines - 1) + SUPPORTING_HEIGHT <= roomBesideCode
             } ?: 1
@@ -284,53 +281,67 @@ fun GeneratorScreen(onBack: () -> Unit) {
                     maxLines = fieldLines,
                 )
 
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    FilledTonalButton(
-                        onClick = {
-                            // Android 13 and later preview clipboard contents themselves.
-                            export(CodeExport::copy, R.string.generate_copied, R.string.generate_copy_failed,
-                                quietOnSuccess = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
-                        },
-                        enabled = code != null,
-                        shapes = ButtonDefaults.shapes(),
-                        modifier = Modifier.weight(1f),
+                // What is done with the code sits in one toolbar: actions on the code itself, then the
+                // apps that can open the text, with sharing as the main way out.
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    HorizontalFloatingToolbar(
+                        expanded = true,
+                        floatingActionButton = { ShareButton(enabled = code != null, onClick = ::share) },
                     ) {
-                        Icon(painterResource(R.drawable.ic_content_copy), null, Modifier.size(ButtonDefaults.IconSize))
-                        Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-                        Text(stringResource(R.string.generate_copy))
-                    }
-                    Button(
-                        onClick = {
-                            export(CodeExport::save, R.string.generate_saved, R.string.generate_save_failed, quietOnSuccess = false)
-                        },
-                        enabled = code != null,
-                        shapes = ButtonDefaults.shapes(),
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Icon(painterResource(R.drawable.ic_download), null, Modifier.size(ButtonDefaults.IconSize))
-                        Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-                        Text(stringResource(R.string.generate_save))
-                    }
-                }
-
-                if (sendRow && activity != null) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        if (alipayInstalled) {
-                            SendButton(R.string.generate_send_alipay, Alipay.PACKAGE, R.drawable.ic_open_in_new, text.isNotEmpty(), looksEnabled = true) {
-                                haptics.tap()
-                                if (!Alipay.handoff(activity, text)) scope.launch { snackbar.showSnackbar(context.getString(R.string.no_app)) }
+                        Labeled(R.string.generate_copy) {
+                            IconButton(
+                                onClick = {
+                                    // Android 13 and later preview clipboard contents themselves.
+                                    export(CodeExport::copy, R.string.generate_copied, R.string.generate_copy_failed,
+                                        quietOnSuccess = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+                                },
+                                enabled = code != null,
+                                shapes = IconButtonDefaults.shapes(),
+                            ) {
+                                Icon(painterResource(R.drawable.ic_content_copy), stringResource(R.string.generate_copy))
                             }
                         }
-                        if (wechatInstalled) {
-                            // Without the helper WeChat could only open its scanner on nothing, so the
-                            // button looks disabled but still explains why when tapped.
-                            SendButton(R.string.generate_send_wechat, WeChat.PACKAGE, R.drawable.ic_open_in_new, text.isNotEmpty(), looksEnabled = helperReady) {
-                                if (!helperReady) {
-                                    haptics.reject()
-                                    scope.launch { snackbar.showSnackbar(context.getString(R.string.wechat_needs_module)) }
-                                } else {
+                        Labeled(R.string.generate_save) {
+                            IconButton(
+                                onClick = {
+                                    export(CodeExport::save, R.string.generate_saved, R.string.generate_save_failed, quietOnSuccess = false)
+                                },
+                                enabled = code != null,
+                                shapes = IconButtonDefaults.shapes(),
+                            ) {
+                                Icon(painterResource(R.drawable.ic_download), stringResource(R.string.generate_save))
+                            }
+                        }
+                        // Kept codes are shown again from history, drawn the same way as here.
+                        Labeled(R.string.favorite) {
+                            FavoriteToggle(text, type.format.name, enabled = code != null)
+                        }
+                        if (sendApps && activity != null) {
+                            if (maxWidth >= DIVIDED_TOOLBAR_WIDTH) {
+                                VerticalDivider(
+                                    Modifier
+                                        .align(Alignment.CenterVertically)
+                                        .padding(horizontal = 4.dp)
+                                        .height(24.dp),
+                                )
+                            }
+                            if (alipayInstalled) {
+                                AppButton(R.string.generate_send_alipay, Alipay.PACKAGE, text.isNotEmpty(), looksEnabled = true) {
                                     haptics.tap()
-                                    if (!WeChat.openScanner(activity, text)) scope.launch { snackbar.showSnackbar(context.getString(R.string.no_app)) }
+                                    if (!Alipay.handoff(activity, text)) scope.launch { snackbar.showSnackbar(context.getString(R.string.no_app)) }
+                                }
+                            }
+                            if (wechatInstalled) {
+                                // Without the helper WeChat could only open its scanner on nothing, so the
+                                // button looks disabled but still explains why when tapped.
+                                AppButton(R.string.generate_send_wechat, WeChat.PACKAGE, text.isNotEmpty(), looksEnabled = helperReady) {
+                                    if (!helperReady) {
+                                        haptics.reject()
+                                        scope.launch { snackbar.showSnackbar(context.getString(R.string.wechat_needs_module)) }
+                                    } else {
+                                        haptics.tap()
+                                        if (!WeChat.openScanner(activity, text)) scope.launch { snackbar.showSnackbar(context.getString(R.string.no_app)) }
+                                    }
                                 }
                             }
                         }
@@ -341,90 +352,67 @@ fun GeneratorScreen(onBack: () -> Unit) {
     }
 }
 
+/** Icon-only controls name themselves in a tooltip on long press, as well as to screen readers. */
+@Composable
+private fun Labeled(@StringRes label: Int, content: @Composable () -> Unit) {
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
+        tooltip = { PlainTooltip { Text(stringResource(label)) } },
+        state = rememberTooltipState(),
+        content = content,
+    )
+}
+
 /**
- * Hands the text to another app. [looksEnabled] false draws the disabled colours while the button
- * still takes taps, so it can say why it does nothing.
+ * Sharing is the toolbar's floating action button. A FAB has no disabled state of its own, so with
+ * no code yet it takes the disabled colours and answers a tap only with a rejecting buzz.
  */
 @Composable
-private fun RowScope.SendButton(
-    @StringRes label: Int,
-    app: String,
-    @DrawableRes fallback: Int,
-    enabled: Boolean,
-    looksEnabled: Boolean,
-    onClick: () -> Unit,
-) {
-    val colors = if (looksEnabled) ButtonDefaults.filledTonalButtonColors() else ButtonDefaults.filledTonalButtonColors(
-        containerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
-        contentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+private fun ShareButton(enabled: Boolean, onClick: () -> Unit) {
+    val haptics = rememberHaptics()
+    val defaults = FloatingToolbarDefaults.standardFloatingToolbarColors()
+    val effects = MaterialTheme.motionScheme.defaultEffectsSpec<Color>()
+    val container by animateColorAsState(
+        if (enabled) defaults.fabContainerColor else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
+        effects,
+        label = "share-container",
     )
-    FilledTonalButton(
-        onClick = onClick,
-        enabled = enabled,
-        colors = colors,
-        shapes = ButtonDefaults.shapes(),
-        modifier = Modifier.weight(1f),
-    ) {
-        AppIcon(app, fallback, Modifier.size(ButtonDefaults.IconSize))
-        Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-        Text(stringResource(label), maxLines = 1)
+    val content by animateColorAsState(
+        if (enabled) defaults.fabContentColor else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+        effects,
+        label = "share-content",
+    )
+    Labeled(R.string.generate_share) {
+        FloatingToolbarDefaults.StandardFloatingActionButton(
+            onClick = { if (enabled) onClick() else haptics.reject() },
+            containerColor = container,
+            contentColor = content,
+        ) {
+            Icon(painterResource(R.drawable.ic_share), stringResource(R.string.generate_share))
+        }
     }
 }
 
 /**
- * A PDF417 is long and flat, so it is shown on its own white card tilted to whatever angle makes it
- * largest in the available area. Exports keep the code upright.
+ * Hands the text to another app, shown by that app's own icon. [looksEnabled] false draws the
+ * disabled look while the button still takes taps, so it can say why it does nothing.
  */
 @Composable
-private fun TiltedCode(code: Bitmap, modifier: Modifier) {
-    val image = remember(code) { code.asImageBitmap() }
-    BoxWithConstraints(modifier, contentAlignment = Alignment.Center) {
-        val density = LocalDensity.current
-        val margin = with(density) { TILTED_MARGIN.toPx() }
-        val width = constraints.maxWidth.toFloat()
-        val height = constraints.maxHeight.toFloat()
-        val ratio = code.width.toFloat() / code.height
-
-        // Largest code height that fits when the card, margin included, is turned by `degrees`.
-        fun fit(degrees: Float): Float {
-            val radians = Math.toRadians(degrees.toDouble())
-            val c = cos(radians).toFloat()
-            val s = sin(radians).toFloat()
-            val byWidth = (width - 2 * margin * (c + s)) / (ratio * c + s)
-            val byHeight = (height - 2 * margin * (c + s)) / (ratio * s + c)
-            return min(byWidth, byHeight).coerceAtLeast(0f)
-        }
-
-        // Prefer a flatter angle unless tilting further makes the code clearly larger.
-        var target = 0f
-        var best = fit(0f)
-        for (degrees in 1..MAX_TILT) {
-            val size = fit(degrees.toFloat())
-            if (size > best * TILT_GAIN) {
-                best = size
-                target = degrees.toFloat()
-            }
-        }
-        val angle by animateFloatAsState(target, MaterialTheme.motionScheme.defaultSpatialSpec(), label = "pdf417-tilt")
-        val codeHeight = fit(angle)
-        val cardWidth = with(density) { (codeHeight * ratio + 2 * margin).toDp() }
-        val cardHeight = with(density) { (codeHeight + 2 * margin).toDp() }
-
-        Box(
-            Modifier
-                // Unrotated, the card may be wider than the area; only its rotated footprint has to fit.
-                .requiredSize(cardWidth, cardHeight)
-                .graphicsLayer { rotationZ = -angle }
-                .background(Color.White, RoundedCornerShape(12.dp))
-                .padding(TILTED_MARGIN)
+private fun AppButton(@StringRes label: Int, app: String, enabled: Boolean, looksEnabled: Boolean, onClick: () -> Unit) {
+    val alpha by animateFloatAsState(
+        if (enabled && looksEnabled) 1f else 0.38f,
+        MaterialTheme.motionScheme.defaultEffectsSpec(),
+        label = "app-button",
+    )
+    val description = stringResource(label)
+    Labeled(label) {
+        IconButton(
+            onClick = onClick,
+            enabled = enabled,
+            shapes = IconButtonDefaults.shapes(),
+            modifier = Modifier.semantics { contentDescription = description },
         ) {
-            Image(
-                bitmap = image,
-                contentDescription = null,
-                contentScale = ContentScale.FillBounds,
-                filterQuality = FilterQuality.None,
-                modifier = Modifier.fillMaxSize(),
-            )
+            AppIcon(app, R.drawable.ic_open_in_new, Modifier.size(24.dp).alpha(alpha))
         }
     }
 }

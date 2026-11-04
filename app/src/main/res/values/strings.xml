@@ -145,6 +145,8 @@
     <string name="generate_copy_failed">Could not copy the image</string>
     <string name="generate_saved">Saved to Pictures/FerryQR</string>
     <string name="generate_save_failed">Could not save the image</string>
+    <string name="generate_share">Share image</string>
+    <string name="generate_share_failed">Could not share the image</string>
     <string name="generate_send_alipay">Open in Alipay</string>
     <string name="generate_send_wechat">Open in WeChat</string>
     <string name="wechat_needs_module">Opening in WeChat needs FerryQR enabled in LSPosed</string>

@@ -44,9 +44,12 @@ import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.history.HistoryStore
 import kotlinx.coroutines.flow.first
 
-/** Stars content as a favorite, adding it to the history first when it is not there yet. */
+/**
+ * Stars content as a favorite, adding it to the history first when it is not there yet. A favorite
+ * takes the tertiary colours, the same ones favorites have in the history.
+ */
 @Composable
-fun FavoriteToggle(text: String, format: String, modifier: Modifier = Modifier) {
+fun FavoriteToggle(text: String, format: String, modifier: Modifier = Modifier, enabled: Boolean = true) {
     val context = LocalContext.current
     val haptics = rememberHaptics()
     val store = remember { HistoryStore.get(context) }
@@ -60,6 +63,11 @@ fun FavoriteToggle(text: String, format: String, modifier: Modifier = Modifier) 
         },
         shapes = IconButtonDefaults.toggleableShapes(),
         modifier = modifier,
+        enabled = enabled,
+        colors = IconButtonDefaults.iconToggleButtonVibrantColors(
+            checkedContainerColor = MaterialTheme.colorScheme.tertiaryContainer,
+            checkedContentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+        ),
     ) {
         FavoriteIcon(favorite, stringResource(R.string.favorite))
     }

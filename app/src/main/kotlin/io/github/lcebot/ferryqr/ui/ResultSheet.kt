@@ -11,6 +11,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -56,6 +57,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.dispatch.CardAction
@@ -100,7 +102,9 @@ fun ResultCardContent(card: ResultCard, onAction: (CardAction) -> Unit, modifier
                 FavoriteToggle(card.raw, card.format, Modifier.offset(x = 12.dp))
             }
         }
-        card.image?.let { bitmap -> CodeImage(bitmap, Modifier.align(Alignment.CenterHorizontally)) }
+        card.image?.let { bitmap ->
+            CodeImage(bitmap, tilt = card.format == PDF417_FORMAT, modifier = Modifier.align(Alignment.CenterHorizontally))
+        }
         SelectionContainer {
             Text(
                 card.headline,
@@ -172,47 +176,76 @@ private fun ActionIcon(action: CardAction) {
 /** The code's height while small; a wide linear code grows sideways from it. */
 private val CODE_HEIGHT = 160.dp
 
+/** zxing-cpp's name for PDF417, the one format that is enlarged by turning it. */
+private const val PDF417_FORMAT = "PDF_417"
+
+/** The white margin [TiltedCode] keeps around the code, so the small card shows it at full width. */
+private val TILTED_FRAME = 16.dp
+
 /**
  * The code on white, since readers expect dark modules on light. A tap grows it to the sheet's full
- * width so another phone can scan it from a distance, and a second tap returns it.
+ * width so another phone can scan it from a distance, and a second tap returns it. A PDF417 with
+ * [tilt] grows into a square instead and turns as it grows, the same way the create page shows it.
  */
 @Composable
-private fun CodeImage(bitmap: Bitmap, modifier: Modifier = Modifier) {
+private fun CodeImage(bitmap: Bitmap, tilt: Boolean, modifier: Modifier = Modifier) {
     val haptics = rememberHaptics()
     val image = remember(bitmap) { bitmap.asImageBitmap() }
     val aspect = bitmap.width.toFloat() / bitmap.height
     var enlarged by rememberSaveable { mutableStateOf(false) }
     BoxWithConstraints(modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
         val small = minOf(CODE_HEIGHT * maxOf(aspect, 1f), maxWidth)
-        val width by animateDpAsState(
-            targetValue = if (enlarged) maxWidth else small,
-            animationSpec = MaterialTheme.motionScheme.defaultSpatialSpec(),
-            label = "code-size",
+        val tilted = tilt && aspect > 1f
+        val spatial = MaterialTheme.motionScheme.defaultSpatialSpec<Dp>()
+        val width by animateDpAsState(if (enlarged) maxWidth else small, spatial, label = "code-width")
+        val height by animateDpAsState(
+            targetValue = when {
+                !tilted -> (if (enlarged) maxWidth else small) / aspect
+                enlarged -> maxWidth
+                else -> small / aspect + TILTED_FRAME
+            },
+            animationSpec = spatial,
+            label = "code-height",
         )
+        val clickLabel = stringResource(if (enlarged) R.string.code_shrink else R.string.code_enlarge)
+        fun toggle() {
+            haptics.tap()
+            enlarged = !enlarged
+        }
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Box(
-                modifier = Modifier
-                    .size(width, width / aspect)
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(Color.White)
-                    .clickable(
-                        onClickLabel = stringResource(if (enlarged) R.string.code_shrink else R.string.code_enlarge),
-                    ) {
-                        haptics.tap()
-                        enlarged = !enlarged
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                Image(
-                    bitmap = image,
-                    contentDescription = null,
-                    contentScale = ContentScale.Fit,
-                    filterQuality = FilterQuality.Medium,
-                    modifier = Modifier.fillMaxSize(),
+            if (tilted) {
+                // The card turns inside its area, so a ripple on that area would not match its outline.
+                TiltedCode(
+                    bitmap,
+                    Modifier
+                        .size(width, height)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClickLabel = clickLabel,
+                            onClick = ::toggle,
+                        ),
                 )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(width, height)
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(Color.White)
+                        .clickable(onClickLabel = clickLabel, onClick = ::toggle),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Image(
+                        bitmap = image,
+                        contentDescription = null,
+                        contentScale = ContentScale.Fit,
+                        filterQuality = FilterQuality.Medium,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
             val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
             AnimatedContent(

@@ -140,6 +140,8 @@
     <string name="generate_copy_failed">无法复制图片</string>
     <string name="generate_saved">已保存到 Pictures/FerryQR</string>
     <string name="generate_save_failed">无法保存图片</string>
+    <string name="generate_share">分享图片</string>
+    <string name="generate_share_failed">无法分享图片</string>
     <string name="generate_send_alipay">在支付宝中打开</string>
     <string name="generate_send_wechat">在微信中打开</string>
     <string name="wechat_needs_module">在微信中打开需要在 LSPosed 中启用 FerryQR</string>

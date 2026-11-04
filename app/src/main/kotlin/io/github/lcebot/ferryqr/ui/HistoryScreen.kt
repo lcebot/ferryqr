@@ -403,27 +403,47 @@ private fun DayHeader(day: LocalDate, sample: Long, modifier: Modifier = Modifie
 }
 
 /**
- * One entry: a tap opens it, a swipe either way deletes it, and a long press opens its menu. The
- * swipe state lives only as long as the row, so an entry brought back by undo arrives settled.
+ * One entry: a tap opens it, a long press opens its menu, a swipe toward the start deletes it, and a
+ * swipe toward the end makes it a favorite or stops it being one. A favorite swipe slides the row
+ * back once done. The swipe state lives only as long as the row, so an entry brought back by undo
+ * arrives settled.
  */
 @Composable
 private fun EntryRow(entry: HistoryEntry, shape: Shape, actions: EntryActions, modifier: Modifier = Modifier) {
     val haptics = rememberHaptics()
+    val scope = rememberCoroutineScope()
     var menu by remember { mutableStateOf(false) }
     val threshold = SwipeToDismissBoxDefaults.positionalThreshold
     val swipe = remember { SwipeToDismissBoxState(SwipeToDismissBoxValue.Settled, threshold) }
     val armed = swipe.targetValue != SwipeToDismissBoxValue.Settled
     LaunchedEffect(armed) { if (armed) haptics.step() }
 
+    // What a favorite swipe will do is fixed when it starts, so the row sliding back after the
+    // change still shows the change it made rather than the opposite one.
+    var becomesFavorite by remember { mutableStateOf(!entry.favorite) }
+    LaunchedEffect(swipe.dismissDirection, entry.favorite) {
+        if (swipe.dismissDirection == SwipeToDismissBoxValue.Settled) becomesFavorite = !entry.favorite
+    }
+
     // The box reruns its dismiss callback whenever the callback changes, so it must stay the same one.
     val current by rememberUpdatedState(entry)
     val delete by rememberUpdatedState(actions.onDelete)
-    val onDismiss = remember { { _: SwipeToDismissBoxValue -> delete(current) } }
+    val favorite by rememberUpdatedState(actions.onFavorite)
+    val onDismiss = remember {
+        { direction: SwipeToDismissBoxValue ->
+            if (direction == SwipeToDismissBoxValue.EndToStart) {
+                delete(current)
+            } else {
+                favorite(current, !current.favorite)
+                scope.launch { swipe.reset() }
+            }
+        }
+    }
 
     Box(modifier) {
         SwipeToDismissBox(
             state = swipe,
-            backgroundContent = { DeleteBackground(swipe, armed, shape) },
+            backgroundContent = { SwipeBackground(swipe, armed, becomesFavorite, shape) },
             onDismiss = onDismiss,
         ) {
             EntryItem(entry, shape, onClick = { actions.onOpen(entry) }, onLongClick = { menu = true })
@@ -490,30 +510,39 @@ private fun EntryItem(entry: HistoryEntry, shape: Shape, onClick: () -> Unit, on
 }
 
 /**
- * Shown behind a row being swiped. It turns to the error colours and the icon grows once letting
- * go would delete the entry, so the point of no return is visible before it is reached.
+ * Shown behind a row being swiped. Once letting go would act, the icon grows and the colours turn
+ * to those of the result: the error colours for deleting, the tertiary colours favorites use for a
+ * new favorite, and the primary colours of other entries for one that stops being a favorite.
  */
 @Composable
-private fun DeleteBackground(swipe: SwipeToDismissBoxState, armed: Boolean, shape: Shape) {
+private fun SwipeBackground(swipe: SwipeToDismissBoxState, armed: Boolean, becomesFavorite: Boolean, shape: Shape) {
+    val colors = MaterialTheme.colorScheme
+    val direction = swipe.dismissDirection
+    val (armedContainer, armedContent) = when {
+        direction == SwipeToDismissBoxValue.EndToStart -> colors.errorContainer to colors.onErrorContainer
+        becomesFavorite -> colors.tertiaryContainer to colors.onTertiaryContainer
+        else -> colors.primaryContainer to colors.onPrimaryContainer
+    }
     val container by animateColorAsState(
-        if (armed) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceContainerHighest,
+        if (armed) armedContainer else colors.surfaceContainerHighest,
         MaterialTheme.motionScheme.fastEffectsSpec(),
-        label = "delete-container",
+        label = "swipe-container",
     )
     val content by animateColorAsState(
-        if (armed) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+        if (armed) armedContent else colors.onSurfaceVariant,
         MaterialTheme.motionScheme.fastEffectsSpec(),
-        label = "delete-icon",
+        label = "swipe-icon",
     )
     val scale by animateFloatAsState(
         if (armed) 1.25f else 1f,
         MaterialTheme.motionScheme.fastSpatialSpec(),
-        label = "delete-scale",
+        label = "swipe-scale",
     )
-    val alignment = when (swipe.dismissDirection) {
-        SwipeToDismissBoxValue.StartToEnd -> Alignment.CenterStart
-        SwipeToDismissBoxValue.EndToStart -> Alignment.CenterEnd
-        SwipeToDismissBoxValue.Settled -> null
+    val (alignment, icon) = when (direction) {
+        SwipeToDismissBoxValue.StartToEnd ->
+            Alignment.CenterStart to if (becomesFavorite) R.drawable.ic_star_filled else R.drawable.ic_star
+        SwipeToDismissBoxValue.EndToStart -> Alignment.CenterEnd to R.drawable.ic_delete
+        SwipeToDismissBoxValue.Settled -> null to null
     }
     Box(
         modifier = Modifier
@@ -523,9 +552,9 @@ private fun DeleteBackground(swipe: SwipeToDismissBoxState, armed: Boolean, shap
             .padding(horizontal = 24.dp),
         contentAlignment = alignment ?: Alignment.Center,
     ) {
-        if (alignment != null) {
+        if (icon != null) {
             Icon(
-                painterResource(R.drawable.ic_delete),
+                painterResource(icon),
                 contentDescription = null,
                 tint = content,
                 modifier = Modifier.scale(scale),
