@@ -16,6 +16,7 @@ import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.IconToggleButton
+import androidx.compose.material3.IconToggleButtonColors
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -45,11 +46,21 @@ import io.github.lcebot.ferryqr.history.HistoryStore
 import kotlinx.coroutines.flow.first
 
 /**
- * Stars content as a favorite, adding it to the history first when it is not there yet. A favorite
- * takes the tertiary colours, the same ones favorites have in the history.
+ * Stars content as a favorite, adding it to the history first when it is not there yet. On its own a
+ * favorite takes the tertiary colours that favorites have in the history; among other icon buttons,
+ * [colors] can match theirs so that only the filled star tells it apart.
  */
 @Composable
-fun FavoriteToggle(text: String, format: String, modifier: Modifier = Modifier, enabled: Boolean = true) {
+fun FavoriteToggle(
+    text: String,
+    format: String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    colors: IconToggleButtonColors = IconButtonDefaults.iconToggleButtonVibrantColors(
+        checkedContainerColor = MaterialTheme.colorScheme.tertiaryContainer,
+        checkedContentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+    ),
+) {
     val context = LocalContext.current
     val haptics = rememberHaptics()
     val store = remember { HistoryStore.get(context) }
@@ -64,10 +75,7 @@ fun FavoriteToggle(text: String, format: String, modifier: Modifier = Modifier, 
         shapes = IconButtonDefaults.toggleableShapes(),
         modifier = modifier,
         enabled = enabled,
-        colors = IconButtonDefaults.iconToggleButtonVibrantColors(
-            checkedContainerColor = MaterialTheme.colorScheme.tertiaryContainer,
-            checkedContentColor = MaterialTheme.colorScheme.onTertiaryContainer,
-        ),
+        colors = colors,
     ) {
         FavoriteIcon(favorite, stringResource(R.string.favorite))
     }

@@ -24,6 +24,8 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -31,9 +33,11 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilterChip
@@ -78,15 +82,14 @@ import androidx.compose.material3.DropdownMenuPopup
 import androidx.compose.material3.MenuDefaults
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.foundation.layout.height
 import androidx.compose.material3.FloatingToolbarDefaults
 import androidx.compose.material3.HorizontalFloatingToolbar
 import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.TooltipAnchorPosition
 import androidx.compose.material3.TooltipBox
 import androidx.compose.material3.TooltipDefaults
-import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.rememberTooltipState
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.semantics.contentDescription
@@ -112,11 +115,11 @@ private const val LARGE_TEXT_DELAY_MS = 350L
 
 /**
  * The toolbar's fixed parts, from the floating toolbar's own tokens: its padding, one icon button,
- * the divider with its spacing, and the gap before the FAB together with the FAB itself.
+ * the gap before the group of apps, and the gap before the FAB together with the FAB itself.
  */
 private val TOOLBAR_PADDING = 16.dp
 private val TOOLBAR_BUTTON = 48.dp
-private val TOOLBAR_DIVIDER = 9.dp
+private val GROUP_GAP = 4.dp
 private val TOOLBAR_FAB = 64.dp
 
 /** Copy, save and favorite, which always stay in the toolbar. */
@@ -350,23 +353,27 @@ fun GeneratorScreen(onBack: () -> Unit) {
                                 Icon(painterResource(R.drawable.ic_download), stringResource(R.string.generate_save))
                             }
                         }
-                        // Kept codes are shown again from history, drawn the same way as here.
+                        // Kept codes are shown again from history, drawn the same way as here. The toggle
+                        // takes the toolbar's own content colour, like copy and save beside it.
                         Labeled(R.string.favorite) {
-                            FavoriteToggle(text, type.format.name, enabled = code != null)
+                            FavoriteToggle(
+                                text,
+                                type.format.name,
+                                enabled = code != null,
+                                colors = IconButtonDefaults.iconToggleButtonColors(
+                                    checkedContainerColor = Color.Transparent,
+                                    checkedContentColor = LocalContentColor.current,
+                                ),
+                            )
                         }
-                        when (placement) {
-                            SendPlacement.NONE -> Unit
-                            SendPlacement.MENU -> SendMenu(apps, enabled = text.isNotEmpty())
-                            SendPlacement.INLINE, SendPlacement.DIVIDED -> {
-                                if (placement == SendPlacement.DIVIDED) {
-                                    VerticalDivider(
-                                        Modifier
-                                            .align(Alignment.CenterVertically)
-                                            .padding(horizontal = 4.dp)
-                                            .height(24.dp),
-                                    )
+                        if (placement != SendPlacement.NONE) {
+                            Spacer(Modifier.width(GROUP_GAP))
+                            AppGroup {
+                                if (placement == SendPlacement.MENU) {
+                                    SendMenu(apps, enabled = text.isNotEmpty())
+                                } else {
+                                    apps.forEach { app -> AppButton(app, enabled = text.isNotEmpty()) }
                                 }
-                                apps.forEach { app -> AppButton(app, enabled = text.isNotEmpty()) }
                             }
                         }
                     }
@@ -384,21 +391,41 @@ private class SendApp(
     val onClick: () -> Unit,
 )
 
-private enum class SendPlacement { NONE, DIVIDED, INLINE, MENU }
+private enum class SendPlacement { NONE, INLINE, MENU }
 
 /**
- * Where the apps go in a toolbar [room] wide: after a divider when everything fits, without it when
- * only that saves enough, and otherwise behind an overflow button. The narrowest phone screen Android
- * allows still holds the toolbar with the overflow button.
+ * Where the apps go in a toolbar [room] wide: each in the group when they fit, and otherwise behind
+ * one overflow button in the same group. The narrowest phone screen Android allows still holds the
+ * toolbar with the overflow button.
  */
 private fun sendPlacement(apps: Int, room: Dp): SendPlacement {
-    fun width(buttons: Int, divider: Boolean) =
-        TOOLBAR_PADDING + TOOLBAR_BUTTON * buttons + (if (divider) TOOLBAR_DIVIDER else 0.dp) + TOOLBAR_FAB
+    fun width(groupButtons: Int) =
+        TOOLBAR_PADDING + TOOLBAR_BUTTON * (CODE_ACTIONS + groupButtons) + GROUP_GAP + TOOLBAR_FAB
     return when {
         apps == 0 -> SendPlacement.NONE
-        width(CODE_ACTIONS + apps, divider = true) <= room -> SendPlacement.DIVIDED
-        width(CODE_ACTIONS + apps, divider = false) <= room -> SendPlacement.INLINE
+        width(apps) <= room -> SendPlacement.INLINE
         else -> SendPlacement.MENU
+    }
+}
+
+/**
+ * The colour of everything that hands the code to another app: the group of apps and the share FAB.
+ * It marks what the actions do rather than how much they matter, so it is one neutral tone for
+ * both, two steps from the toolbar's container, and the actions on the code itself stay on the
+ * toolbar's own colour.
+ */
+@Composable
+private fun handoffContainer(): Color = MaterialTheme.colorScheme.surfaceContainerHighest
+
+/** The apps share one pill, which sets them apart from the actions on the code without a divider. */
+@Composable
+private fun AppGroup(content: @Composable RowScope.() -> Unit) {
+    Surface(
+        shape = CircleShape,
+        color = handoffContainer(),
+        contentColor = LocalContentColor.current,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, content = content)
     }
 }
 
@@ -455,8 +482,9 @@ private fun Labeled(@StringRes label: Int, content: @Composable () -> Unit) {
 }
 
 /**
- * Sharing is the toolbar's floating action button. A FAB has no disabled state of its own, so with
- * no code yet it takes the disabled colours and answers a tap only with a rejecting buzz.
+ * Sharing is the toolbar's floating action button, in the same tone as the group of apps, since it
+ * too hands the code to another app. A FAB has no disabled state of its own, so with no code yet it
+ * takes the disabled colours and answers a tap only with a rejecting buzz.
  */
 @Composable
 private fun ShareButton(enabled: Boolean, onClick: () -> Unit) {
@@ -464,12 +492,12 @@ private fun ShareButton(enabled: Boolean, onClick: () -> Unit) {
     val defaults = FloatingToolbarDefaults.standardFloatingToolbarColors()
     val effects = MaterialTheme.motionScheme.defaultEffectsSpec<Color>()
     val container by animateColorAsState(
-        if (enabled) defaults.fabContainerColor else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
+        if (enabled) handoffContainer() else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
         effects,
         label = "share-container",
     )
     val content by animateColorAsState(
-        if (enabled) defaults.fabContentColor else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+        if (enabled) defaults.toolbarContentColor else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
         effects,
         label = "share-content",
     )
