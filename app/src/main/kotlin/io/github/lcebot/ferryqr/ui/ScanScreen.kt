@@ -22,13 +22,14 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledIconToggleButton
@@ -61,7 +62,12 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -75,7 +81,8 @@ import io.github.lcebot.ferryqr.dispatch.Dispatcher
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
-private val CONTROL_LABEL_WIDTH = 88.dp
+/** The smallest a control label shrinks to before it is cut short. */
+private val MIN_LABEL_SIZE = 9.sp
 
 @Composable
 fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: () -> Unit) {
@@ -126,6 +133,11 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         Box(Modifier.fillMaxSize()) {
+            // The permission panel sits between the controls at the top and bottom, so when a large
+            // font makes it scroll, nothing of it hides behind them.
+            var topSpace by remember { mutableIntStateOf(0) }
+            var bottomSpace by remember { mutableIntStateOf(0) }
+            val density = LocalDensity.current
             if (camera.granted) {
                 CameraPreview(
                     analyzer = vm.analyzer,
@@ -148,7 +160,12 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
                 PermissionPanel(
                     openSettings = camera.permanentlyDenied,
                     onRequest = camera.request,
-                    modifier = Modifier.align(Alignment.Center),
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(
+                            top = with(density) { topSpace.toDp() },
+                            bottom = with(density) { bottomSpace.toDp() },
+                        ),
                 )
             }
 
@@ -159,6 +176,7 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
+                    .onSizeChanged { bottomSpace = it.height }
                     .fillMaxWidth()
                     .padding(padding)
                     .padding(bottom = 24.dp),
@@ -176,7 +194,12 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
                     ) {
                         HelperNotice()
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // The hint gives way to the zoom pill, which is short, so both stay inside the edges.
+                    Row(
+                        modifier = Modifier.padding(horizontal = 24.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         StatusPill(
                             stringResource(
                                 when {
@@ -184,28 +207,35 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
                                     sighting != null -> R.string.hint_hold
                                     else -> R.string.hint_aim
                                 }
-                            )
+                            ),
+                            Modifier.weight(1f, fill = false),
                         )
                         if (abs(zoom - 1f) >= 0.05f) StatusPill(stringResource(R.string.zoom_label, zoom))
                     }
                 }
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.Top,
                 ) {
-                    ControlButton(R.drawable.ic_photo_library, R.string.action_gallery) {
+                    ControlButton(R.drawable.ic_photo_library, R.string.action_gallery, Modifier.weight(1f)) {
                         pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                     }
                     if (camera.granted && hasFlash) {
-                        TorchButton(checked = torch, onCheckedChange = { torch = it })
+                        TorchButton(checked = torch, onCheckedChange = { torch = it }, modifier = Modifier.weight(1f))
                     } else {
-                        Box(Modifier.width(CONTROL_LABEL_WIDTH))
+                        Spacer(Modifier.weight(1f))
                     }
                     if (camera.granted) {
-                        ControlButton(R.drawable.ic_restart_alt, R.string.action_reset, pressFeedback = false, onClick = vm::manualReset)
+                        ControlButton(
+                            R.drawable.ic_restart_alt,
+                            R.string.action_reset,
+                            Modifier.weight(1f),
+                            pressFeedback = false,
+                            onClick = vm::manualReset,
+                        )
                     } else {
-                        Box(Modifier.width(CONTROL_LABEL_WIDTH))
+                        Spacer(Modifier.weight(1f))
                     }
                 }
             }
@@ -213,6 +243,7 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
             Row(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
+                    .onSizeChanged { topSpace = it.height }
                     .padding(padding)
                     .padding(16.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -262,12 +293,13 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
 private fun ControlButton(
     @DrawableRes icon: Int,
     @StringRes label: Int,
+    modifier: Modifier = Modifier,
     pressFeedback: Boolean = true,
     onClick: () -> Unit,
 ) {
     val haptics = rememberHaptics()
     Column(
-        modifier = Modifier.width(CONTROL_LABEL_WIDTH),
+        modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -285,13 +317,26 @@ private fun ControlButton(
                 modifier = Modifier.size(IconButtonDefaults.mediumIconSize),
             )
         }
-        Text(
-            stringResource(label),
-            style = MaterialTheme.typography.labelMedium,
-            color = Color.White,
-            textAlign = TextAlign.Center,
-        )
+        ControlLabel(stringResource(label))
     }
+}
+
+/**
+ * A control's name under its button. A large font scale shrinks it before it would need a third
+ * line, so the three controls keep their buttons in one row.
+ */
+@Composable
+private fun ControlLabel(text: String) {
+    val style = MaterialTheme.typography.labelMedium
+    Text(
+        text,
+        style = style,
+        color = Color.White,
+        textAlign = TextAlign.Center,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+        autoSize = TextAutoSize.StepBased(minFontSize = MIN_LABEL_SIZE, maxFontSize = style.fontSize),
+    )
 }
 
 @Composable
@@ -306,10 +351,10 @@ private fun TopIconButton(@DrawableRes icon: Int, @StringRes label: Int, onClick
 }
 
 @Composable
-private fun TorchButton(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+private fun TorchButton(checked: Boolean, onCheckedChange: (Boolean) -> Unit, modifier: Modifier = Modifier) {
     val haptics = rememberHaptics()
     Column(
-        modifier = Modifier.width(CONTROL_LABEL_WIDTH),
+        modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -325,12 +370,7 @@ private fun TorchButton(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
                 modifier = Modifier.size(IconButtonDefaults.mediumIconSize),
             )
         }
-        Text(
-            stringResource(R.string.action_torch),
-            style = MaterialTheme.typography.labelMedium,
-            color = Color.White,
-            textAlign = TextAlign.Center,
-        )
+        ControlLabel(stringResource(R.string.action_torch))
     }
 }
 
@@ -355,11 +395,17 @@ private fun HelperNotice() {
 }
 
 @Composable
-private fun StatusPill(text: String) {
-    Surface(shape = CircleShape, color = Color.Black.copy(alpha = 0.5f), contentColor = Color.White) {
+private fun StatusPill(text: String, modifier: Modifier = Modifier) {
+    Surface(
+        shape = MaterialTheme.shapes.extraLarge,
+        color = Color.Black.copy(alpha = 0.5f),
+        contentColor = Color.White,
+        modifier = modifier,
+    ) {
         Text(
             text,
             style = MaterialTheme.typography.labelLarge,
+            textAlign = TextAlign.Center,
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
         )
     }

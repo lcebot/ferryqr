@@ -429,8 +429,8 @@ private fun EntryRow(entry: HistoryEntry, shape: Shape, actions: EntryActions, m
     val current by rememberUpdatedState(entry)
     val delete by rememberUpdatedState(actions.onDelete)
     val favorite by rememberUpdatedState(actions.onFavorite)
-    val onDismiss = remember {
-        { direction: SwipeToDismissBoxValue ->
+    val onDismiss: (SwipeToDismissBoxValue) -> Unit = remember {
+        { direction ->
             if (direction == SwipeToDismissBoxValue.EndToStart) {
                 delete(current)
             } else {
@@ -645,7 +645,7 @@ private fun MenuRow(item: MenuEntry, shape: Shape, onDismiss: () -> Unit, destru
 }
 
 @Composable
-private fun menuItemShape(index: Int, count: Int): Shape = when {
+fun menuItemShape(index: Int, count: Int): Shape = when {
     count == 1 -> MenuDefaults.standaloneItemShape
     index == 0 -> MenuDefaults.leadingItemShape
     index == count - 1 -> MenuDefaults.trailingItemShape

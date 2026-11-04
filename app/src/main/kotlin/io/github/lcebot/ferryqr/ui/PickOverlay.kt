@@ -39,6 +39,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import io.github.lcebot.ferryqr.R
@@ -128,7 +129,11 @@ fun PickOverlay(
             stringResource(R.string.pick_title),
             style = MaterialTheme.typography.titleMedium,
             color = Color.White,
-            modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 24.dp),
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(top = 24.dp, start = 24.dp, end = 24.dp),
         )
         FilledTonalIconButton(
             onClick = { haptics.tap(); onClose() },

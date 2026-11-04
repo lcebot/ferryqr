@@ -69,7 +69,13 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.material3.DropdownMenuGroup
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenuPopup
+import androidx.compose.material3.MenuDefaults
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.layout.height
@@ -104,8 +110,17 @@ import kotlinx.coroutines.withContext
 private const val LARGE_TEXT = 800
 private const val LARGE_TEXT_DELAY_MS = 350L
 
-/** Below this width the toolbar drops the divider between its groups, so that it still fits. */
-private val DIVIDED_TOOLBAR_WIDTH = 336.dp
+/**
+ * The toolbar's fixed parts, from the floating toolbar's own tokens: its padding, one icon button,
+ * the divider with its spacing, and the gap before the FAB together with the FAB itself.
+ */
+private val TOOLBAR_PADDING = 16.dp
+private val TOOLBAR_BUTTON = 48.dp
+private val TOOLBAR_DIVIDER = 9.dp
+private val TOOLBAR_FAB = 64.dp
+
+/** Copy, save and favorite, which always stay in the toolbar. */
+private const val CODE_ACTIONS = 3
 
 /** Layout estimates used only to decide how many lines the text field can keep. */
 private val GAP = 12.dp
@@ -130,7 +145,6 @@ fun GeneratorScreen(onBack: () -> Unit) {
     val alipayInstalled = remember { Launch.isInstalled(context, Alipay.PACKAGE) }
     val wechatInstalled = remember { Launch.isInstalled(context, WeChat.PACKAGE) }
     val helperReady by WeChatHelper.ready.collectAsState()
-    val sendApps = alipayInstalled || wechatInstalled
 
     // The scanner probes on start, but the generator can be reached before that probe has answered.
     LaunchedEffect(Unit) { if (!WeChatHelper.ready.value) WeChatHelper.probe(context) }
@@ -204,7 +218,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
         topBar = {
             // The page never scrolls, so a collapsing app bar would only take space away from the code.
             TopAppBar(
-                title = { Text(stringResource(R.string.generate_title)) },
+                title = { Text(stringResource(R.string.generate_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigationIcon = {
                     IconButton(onClick = { haptics.tap(); onBack() }) {
                         Icon(painterResource(R.drawable.ic_arrow_back), stringResource(R.string.back))
@@ -234,6 +248,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
             val keyboard = with(density) { keyboardPx.coerceAtLeast(0).toDp() }
             val lineHeight = with(density) { MaterialTheme.typography.bodyLarge.lineHeight.toDp() }
             val roomBesideCode = maxHeight - keyboard - CHIPS_HEIGHT - TOOLBAR_HEIGHT - GAP * 3 - maxWidth
+            val toolbarRoom = maxWidth
             val fieldLines = (MAX_FIELD_LINES downTo 1).firstOrNull { lines ->
                 FIELD_ONE_LINE + lineHeight * (lines - 1) + SUPPORTING_HEIGHT <= roomBesideCode
             } ?: 1
@@ -283,6 +298,29 @@ fun GeneratorScreen(onBack: () -> Unit) {
 
                 // What is done with the code sits in one toolbar: actions on the code itself, then the
                 // apps that can open the text, with sharing as the main way out.
+                val apps = buildList {
+                    if (activity == null) return@buildList
+                    if (alipayInstalled) {
+                        add(SendApp(R.string.generate_send_alipay, Alipay.PACKAGE, looksEnabled = true) {
+                            haptics.tap()
+                            if (!Alipay.handoff(activity, text)) scope.launch { snackbar.showSnackbar(context.getString(R.string.no_app)) }
+                        })
+                    }
+                    if (wechatInstalled) {
+                        // Without the helper WeChat could only open its scanner on nothing, so the
+                        // button looks disabled but still explains why when tapped.
+                        add(SendApp(R.string.generate_send_wechat, WeChat.PACKAGE, looksEnabled = helperReady) {
+                            if (!helperReady) {
+                                haptics.reject()
+                                scope.launch { snackbar.showSnackbar(context.getString(R.string.wechat_needs_module)) }
+                            } else {
+                                haptics.tap()
+                                if (!WeChat.openScanner(activity, text)) scope.launch { snackbar.showSnackbar(context.getString(R.string.no_app)) }
+                            }
+                        })
+                    }
+                }
+                val placement = sendPlacement(apps.size, toolbarRoom)
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                     HorizontalFloatingToolbar(
                         expanded = true,
@@ -316,36 +354,89 @@ fun GeneratorScreen(onBack: () -> Unit) {
                         Labeled(R.string.favorite) {
                             FavoriteToggle(text, type.format.name, enabled = code != null)
                         }
-                        if (sendApps && activity != null) {
-                            if (maxWidth >= DIVIDED_TOOLBAR_WIDTH) {
-                                VerticalDivider(
-                                    Modifier
-                                        .align(Alignment.CenterVertically)
-                                        .padding(horizontal = 4.dp)
-                                        .height(24.dp),
-                                )
-                            }
-                            if (alipayInstalled) {
-                                AppButton(R.string.generate_send_alipay, Alipay.PACKAGE, text.isNotEmpty(), looksEnabled = true) {
-                                    haptics.tap()
-                                    if (!Alipay.handoff(activity, text)) scope.launch { snackbar.showSnackbar(context.getString(R.string.no_app)) }
+                        when (placement) {
+                            SendPlacement.NONE -> Unit
+                            SendPlacement.MENU -> SendMenu(apps, enabled = text.isNotEmpty())
+                            SendPlacement.INLINE, SendPlacement.DIVIDED -> {
+                                if (placement == SendPlacement.DIVIDED) {
+                                    VerticalDivider(
+                                        Modifier
+                                            .align(Alignment.CenterVertically)
+                                            .padding(horizontal = 4.dp)
+                                            .height(24.dp),
+                                    )
                                 }
-                            }
-                            if (wechatInstalled) {
-                                // Without the helper WeChat could only open its scanner on nothing, so the
-                                // button looks disabled but still explains why when tapped.
-                                AppButton(R.string.generate_send_wechat, WeChat.PACKAGE, text.isNotEmpty(), looksEnabled = helperReady) {
-                                    if (!helperReady) {
-                                        haptics.reject()
-                                        scope.launch { snackbar.showSnackbar(context.getString(R.string.wechat_needs_module)) }
-                                    } else {
-                                        haptics.tap()
-                                        if (!WeChat.openScanner(activity, text)) scope.launch { snackbar.showSnackbar(context.getString(R.string.no_app)) }
-                                    }
-                                }
+                                apps.forEach { app -> AppButton(app, enabled = text.isNotEmpty()) }
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+/** An app the text can be opened in. [looksEnabled] false draws it disabled while it still explains itself. */
+private class SendApp(
+    @StringRes val label: Int,
+    val app: String,
+    val looksEnabled: Boolean,
+    val onClick: () -> Unit,
+)
+
+private enum class SendPlacement { NONE, DIVIDED, INLINE, MENU }
+
+/**
+ * Where the apps go in a toolbar [room] wide: after a divider when everything fits, without it when
+ * only that saves enough, and otherwise behind an overflow button. The narrowest phone screen Android
+ * allows still holds the toolbar with the overflow button.
+ */
+private fun sendPlacement(apps: Int, room: Dp): SendPlacement {
+    fun width(buttons: Int, divider: Boolean) =
+        TOOLBAR_PADDING + TOOLBAR_BUTTON * buttons + (if (divider) TOOLBAR_DIVIDER else 0.dp) + TOOLBAR_FAB
+    return when {
+        apps == 0 -> SendPlacement.NONE
+        width(CODE_ACTIONS + apps, divider = true) <= room -> SendPlacement.DIVIDED
+        width(CODE_ACTIONS + apps, divider = false) <= room -> SendPlacement.INLINE
+        else -> SendPlacement.MENU
+    }
+}
+
+/** The apps behind one overflow button, for toolbars too narrow to show each of them. */
+@Composable
+private fun SendMenu(apps: List<SendApp>, enabled: Boolean) {
+    val haptics = rememberHaptics()
+    var open by remember { mutableStateOf(false) }
+    Box {
+        Labeled(R.string.entry_more) {
+            IconButton(
+                onClick = { haptics.tap(); open = true },
+                enabled = enabled,
+                shapes = IconButtonDefaults.shapes(),
+            ) {
+                Icon(painterResource(R.drawable.ic_more_vert), stringResource(R.string.entry_more))
+            }
+        }
+        DropdownMenuPopup(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuGroup(shapes = MenuDefaults.groupShape(0, 1)) {
+                apps.forEachIndexed { index, app ->
+                    val dim = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                    DropdownMenuItem(
+                        onClick = {
+                            open = false
+                            app.onClick()
+                        },
+                        text = { Text(stringResource(app.label)) },
+                        shape = menuItemShape(index, apps.size),
+                        leadingIcon = {
+                            AppIcon(
+                                app.app,
+                                R.drawable.ic_open_in_new,
+                                Modifier.size(MenuDefaults.LeadingIconSize).alpha(if (app.looksEnabled) 1f else 0.38f),
+                            )
+                        },
+                        colors = if (app.looksEnabled) MenuDefaults.itemColors() else MenuDefaults.itemColors(textColor = dim),
+                    )
                 }
             }
         }
@@ -393,26 +484,23 @@ private fun ShareButton(enabled: Boolean, onClick: () -> Unit) {
     }
 }
 
-/**
- * Hands the text to another app, shown by that app's own icon. [looksEnabled] false draws the
- * disabled look while the button still takes taps, so it can say why it does nothing.
- */
+/** Hands the text to another app, shown by that app's own icon. */
 @Composable
-private fun AppButton(@StringRes label: Int, app: String, enabled: Boolean, looksEnabled: Boolean, onClick: () -> Unit) {
+private fun AppButton(app: SendApp, enabled: Boolean) {
     val alpha by animateFloatAsState(
-        if (enabled && looksEnabled) 1f else 0.38f,
+        if (enabled && app.looksEnabled) 1f else 0.38f,
         MaterialTheme.motionScheme.defaultEffectsSpec(),
         label = "app-button",
     )
-    val description = stringResource(label)
-    Labeled(label) {
+    val description = stringResource(app.label)
+    Labeled(app.label) {
         IconButton(
-            onClick = onClick,
+            onClick = app.onClick,
             enabled = enabled,
             shapes = IconButtonDefaults.shapes(),
             modifier = Modifier.semantics { contentDescription = description },
         ) {
-            AppIcon(app, R.drawable.ic_open_in_new, Modifier.size(24.dp).alpha(alpha))
+            AppIcon(app.app, R.drawable.ic_open_in_new, Modifier.size(24.dp).alpha(alpha))
         }
     }
 }

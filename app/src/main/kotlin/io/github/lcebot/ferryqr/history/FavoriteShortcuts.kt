@@ -18,6 +18,10 @@ import io.github.lcebot.ferryqr.dispatch.Cards
 private const val ICON_SIZE = 216
 private const val GLYPH_SIZE = 96
 
+/** The label lengths the shortcut documentation recommends; longer ones are cut with an ellipsis. */
+private const val SHORT_LABEL = 10
+private const val LONG_LABEL = 25
+
 /** Colours used before Android 12, matching the app's static light colour scheme. */
 private const val FALLBACK_CONTAINER = 0xFFEADDFF.toInt()
 private const val FALLBACK_ON_CONTAINER = 0xFF21005D.toInt()
@@ -68,8 +72,8 @@ object FavoriteShortcuts {
             .setAction(ACTION_SHOW)
             .putExtra(EXTRA_TEXT, entry.text)
         return ShortcutInfoCompat.Builder(context, idOf(entry.text))
-            .setShortLabel(title)
-            .setLongLabel(title)
+            .setShortLabel(title.shortened(SHORT_LABEL))
+            .setLongLabel(title.shortened(LONG_LABEL))
             .setIcon(icon(context, kind.icon))
             .setIntent(intent)
             .setRank(rank)
@@ -94,4 +98,11 @@ object FavoriteShortcuts {
         }
         return IconCompat.createWithAdaptiveBitmap(bitmap)
     }
+}
+
+/** Cuts at whole code points, so an emoji or other surrogate pair is never split. */
+private fun String.shortened(max: Int): String {
+    val oneLine = replace(Regex("\\s+"), " ").trim()
+    if (oneLine.codePointCount(0, oneLine.length) <= max) return oneLine
+    return oneLine.substring(0, oneLine.offsetByCodePoints(0, max - 1)) + "\u2026"
 }

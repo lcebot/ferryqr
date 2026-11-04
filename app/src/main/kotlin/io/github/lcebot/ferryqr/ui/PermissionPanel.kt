@@ -4,6 +4,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -27,7 +29,7 @@ fun PermissionPanel(openSettings: Boolean, onRequest: () -> Unit, modifier: Modi
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
     ) {
         Column(
-            modifier = Modifier.padding(24.dp),
+            modifier = Modifier.verticalScroll(rememberScrollState()).padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
@@ -37,7 +39,11 @@ fun PermissionPanel(openSettings: Boolean, onRequest: () -> Unit, modifier: Modi
                 tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(40.dp),
             )
-            Text(stringResource(R.string.camera_permission_title), style = MaterialTheme.typography.titleLarge)
+            Text(
+                stringResource(R.string.camera_permission_title),
+                style = MaterialTheme.typography.titleLarge,
+                textAlign = TextAlign.Center,
+            )
             Text(
                 stringResource(R.string.camera_permission_body),
                 style = MaterialTheme.typography.bodyMedium,
