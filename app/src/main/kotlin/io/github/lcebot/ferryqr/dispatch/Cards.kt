@@ -56,8 +56,9 @@ data class CardAction(
 )
 
 /**
- * What the result sheet shows. The first action is the primary one. [image] shows a code that was
- * located but could not be read, since there is no content to show instead.
+ * What the result sheet shows. The first action is the primary one. [image] is the code itself: a
+ * picture of one that could not be read, or one drawn again from its content to be scanned from the
+ * screen. [format] is empty for a code that was not read, which leaves nothing to keep in history.
  */
 data class ResultCard(
     val raw: String,
@@ -68,6 +69,7 @@ data class ResultCard(
     val notes: List<Int>,
     val actions: List<CardAction>,
     val image: Bitmap? = null,
+    val format: String = "",
 )
 
 data class Kind(@param:StringRes val label: Int, @param:DrawableRes val icon: Int)
@@ -122,7 +124,20 @@ object Cards {
 
     private val IP_LITERAL = Regex("^(\\d{1,3}\\.){3}\\d{1,3}$|^\\[.*]$")
 
-    fun build(activity: Activity, payload: Payload, format: String, origin: Origin): ResultCard = when (payload) {
+    /** A short name for content in lists and shortcuts, or null when only its kind describes it. */
+    fun titleOf(payload: Payload): String? = when (payload) {
+        is WebPayload -> payload.host
+        is WifiPayload -> payload.ssid
+        is ContactPayload -> payload.contact.name ?: payload.contact.organization
+        is EventPayload -> payload.event.title
+        is TextPayload, is SchemePayload -> payload.raw
+        is FidoPayload, is EsimPayload, is DppPayload, is MiniProgramPayload -> null
+    }
+
+    fun build(activity: Activity, payload: Payload, format: String, origin: Origin): ResultCard =
+        card(activity, payload, format, origin).copy(format = format)
+
+    private fun card(activity: Activity, payload: Payload, format: String, origin: Origin): ResultCard = when (payload) {
         is WebPayload -> web(activity, payload, origin)
         is SchemePayload -> ResultCard(
             raw = payload.raw,

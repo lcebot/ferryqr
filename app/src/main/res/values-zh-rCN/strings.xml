@@ -88,6 +88,9 @@
     <string name="back">返回</string>
     <string name="clear">清空</string>
     <string name="cancel">取消</string>
+    <string name="save">保存</string>
+    <string name="delete">删除</string>
+    <string name="undo">撤销</string>
     <string name="list_separator">、</string>
 
     <string name="action_history">扫描历史</string>
@@ -98,11 +101,32 @@
     <string name="history_today">今天</string>
     <string name="history_yesterday">昨天</string>
     <string name="history_clear">清空历史</string>
-    <string name="history_clear_title">清空全部历史？</string>
-    <string name="history_clear_body">所有历史记录都会被删除，无法恢复。</string>
+    <string name="history_clear_title">清空历史？</string>
+    <string name="history_clear_body">除收藏外，所有历史记录都会被删除，无法恢复。</string>
     <string name="history_cleared">已清空历史</string>
     <string name="history_empty_title">暂无历史记录</string>
     <string name="history_empty_body">扫描过的二维码将保存在本地。可随时清空。</string>
+    <string name="history_deleted">记录已删除</string>
+    <string name="entry_more">更多选项</string>
+
+    <string name="favorites_title">收藏</string>
+    <string name="favorite">收藏</string>
+    <string name="favorite_remove">取消收藏</string>
+    <string name="rename">重命名</string>
+    <string name="rename_title">重命名收藏</string>
+    <string name="rename_label">名称</string>
+    <plurals name="favorites_show_more">
+        <item quantity="other">展开其余 %1$d 条</item>
+    </plurals>
+    <string name="favorites_show_less">收起</string>
+    <string name="shortcut_add">添加到快捷方式</string>
+    <string name="shortcut_remove">从快捷方式中移除</string>
+    <string name="shortcut_full">最多 %1$d 个</string>
+    <string name="shortcut_added">已添加，长按 FerryQR 图标即可打开</string>
+    <string name="code_tap_enlarge">点击放大</string>
+    <string name="code_tap_shrink">点击缩小</string>
+    <string name="code_enlarge">放大</string>
+    <string name="code_shrink">缩小</string>
 
     <string name="action_generate">生成二维码</string>
     <string name="generate_title">生成二维码</string>

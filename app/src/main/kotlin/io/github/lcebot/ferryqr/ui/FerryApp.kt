@@ -37,10 +37,14 @@ enum class Screen { Scan, History, Generate }
 /** Scale the leaving page shrinks to while a back gesture is in progress. */
 private const val BACK_SCALE = 0.9f
 
-/** The camera only runs while the scan screen is shown, since the other screens leave composition. */
+/**
+ * The camera only runs while the scan screen is shown, since the other screens leave composition.
+ * [openFavorite] is a favorite's content from its app shortcut, shown in history without the
+ * camera starting first; [onFavoriteOpened] clears it once shown.
+ */
 @Composable
-fun FerryApp(vm: ScanViewModel) {
-    var saved by rememberSaveable { mutableStateOf(Screen.Scan) }
+fun FerryApp(vm: ScanViewModel, openFavorite: String? = null, onFavoriteOpened: () -> Unit = {}) {
+    var saved by rememberSaveable { mutableStateOf(if (openFavorite != null) Screen.History else Screen.Scan) }
     val state = remember { SeekableTransitionState(saved) }
     val transition = rememberTransition(state, label = "screen")
     val scope = rememberCoroutineScope()
@@ -48,6 +52,11 @@ fun FerryApp(vm: ScanViewModel) {
 
     fun open(screen: Screen) {
         scope.launch { state.animateTo(screen) }
+    }
+
+    // A shortcut used while the app is already open arrives here rather than at launch.
+    LaunchedEffect(openFavorite) {
+        if (openFavorite != null && state.currentState != Screen.History) state.animateTo(Screen.History)
     }
 
     // The back gesture scrubs the real transition, so the scan screen is revealed as the user swipes.
@@ -93,7 +102,11 @@ fun FerryApp(vm: ScanViewModel) {
                 onOpenHistory = { open(Screen.History) },
                 onOpenGenerator = { open(Screen.Generate) },
             )
-            Screen.History -> HistoryScreen(onBack = { open(Screen.Scan) })
+            Screen.History -> HistoryScreen(
+                onBack = { open(Screen.Scan) },
+                openText = openFavorite,
+                onOpened = onFavoriteOpened,
+            )
             Screen.Generate -> GeneratorScreen(onBack = { open(Screen.Scan) })
         }
     }

@@ -91,6 +91,9 @@
     <string name="back">Back</string>
     <string name="clear">Clear</string>
     <string name="cancel">Cancel</string>
+    <string name="save">Save</string>
+    <string name="delete">Delete</string>
+    <string name="undo">Undo</string>
     <string name="list_separator">", "</string>
 
     <string name="action_history">Scan history</string>
@@ -102,11 +105,33 @@
     <string name="history_today">Today</string>
     <string name="history_yesterday">Yesterday</string>
     <string name="history_clear">Clear history</string>
-    <string name="history_clear_title">Clear all history?</string>
-    <string name="history_clear_body">All history will be deleted. This cannot be undone.</string>
+    <string name="history_clear_title">Clear history?</string>
+    <string name="history_clear_body">All history except favorites will be deleted. This cannot be undone.</string>
     <string name="history_cleared">History cleared</string>
     <string name="history_empty_title">No history yet</string>
     <string name="history_empty_body">Scanned codes are saved on this device only. You can clear them at any time.</string>
+    <string name="history_deleted">Entry deleted</string>
+    <string name="entry_more">More options</string>
+
+    <string name="favorites_title">Favorites</string>
+    <string name="favorite">Favorite</string>
+    <string name="favorite_remove">Remove from favorites</string>
+    <string name="rename">Rename</string>
+    <string name="rename_title">Rename favorite</string>
+    <string name="rename_label">Name</string>
+    <plurals name="favorites_show_more">
+        <item quantity="one">Show %1$d more</item>
+        <item quantity="other">Show %1$d more</item>
+    </plurals>
+    <string name="favorites_show_less">Show less</string>
+    <string name="shortcut_add">Add to app shortcuts</string>
+    <string name="shortcut_remove">Remove from app shortcuts</string>
+    <string name="shortcut_full">Up to %1$d shortcuts</string>
+    <string name="shortcut_added">Added. Long press the FerryQR icon to open it.</string>
+    <string name="code_tap_enlarge">Tap to enlarge</string>
+    <string name="code_tap_shrink">Tap to shrink</string>
+    <string name="code_enlarge">Enlarge</string>
+    <string name="code_shrink">Shrink</string>
 
     <string name="action_generate">Create code</string>
     <string name="generate_title">Create code</string>

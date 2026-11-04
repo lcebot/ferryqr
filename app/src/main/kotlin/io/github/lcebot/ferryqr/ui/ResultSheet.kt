@@ -2,16 +2,26 @@
 
 package io.github.lcebot.ferryqr.ui
 
+import android.graphics.Bitmap
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -31,7 +41,11 @@ import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -72,34 +86,21 @@ fun ResultCardContent(card: ResultCard, onAction: (CardAction) -> Unit, modifier
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Icon(painterResource(card.icon), contentDescription = null, tint = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.width(8.dp))
             Text(
                 stringResource(card.kind),
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.weight(1f),
             )
-        }
-        card.image?.let { bitmap ->
-            val image = remember(bitmap) { bitmap.asImageBitmap() }
-            Box(
-                modifier = Modifier
-                    .size(160.dp)
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(Color.White)
-                    .align(Alignment.CenterHorizontally),
-                contentAlignment = Alignment.Center,
-            ) {
-                Image(
-                    bitmap = image,
-                    contentDescription = null,
-                    contentScale = ContentScale.Fit,
-                    filterQuality = FilterQuality.Medium,
-                    modifier = Modifier.size(160.dp),
-                )
+            // Only read content can be kept; a picture of an unread code has nothing to store.
+            if (card.raw.isNotEmpty() && card.format.isNotEmpty()) {
+                FavoriteToggle(card.raw, card.format, Modifier.offset(x = 12.dp))
             }
         }
+        card.image?.let { bitmap -> CodeImage(bitmap, Modifier.align(Alignment.CenterHorizontally)) }
         SelectionContainer {
             Text(
                 card.headline,
@@ -166,4 +167,65 @@ private fun ActionIcon(action: CardAction) {
     val app = action.app
     if (app != null) AppIcon(app, action.icon, Modifier.size(ButtonDefaults.IconSize))
     else Icon(painterResource(action.icon), contentDescription = null, modifier = Modifier.size(ButtonDefaults.IconSize))
+}
+
+/** The code's height while small; a wide linear code grows sideways from it. */
+private val CODE_HEIGHT = 160.dp
+
+/**
+ * The code on white, since readers expect dark modules on light. A tap grows it to the sheet's full
+ * width so another phone can scan it from a distance, and a second tap returns it.
+ */
+@Composable
+private fun CodeImage(bitmap: Bitmap, modifier: Modifier = Modifier) {
+    val haptics = rememberHaptics()
+    val image = remember(bitmap) { bitmap.asImageBitmap() }
+    val aspect = bitmap.width.toFloat() / bitmap.height
+    var enlarged by rememberSaveable { mutableStateOf(false) }
+    BoxWithConstraints(modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+        val small = minOf(CODE_HEIGHT * maxOf(aspect, 1f), maxWidth)
+        val width by animateDpAsState(
+            targetValue = if (enlarged) maxWidth else small,
+            animationSpec = MaterialTheme.motionScheme.defaultSpatialSpec(),
+            label = "code-size",
+        )
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(width, width / aspect)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Color.White)
+                    .clickable(
+                        onClickLabel = stringResource(if (enlarged) R.string.code_shrink else R.string.code_enlarge),
+                    ) {
+                        haptics.tap()
+                        enlarged = !enlarged
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Image(
+                    bitmap = image,
+                    contentDescription = null,
+                    contentScale = ContentScale.Fit,
+                    filterQuality = FilterQuality.Medium,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+            val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+            AnimatedContent(
+                targetState = enlarged,
+                transitionSpec = { fadeIn(fade) togetherWith fadeOut(fade) },
+                label = "code-hint",
+            ) { big ->
+                Text(
+                    stringResource(if (big) R.string.code_tap_shrink else R.string.code_tap_enlarge),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
 }

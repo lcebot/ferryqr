@@ -55,11 +55,13 @@ The module only hooks Android camera APIs inside the WeChat process, leaves WeCh
 
 ## History
 
-The history button at the top right lists the codes you have scanned, grouped by day. Tap one to copy, open or share it again. The clear button at the top of the history page removes every entry.
+The history button at the top right lists the codes you have scanned, grouped by day. Tap one to copy, open or share it again. Swipe an entry either way to delete it, with an option to undo. The clear button at the top of the history page removes every entry except favorites.
+
+Codes you use often can be kept as favorites: tap the star on a result card or on the create page, or long press an entry in history. Favorites stay at the top of the history page, can be renamed, and fold away when there are more than 4. Opening one draws the code again, and tapping it enlarges it for someone else to scan. From the long press menu, up to 4 favorites can also be added to the app shortcuts, which open when you long press the FerryQR icon.
 
 ## Creating codes
 
-The create button at the top right turns text into a code. When it opens, it fills in text from the clipboard and shows the code right away, and the code updates as you edit the text. Besides regular QR codes you can choose Aztec, Data Matrix or PDF417. If the text is too long for the chosen type, a message below the text field says so. You can copy the code to the clipboard or save it to Pictures/FerryQR. The text can also be opened directly in Alipay, and with the LSPosed module in WeChat as well.
+The create button at the top right turns text into a code. When it opens, it fills in text from the clipboard and shows the code right away, and the code updates as you edit the text. Besides regular QR codes you can choose Aztec, Data Matrix or PDF417. If the text is too long for the chosen type, a message below the text field says so. You can copy the code to the clipboard, save it to Pictures/FerryQR, or add it to favorites. The text can also be opened directly in Alipay, and with the LSPosed module in WeChat as well.
 
 ## Tips
 
