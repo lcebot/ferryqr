@@ -3,25 +3,31 @@ package io.github.lcebot.wxcode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
-/** Expected reports come from the reference implementation of libQBar's conversion. */
+/**
+ * The real payload and WeChat's text for it come from the same code, read by FerryQR and by
+ * WeChat's own scanner; the other cases come from the reference implementation of libQBar's codec.
+ */
 class WxTextTest {
 
     @Test
-    fun convertsARealPayload() {
+    fun matchesWeChatOnARealCode() {
         assertEquals(
-            "3Rl;w~BL'P3-.a\$qDM\$f-:io@2'8/L-X~&rl~9(cvmF",
+            "llXZYz_50LFb)l8ZZXy6zl947c70008&type=invite",
             WxText.forWeChat("%XPP0NGCPMUI8VH\$XP+-.Z1:+0\$U03*WR0CST:/5X40N J6 6"),
         )
     }
 
     @Test
     fun keepsLeadingZeros() {
-        assertEquals("00?s:Q", WxText.forWeChat("00AB:CD"))
+        assertEquals("0014&bw", WxText.forWeChat("00AB:CD"))
+        assertEquals("0", WxText.forWeChat("0"))
     }
 
     @Test
-    fun convertsSingleDigits() {
+    fun convertsShortPayloads() {
         assertEquals("z", WxText.forWeChat("Z"))
+        assertEquals("5E", WxText.forWeChat("A0"))
+        assertEquals("3l/JB;Iu:v", WxText.forWeChat("HELLO WORLD"))
     }
 
     @Test

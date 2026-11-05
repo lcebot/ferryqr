@@ -78,7 +78,9 @@ internal object OpenInApps {
                 charsetArg = 4,
                 types = mapOf(
                     "qr" to TypeMapping(19, "QR_CODE"),
-                    MINI_PROGRAM_TYPE to TypeMapping(22, "WX_CODE"),
+                    // WeChat's own decoder reports mini program codes as type 18; its handler takes
+                    // the code type, 22, from the name.
+                    MINI_PROGRAM_TYPE to TypeMapping(18, "WX_CODE"),
                 ),
             ),
         ),

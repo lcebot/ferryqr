@@ -198,8 +198,6 @@ object OpenInModule {
         fun attempt() {
             val intent = Intent(OpenInProtocol.ACTION_HANDOFF).also(content).putExtra(EXTRA_ID, id)
             send(app, pkg, intent) { result ->
-                // TEMPORARY, removed together with the hook package's TraceLog.
-                android.util.Log.i("FerryQR-trace", "handoff $id to $pkg answered $result")
                 when {
                     // The app has taken the content, which is the one moment FerryQR knows it arrived.
                     result == RESULT_ACCEPTED -> ferried(app, pkg)

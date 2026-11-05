@@ -67,7 +67,6 @@ internal object OpenInHooks {
     ) {
         if (!mainProcess) return
         val current = Installed(app, classLoader).also { installed = it }
-        if (app.pkg == OpenInApps.WECHAT) TraceLog.probeWeChat(xposed, classLoader)
         val handoff = try {
             when (val strategy = app.strategy) {
                 is Strategy.FinishWithResult -> FinishWithResult(xposed, app.pkg, strategy)
@@ -165,18 +164,7 @@ internal object OpenInHooks {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(c: Context, intent: Intent) {
                 if (intent.action != OpenInProtocol.ACTION_HANDOFF) return
-                val type = intent.getStringExtra(OpenInProtocol.EXTRA_TYPE)
-                val text = intent.getStringExtra(OpenInProtocol.EXTRA_TEXT)
-                TraceLog.openWindow()
-                TraceLog.log(
-                    "handoff received in ${current.app.pkg}: id=${intent.getLongExtra(OpenInProtocol.EXTRA_ID, 0L)}, " +
-                        "type=$type, text=${if (type == null) "${text?.length} chars" else TraceLog.describe(text)}, " +
-                        "image=${intent.getByteArrayExtra(OpenInProtocol.EXTRA_IMAGE)?.size} bytes, " +
-                        "cameraFeed=${intent.getBooleanExtra(OpenInProtocol.EXTRA_CAMERA_FEED, false)}",
-                )
-                val accepted = handoff.accept(intent)
-                TraceLog.log("handoff ${if (accepted) "accepted" else "declined"}")
-                resultCode = if (accepted) OpenInProtocol.RESULT_ACCEPTED else OpenInProtocol.RESULT_DECLINED
+                resultCode = if (handoff.accept(intent)) OpenInProtocol.RESULT_ACCEPTED else OpenInProtocol.RESULT_DECLINED
             }
         }
         if (current.retired) return
@@ -188,7 +176,6 @@ internal object OpenInHooks {
         }
         current.context = context
         current.receiver = receiver
-        TraceLog.log("receiver registered in ${current.app.pkg}")
         // Retired in between: newer code took over while this one registered, so it leaves at once.
         if (current.retired) {
             try {
@@ -335,7 +322,6 @@ private class ReplaceResult(
             armed = null
             // A picture shows the code as it is; text alone is drawn as a QR code.
             val picture = intent.getByteArrayExtra(OpenInProtocol.EXTRA_IMAGE)
-            TraceLog.log("through the camera: ${if (picture != null) "picture" else "text"}, replaces=$replaces")
             return FrameFeed.arm(if (picture != null) null else text, picture, id)
         }
         // A retry of the handoff already taken keeps its placeholder, so a frame read in between still matches.
@@ -346,29 +332,15 @@ private class ReplaceResult(
             // Upper case letters and digits fit the smallest QR version, which any decoder reads at once.
             val serial = (if (id != 0L) id else SystemClock.elapsedRealtimeNanos()).toULong().toString(36).uppercase()
             armed = Armed("FERRYQR $serial", text, text.toByteArray(Charsets.UTF_8), type, SystemClock.uptimeMillis() + ARMED_MS)
-            TraceLog.log("result armed: placeholder=\"FERRYQR $serial\", as ${type?.id} ${type?.name}")
         }
         val placeholder = armed?.placeholder ?: return false
         return FrameFeed.arm(placeholder, null, id)
     }
 
     private fun replace(chain: XposedInterface.Chain): Any? {
-        val typeName = chain.args.getOrNull(strategy.typeNameArg)
-        // Plain QR results, the most private, stay out of the log unless a handoff is under way.
-        if (typeName != "QR_CODE") {
-            TraceLog.openWindow()
-            TraceLog.log("decoded: " + chain.args.joinToString(", ") { TraceLog.describe(it) })
-            val built = chain.proceed()
-            chain.thisObject?.let { TraceLog.dumpLater("decoded $typeName", it) }
-            return built
-        }
         val a = armed ?: return chain.proceed()
-        if (chain.getArg(strategy.textArg) != a.placeholder) {
-            TraceLog.log("result while armed, not the placeholder: $typeName")
-            return chain.proceed()
-        }
+        if (chain.getArg(strategy.textArg) != a.placeholder) return chain.proceed()
         if (SystemClock.uptimeMillis() > a.until) {
-            TraceLog.log("placeholder read after the handoff expired")
             armed = null
             return chain.proceed()
         }
@@ -381,10 +353,7 @@ private class ReplaceResult(
             args[strategy.typeIdArg] = it.id
             args[strategy.typeNameArg] = it.name
         }
-        TraceLog.log("replaced: " + args.joinToString(", ") { TraceLog.describe(it) })
-        val built = chain.proceed(args)
-        chain.thisObject?.let { TraceLog.dumpLater("replaced", it) }
-        return built
+        return chain.proceed(args)
     }
 
     private fun classOf(name: String, classLoader: ClassLoader): Class<*> = when {

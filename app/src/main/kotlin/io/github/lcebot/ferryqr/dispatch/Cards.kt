@@ -19,6 +19,7 @@ import io.github.lcebot.ferryqr.content.WebPayload
 import io.github.lcebot.ferryqr.content.WifiPayload
 import io.github.lcebot.ferryqr.content.WifiSecurity
 import io.github.lcebot.ferryqr.generate.MiniCodeArt
+import io.github.lcebot.wxcode.WxText
 
 /** Where a code came from, which decides whether an app's own camera can still see it. */
 enum class Origin {
@@ -140,7 +141,17 @@ object Cards {
         is ContactPayload -> payload.contact.name ?: payload.contact.organization
         is EventPayload -> payload.event.title
         is TextPayload, is SchemePayload -> payload.raw
-        is FidoPayload, is EsimPayload, is DppPayload, is MiniProgramPayload -> null
+        is MiniProgramPayload -> WxText.forWeChat(payload.raw)
+        is FidoPayload, is EsimPayload, is DppPayload -> null
+    }
+
+    /**
+     * The content as a list shows it: the text itself, except for a mini program code, whose
+     * payload means something only as WeChat reads it. The content itself stays as it was scanned.
+     */
+    fun shownText(payload: Payload): String = when (payload) {
+        is MiniProgramPayload -> WxText.forWeChat(payload.raw)
+        else -> payload.raw
     }
 
     fun build(activity: Activity, payload: Payload, format: String, origin: Origin): ResultCard =

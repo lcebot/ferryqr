@@ -466,7 +466,9 @@ private fun EntryRow(entry: HistoryEntry, shape: Shape, actions: EntryActions, m
 @Composable
 private fun EntryItem(entry: HistoryEntry, shape: Shape, onClick: () -> Unit, onLongClick: () -> Unit) {
     val context = LocalContext.current
-    val kind = remember(entry.text, entry.format) { Cards.kindOf(Classifier.classify(entry.text, entry.format)) }
+    val payload = remember(entry.text, entry.format) { Classifier.classify(entry.text, entry.format) }
+    val kind = remember(payload) { Cards.kindOf(payload) }
+    val shown = remember(payload) { Cards.shownText(payload) }
     val time = remember(entry.time) { DateFormat.getTimeFormat(context).format(Date(entry.time)) }
     // Favorites take the tertiary colour, so they stay apart from the history at a glance.
     val container by animateColorAsState(
@@ -511,7 +513,7 @@ private fun EntryItem(entry: HistoryEntry, shape: Shape, onClick: () -> Unit, on
             contentColor = MaterialTheme.colorScheme.onSurface,
         ),
     ) {
-        Text(entry.label ?: entry.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(entry.label ?: shown, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
 }
 
