@@ -178,5 +178,5 @@
     <string name="type_data_matrix" translatable="false">Data Matrix</string>
     <string name="type_pdf417" translatable="false">PDF417</string>
 
-    <string name="xposed_description">A privacy-first QR scanner for Android that ferries each code to the right app. Where most scanners stop at the text of a code, FerryQR hands the code to the app that can act on it: payment codes to the payment app, bike codes to the bike app, mini program codes to WeChat.</string>
+    <string name="xposed_description">A privacy-first QR scanner for Android that ferries each code to the right app.</string>
 </resources>

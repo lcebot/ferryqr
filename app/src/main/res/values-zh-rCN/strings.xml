@@ -170,5 +170,5 @@
     <string name="generate_clip_label">二维码</string>
     <string name="type_qr">QR 码</string>
 
-    <string name="xposed_description">注重隐私的 Android 扫码应用，将每个二维码送到对应的应用。多数扫码应用扫完只给出一串内容，FerryQR 则将二维码直接交给能处理它的应用：收款码进支付应用，单车码进出行应用，小程序码进微信。</string>
+    <string name="xposed_description">注重隐私的 Android 扫码应用，将二维码送到对应的应用中。</string>
 </resources>
