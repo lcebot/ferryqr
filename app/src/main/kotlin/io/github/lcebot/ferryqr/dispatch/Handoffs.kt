@@ -7,6 +7,7 @@ import android.graphics.Bitmap
 import android.net.Uri
 import io.github.lcebot.ferryqr.openin.OpenInApps
 import io.github.lcebot.ferryqr.openin.OpenInHelper
+import io.github.lcebot.wxcode.WxText
 
 private const val NEW_TASK_CLEAR_TOP = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
 
@@ -39,14 +40,16 @@ internal object WeChat {
     const val PACKAGE = OpenInApps.WECHAT
     /**
      * Profile, group and official account codes, the international profile host, mini program codes
-     * that carry a plain link, website and web client login codes, and WeChat Pay merchant codes.
+     * that carry a plain link, website and web client login codes, WeChat Pay payment and merchant
+     * codes, and face to face red packet codes. The prefixes follow what WeChat's own scanner
+     * dispatches on, plus the hosts it resolves through its servers.
      */
     private val CODES = Regex(
         "^(?:https?://weixin\\.qq\\.com/.*|https?://u\\.wechat\\.com/.*|weixin://.*|wxp\\s*:.*" +
-            "|https?://mp\\.weixin\\.qq\\.com/a/.*" +
+            "|wxhb://.*|wedropf2fhb://.*|https?://mp\\.weixin\\.qq\\.com/a/.*" +
             "|https://open\\.weixin\\.qq\\.com/connect/confirm.*|https://login\\.weixin\\.qq\\.com/l/.*" +
             "|https://wx\\.tenpay\\.com/f2f.*|https://payapp\\.weixin\\.qq\\.com/.*" +
-            "|https://payapp\\.wechatpay\\.cn/sjt/qr/.*|https://wxpay\\.wxutil\\.com/mch/pay/.*)$",
+            "|https://payapp\\.wechatpay\\.cn/(?:sjt/)?qr/.*|https://wxpay\\.wxutil\\.com/mch/pay/.*)$",
         setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
     )
 
@@ -56,10 +59,17 @@ internal object WeChat {
         launchScanner(activity).also { if (it) OpenInHelper.handoff(activity, PACKAGE, text) }
 
     /**
-     * For a mini program code: [image] is its region, or the code drawn again from what FerryQR
-     * read. WeChat's scanner reads it itself, since the text WeChat's own decoder makes of such a
-     * code is not known, so it cannot be returned as a result.
+     * For a mini program code that was read: the helper returns [payload] as WeChat's own decoder
+     * reports it, so WeChat opens the mini program as after a scan of its own. [picture] is the code
+     * drawn again, which the scanner is shown instead when the camera feed is chosen or the result
+     * cannot be replaced.
      */
+    fun openMiniProgram(activity: Activity, payload: String, picture: Bitmap): Boolean =
+        launchScanner(activity).also {
+            if (it) OpenInHelper.handoff(activity, PACKAGE, WxText.forWeChat(payload), OpenInApps.MINI_PROGRAM_TYPE, picture)
+        }
+
+    /** For a located code that FerryQR cannot read: [image] is its region, for the scanner to read. */
     fun openScanner(activity: Activity, image: Bitmap): Boolean =
         launchScanner(activity).also { if (it) OpenInHelper.handoff(activity, PACKAGE, image) }
 

@@ -3,7 +3,7 @@ package io.github.lcebot.wxcode
 import java.nio.ByteBuffer
 import java.nio.charset.CharacterCodingException
 
-private const val ALPHANUMERIC = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:"
+internal const val ALPHANUMERIC = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:"
 
 private const val MODE_NUMERIC = 0b0001
 private const val MODE_ALPHANUMERIC = 0b0010

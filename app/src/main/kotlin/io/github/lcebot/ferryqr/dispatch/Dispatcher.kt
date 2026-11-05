@@ -33,7 +33,7 @@ object Dispatcher {
         is DppPayload -> Launch.dpp(activity, payload.raw)
         // Only the helper lets WeChat take the code; without it the card explains what to do.
         is MiniProgramPayload -> Targets.WECHAT.ready &&
-            MiniCodeArt.draw(payload.raw)?.let { WeChat.openScanner(activity, it) } == true
+            MiniCodeArt.draw(payload.raw)?.let { WeChat.openMiniProgram(activity, payload.raw, it) } == true
         else -> false
     }
 

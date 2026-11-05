@@ -304,7 +304,6 @@ private class ReplaceResult(
     init {
         // The camera carries every picture and every placeholder, so without it nothing reaches the app.
         CameraHooks.install(xposed)
-        ResultLog.attach(xposed)
         replaces = try {
             val type = Class.forName(strategy.className, false, classLoader)
             val ctor = type.getDeclaredConstructor(*strategy.params.map { classOf(it, classLoader) }.toTypedArray())
@@ -339,8 +338,6 @@ private class ReplaceResult(
     }
 
     private fun replace(chain: XposedInterface.Chain): Any? {
-        // Plain QR results, the most private, stay out of the log.
-        if (chain.args.getOrNull(strategy.typeNameArg) != "QR_CODE") ResultLog.log("decoded", chain.args)
         val a = armed ?: return chain.proceed()
         if (chain.getArg(strategy.textArg) != a.placeholder) return chain.proceed()
         if (SystemClock.uptimeMillis() > a.until) {
@@ -356,7 +353,6 @@ private class ReplaceResult(
             args[strategy.typeIdArg] = it.id
             args[strategy.typeNameArg] = it.name
         }
-        ResultLog.log("replaced", args.asList())
         return chain.proceed(args)
     }
 

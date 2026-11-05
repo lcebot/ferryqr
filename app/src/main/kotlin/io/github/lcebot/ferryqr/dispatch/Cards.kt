@@ -175,8 +175,8 @@ object Cards {
 
     /**
      * A mini program code that was read. Its content means nothing outside WeChat, so the card
-     * shows the code drawn again from it. With the helper, WeChat's scanner is shown that drawing
-     * and opens the mini program; without it, the user scans the code again in WeChat.
+     * shows the code drawn again from it. With the helper, WeChat opens the mini program from what
+     * was read, as after a scan of its own; without it, the user scans the code again in WeChat.
      */
     private fun miniProgramCode(activity: Activity, payload: MiniProgramPayload, origin: Origin): ResultCard {
         val image = MiniCodeArt.draw(payload.raw)
@@ -184,7 +184,7 @@ object Cards {
         val installed = wechat.installed(activity)
         val actions = buildList {
             if (image != null) {
-                targetAction(activity, wechat, origin) { WeChat.openScanner(it, image) }?.let { add(it) }
+                targetAction(activity, wechat, origin) { WeChat.openMiniProgram(it, payload.raw, image) }?.let { add(it) }
             }
             add(copy(payload.raw))
         }
