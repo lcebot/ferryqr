@@ -5,19 +5,14 @@ package io.github.lcebot.ferryqr.ui
 import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Bitmap
-import android.os.Build
 import androidx.activity.compose.LocalActivity
-import androidx.annotation.StringRes
 import androidx.compose.foundation.Image
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -50,6 +45,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -89,18 +85,14 @@ import androidx.compose.material3.DropdownMenuGroup
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.DropdownMenuPopup
 import androidx.compose.material3.MenuDefaults
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.material3.FloatingToolbarDefaults
-import androidx.compose.material3.HorizontalFloatingToolbar
 import androidx.compose.material3.IconButtonDefaults
-import androidx.compose.material3.LocalContentColor
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import io.github.lcebot.ferryqr.R
+import io.github.lcebot.ferryqr.dispatch.Target
 import io.github.lcebot.ferryqr.dispatch.Targets
-import io.github.lcebot.ferryqr.generate.CodeExport
 import io.github.lcebot.ferryqr.generate.CodeGenerator
 import io.github.lcebot.ferryqr.generate.CodeType
 import io.github.lcebot.ferryqr.generate.Generated
@@ -130,7 +122,8 @@ private const val CODE_ACTIONS = 3
 /** Layout estimates used only to decide how many lines the text field can keep. */
 private val GAP = 12.dp
 private val CHIPS_HEIGHT = 48.dp
-private val TOOLBAR_HEIGHT = FloatingToolbarDefaults.ContainerSize
+/** A floating toolbar with a FAB is laid out as tall as the largest FAB it allows, not its own 64dp. */
+private val TOOLBAR_HEIGHT = 80.dp
 private val FIELD_ONE_LINE = 64.dp
 private val SUPPORTING_HEIGHT = 24.dp
 private const val MAX_FIELD_LINES = 4
@@ -197,28 +190,6 @@ fun GeneratorScreen(onBack: () -> Unit) {
         null
     }
 
-    fun export(action: (Context, Bitmap) -> Boolean, @StringRes done: Int, @StringRes failed: Int, quietOnSuccess: Boolean) {
-        val bitmap = code ?: return
-        scope.launch {
-            val ok = withContext(Dispatchers.IO) { action(context, bitmap) }
-            if (ok) haptics.confirm() else haptics.reject()
-            if (!ok || !quietOnSuccess) snackbar.showSnackbar(context.getString(if (ok) done else failed))
-        }
-    }
-
-    fun share() {
-        val bitmap = code ?: return
-        scope.launch {
-            val chooser = withContext(Dispatchers.IO) { CodeExport.share(context, bitmap) }
-            if (chooser != null) {
-                haptics.tap()
-                context.startActivity(chooser)
-            } else {
-                haptics.reject()
-                snackbar.showSnackbar(context.getString(R.string.code_share_failed))
-            }
-        }
-    }
 
     Scaffold(
         // The scaffold lifts the snackbar only above the system bars, and the keyboard would cover it.
@@ -291,24 +262,9 @@ fun GeneratorScreen(onBack: () -> Unit) {
                     }
                 }
 
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .animateContentSize(MaterialTheme.motionScheme.defaultSpatialSpec()),
-                    label = { Text(stringResource(R.string.generate_input)) },
-                    placeholder = { Text(stringResource(R.string.generate_placeholder)) },
-                    isError = error != null,
-                    supportingText = { Text(error.orEmpty()) },
-                    trailingIcon = trailingIcon,
-                    minLines = fieldLines,
-                    maxLines = fieldLines,
-                )
-
-                // What is done with the code sits in one toolbar: actions on the code itself, then the
-                // apps that can open the text, with sharing as the main way out. The apps are the ones
-                // result cards offer for the same content.
+                // What is done with the code sits in one toolbar under it: actions on the code itself,
+                // then the apps that can open the text, with sharing as the main way out. The apps are
+                // the ones result cards offer for the same content.
                 val apps = candidates.associateWith { target ->
                     val name = context.getString(target.name)
                     // Without the helper the app could only open its scanner on nothing, so the
@@ -328,89 +284,65 @@ fun GeneratorScreen(onBack: () -> Unit) {
                         }
                     }
                 }
-                val offered = remember(text, candidates) { Targets.forText(text).filter { it in candidates }.toSet() }
-                val placement = sendPlacement(offered.size, toolbarRoom)
-                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    HorizontalFloatingToolbar(
-                        expanded = true,
-                        floatingActionButton = { ShareButton(enabled = code != null, onClick = ::share) },
-                    ) {
-                        Labeled(R.string.code_copy) {
-                            IconButton(
-                                onClick = {
-                                    // Android 13 and later preview clipboard contents themselves.
-                                    export(CodeExport::copy, R.string.code_copied, R.string.code_copy_failed,
-                                        quietOnSuccess = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
-                                },
-                                enabled = code != null,
-                                shapes = IconButtonDefaults.shapes(),
-                            ) {
-                                Icon(painterResource(R.drawable.ic_content_copy), stringResource(R.string.code_copy))
-                            }
-                        }
-                        Labeled(R.string.code_save) {
-                            IconButton(
-                                onClick = {
-                                    export(CodeExport::save, R.string.code_saved, R.string.code_save_failed, quietOnSuccess = false)
-                                },
-                                enabled = code != null,
-                                shapes = IconButtonDefaults.shapes(),
-                            ) {
-                                Icon(painterResource(R.drawable.ic_download), stringResource(R.string.code_save))
-                            }
-                        }
-                        // Kept codes are shown again from history, drawn the same way as here. The toggle
-                        // takes the toolbar's own content colour, like copy and save beside it.
+                val offered = remember(text, candidates) { Targets.forText(text).filter { it in candidates } }
+                val owner = remember(text, candidates) { Targets.claimant(text)?.takeIf { it in candidates } }
+                val layout = sendLayout(offered, owner, toolbarRoom)
+                CodeToolbar(
+                    code = code,
+                    onMessage = { message -> scope.launch { snackbar.showSnackbar(context.getString(message)) } },
+                    favorite = {
+                        // Kept codes are shown again from history, drawn the same way as here.
                         Labeled(R.string.favorite) {
-                            FavoriteToggle(
-                                text,
-                                type.format.name,
-                                enabled = code != null,
-                                colors = IconButtonDefaults.iconToggleButtonColors(
-                                    checkedContainerColor = Color.Transparent,
-                                    checkedContentColor = LocalContentColor.current,
-                                ),
-                            )
+                            FavoriteToggle(text, type.format.name, enabled = code != null)
                         }
-                        AnimatedVisibility(
-                            visible = placement != SendPlacement.NONE,
-                            enter = fadeIn(appFade) + expandHorizontally(appResize),
-                            exit = fadeOut(appFade) + shrinkHorizontally(appResize),
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Spacer(Modifier.width(GROUP_GAP))
-                                AppGroup {
-                                    // Crossing the width at which the apps no longer fit folds them into
-                                    // the overflow button, and the pill resizes between the two.
-                                    AnimatedContent(
-                                        targetState = placement == SendPlacement.MENU,
-                                        transitionSpec = {
-                                            fadeIn(appFade) togetherWith fadeOut(appFade) using
-                                                SizeTransform(clip = false) { _, _ -> appResize }
-                                        },
-                                        label = "app-placement",
-                                    ) { inMenu ->
-                                        if (inMenu) {
-                                            SendMenu(candidates.filter { it in offered }.map(apps::getValue), enabled = text.isNotEmpty())
-                                        } else {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                for (target in candidates) {
-                                                    AnimatedVisibility(
-                                                        visible = target in offered,
-                                                        enter = fadeIn(appFade) + expandHorizontally(appResize),
-                                                        exit = fadeOut(appFade) + shrinkHorizontally(appResize),
-                                                    ) {
-                                                        AppButton(apps.getValue(target), enabled = text.isNotEmpty())
-                                                    }
-                                                }
-                                            }
-                                        }
+                    },
+                ) {
+                    AnimatedVisibility(
+                        visible = offered.isNotEmpty(),
+                        enter = fadeIn(appFade) + expandHorizontally(appResize),
+                        exit = fadeOut(appFade) + shrinkHorizontally(appResize),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Spacer(Modifier.width(GROUP_GAP))
+                            // Folding apps away or bringing them back resizes the pill a button at a
+                            // time, the same way as when an app appears for the text.
+                            AppGroup {
+                                for (target in candidates) {
+                                    AnimatedVisibility(
+                                        visible = target in layout.inline,
+                                        enter = fadeIn(appFade) + expandHorizontally(appResize),
+                                        exit = fadeOut(appFade) + shrinkHorizontally(appResize),
+                                    ) {
+                                        AppButton(apps.getValue(target), enabled = text.isNotEmpty())
                                     }
+                                }
+                                AnimatedVisibility(
+                                    visible = layout.folded.isNotEmpty(),
+                                    enter = fadeIn(appFade) + expandHorizontally(appResize),
+                                    exit = fadeOut(appFade) + shrinkHorizontally(appResize),
+                                ) {
+                                    SendMenu(layout.folded.map(apps::getValue), enabled = text.isNotEmpty())
                                 }
                             }
                         }
                     }
                 }
+
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .animateContentSize(MaterialTheme.motionScheme.defaultSpatialSpec()),
+                    label = { Text(stringResource(R.string.generate_input)) },
+                    placeholder = { Text(stringResource(R.string.generate_placeholder)) },
+                    isError = error != null,
+                    supportingText = { Text(error.orEmpty()) },
+                    trailingIcon = trailingIcon,
+                    minLines = fieldLines,
+                    maxLines = fieldLines,
+                )
+
             }
         }
     }
@@ -424,31 +356,24 @@ private class SendApp(
     val onClick: () -> Unit,
 )
 
-private enum class SendPlacement { NONE, INLINE, MENU }
+/** The apps shown in the toolbar, and those folded behind its overflow button. */
+private class SendLayout(val inline: Set<Target>, val folded: List<Target>)
 
 /**
- * Where the apps go in a toolbar [room] wide: each in the group when they fit, and otherwise behind
- * one overflow button in the same group. The narrowest phone screen Android allows still holds the
- * toolbar with the overflow button.
+ * Which apps fit a toolbar [room] wide. All of them when they fit; otherwise the app the text
+ * belongs to stays in view beside the overflow button, which the narrowest phone screen Android
+ * allows still holds, and the others fold away.
  */
-private fun sendPlacement(apps: Int, room: Dp): SendPlacement {
-    fun width(groupButtons: Int) =
-        TOOLBAR_PADDING + TOOLBAR_BUTTON * (CODE_ACTIONS + groupButtons) + GROUP_GAP + TOOLBAR_FAB
+private fun sendLayout(offered: List<Target>, owner: Target?, room: Dp): SendLayout {
+    fun fits(groupButtons: Int) =
+        TOOLBAR_PADDING + TOOLBAR_BUTTON * (CODE_ACTIONS + groupButtons) + GROUP_GAP + TOOLBAR_FAB <= room
     return when {
-        apps == 0 -> SendPlacement.NONE
-        width(apps) <= room -> SendPlacement.INLINE
-        else -> SendPlacement.MENU
+        fits(offered.size) -> SendLayout(offered.toSet(), emptyList())
+        owner != null && fits(2) -> SendLayout(setOf(owner), offered - owner)
+        else -> SendLayout(emptySet(), offered)
     }
 }
 
-/**
- * The colour of everything that hands the code to another app: the group of apps and the share FAB.
- * It marks what the actions do rather than how much they matter, so it is one neutral tone for
- * both, two steps from the toolbar's container, and the actions on the code itself stay on the
- * toolbar's own colour.
- */
-@Composable
-private fun handoffContainer(): Color = MaterialTheme.colorScheme.surfaceContainerHighest
 
 /** The apps share one pill, which sets them apart from the actions on the code without a divider. */
 @Composable
@@ -503,36 +428,6 @@ private fun SendMenu(apps: List<SendApp>, enabled: Boolean) {
     }
 }
 
-/**
- * Sharing is the toolbar's floating action button, in the same tone as the group of apps, since it
- * too hands the code to another app. A FAB has no disabled state of its own, so with no code yet it
- * takes the disabled colours and answers a tap only with a rejecting buzz.
- */
-@Composable
-private fun ShareButton(enabled: Boolean, onClick: () -> Unit) {
-    val haptics = rememberHaptics()
-    val defaults = FloatingToolbarDefaults.standardFloatingToolbarColors()
-    val effects = MaterialTheme.motionScheme.defaultEffectsSpec<Color>()
-    val container by animateColorAsState(
-        if (enabled) handoffContainer() else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
-        effects,
-        label = "share-container",
-    )
-    val content by animateColorAsState(
-        if (enabled) defaults.toolbarContentColor else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-        effects,
-        label = "share-content",
-    )
-    Labeled(R.string.code_share) {
-        FloatingToolbarDefaults.StandardFloatingActionButton(
-            onClick = { if (enabled) onClick() else haptics.reject() },
-            containerColor = container,
-            contentColor = content,
-        ) {
-            Icon(painterResource(R.drawable.ic_share), stringResource(R.string.code_share))
-        }
-    }
-}
 
 /** Hands the text to another app, shown by that app's own icon. */
 @Composable

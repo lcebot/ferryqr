@@ -4,6 +4,12 @@
         <item name="android:windowBackground">@android:color/black</item>
     </style>
 
+    <!-- Pages follow the light or dark theme, so the window behind them does too while they open. -->
+    <style name="Theme.FerryQR.Page" parent="android:Theme.DeviceDefault.DayNight">
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+    </style>
+
     <!-- A see-through window: only the sheet is visible over the app the image came from. -->
     <style name="Theme.FerryQR.Sheet" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowIsTranslucent">true</item>

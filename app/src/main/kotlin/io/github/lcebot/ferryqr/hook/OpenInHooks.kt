@@ -339,7 +339,8 @@ private class ReplaceResult(
     }
 
     private fun replace(chain: XposedInterface.Chain): Any? {
-        if (chain.args.getOrNull(strategy.typeNameArg) == "WX_CODE") ResultLog.log("decoded", chain.args)
+        // Plain QR results, the most private, stay out of the log.
+        if (chain.args.getOrNull(strategy.typeNameArg) != "QR_CODE") ResultLog.log("decoded", chain.args)
         val a = armed ?: return chain.proceed()
         if (chain.getArg(strategy.textArg) != a.placeholder) return chain.proceed()
         if (SystemClock.uptimeMillis() > a.until) {

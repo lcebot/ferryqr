@@ -48,13 +48,15 @@ enum class ActionResult {
 
 /**
  * [app] is the package the action hands off to; its own icon then replaces [icon]. [appName] is the
- * name formatted into [label], for the labels that name the app.
+ * name formatted into [label], for the labels that name the app. [opens] marks an action that opens
+ * the content elsewhere, as every app action does and the browser too, rather than acting on it.
  */
 data class CardAction(
     @param:StringRes val label: Int,
     @param:DrawableRes val icon: Int,
     val app: String? = null,
     @param:StringRes val appName: Int? = null,
+    val opens: Boolean = app != null,
     val run: (Activity) -> ActionResult,
 )
 
@@ -173,8 +175,8 @@ object Cards {
 
     /**
      * A mini program code that was read. Its content means nothing outside WeChat, so the card
-     * shows the code drawn again from it. With the helper, WeChat takes the content as a mini
-     * program code; without it, the user scans the code again in WeChat.
+     * shows the code drawn again from it. With the helper, WeChat's scanner is shown that drawing
+     * and opens the mini program; without it, the user scans the code again in WeChat.
      */
     private fun miniProgramCode(activity: Activity, payload: MiniProgramPayload, origin: Origin): ResultCard {
         val image = MiniCodeArt.draw(payload.raw)
@@ -182,7 +184,7 @@ object Cards {
         val installed = wechat.installed(activity)
         val actions = buildList {
             if (image != null) {
-                targetAction(activity, wechat, origin) { WeChat.openMiniProgram(it, payload.raw, image) }?.let { add(it) }
+                targetAction(activity, wechat, origin) { WeChat.openScanner(it, image) }?.let { add(it) }
             }
             add(copy(payload.raw))
         }
@@ -270,7 +272,7 @@ object Cards {
         val offered = Targets.forText(payload.url).mapNotNull { target ->
             targetAction(activity, target, origin) { target.open(it, payload.raw) }?.let { target to it }
         }
-        val browser = CardAction(R.string.open, R.drawable.ic_open_in_new) {
+        val browser = CardAction(R.string.open, R.drawable.ic_open_in_new, opens = true) {
             if (Launch.browser(it, payload.url)) ActionResult.Handoff else ActionResult.Unavailable
         }
         val actions = buildList {

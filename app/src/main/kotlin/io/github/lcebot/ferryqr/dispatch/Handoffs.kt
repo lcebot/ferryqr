@@ -56,16 +56,10 @@ internal object WeChat {
         launchScanner(activity).also { if (it) OpenInHelper.handoff(activity, PACKAGE, text) }
 
     /**
-     * For a mini program code that was read: the helper returns [text] as a mini program result.
-     * [picture] is the code drawn again, which the scanner is shown instead where the result cannot
-     * be replaced.
+     * For a mini program code: [image] is its region, or the code drawn again from what FerryQR
+     * read. WeChat's scanner reads it itself, since the text WeChat's own decoder makes of such a
+     * code is not known, so it cannot be returned as a result.
      */
-    fun openMiniProgram(activity: Activity, text: String, picture: Bitmap): Boolean =
-        launchScanner(activity).also {
-            if (it) OpenInHelper.handoff(activity, PACKAGE, text, OpenInApps.MINI_PROGRAM_TYPE, picture)
-        }
-
-    /** For a located code FerryQR cannot read, such as a mini program code: [image] is its region. */
     fun openScanner(activity: Activity, image: Bitmap): Boolean =
         launchScanner(activity).also { if (it) OpenInHelper.handoff(activity, PACKAGE, image) }
 
@@ -99,21 +93,28 @@ internal object Didi {
 }
 
 /**
- * Bike codes, and the shop and grocery codes that Meituan's scan screen hands on to their own
- * pages. Meituan matches these by exact prefix, case included. Rebate codes are left out, since
- * Meituan handles them inside the camera screen, which the helper closes.
+ * Meituan's own links, which its scan screen opens in its own pages: those on its domains, such as
+ * ordering links on rms.meituan.com, and the bike codes it recognises by exact prefix, case
+ * included. Meituan opens any other link in its pages too, but it is no more Meituan's than the
+ * browser's.
  */
 internal object Meituan {
     const val PACKAGE = OpenInApps.MEITUAN
     private const val SCANNER = "imeituan://www.meituan.com/scanQRCode"
-    private val CODES = Regex(
-        "^(?:http://(?:www\\.mobike\\.com/download/app\\.html\\?b=|t8\\.pub|t9\\.pub)" +
-            "|https://g\\.meituan\\.com/qrcode/transfer\\?" +
-            "|https://mall\\.meituan\\.com/maicai/jumpBD\\.html).*",
+    private val BIKES = Regex(
+        "^http://(?:www\\.mobike\\.com/download/app\\.html\\?b=|t8\\.pub|t9\\.pub).*",
         RegexOption.DOT_MATCHES_ALL,
     )
+    private val HOST = Regex("^https?://([^/?#:@]+)", RegexOption.IGNORE_CASE)
 
-    fun claims(text: String) = CODES.matches(text)
+    /** Meituan, Dianping, Maoyan and Mobike, among the domains Meituan's scan screen trusts. */
+    private val DOMAINS = listOf("meituan.com", "meituan.net", "dianping.com", "dpurl.cn", "maoyan.com", "mobike.com")
+
+    fun claims(text: String): Boolean {
+        if (BIKES.matches(text)) return true
+        val host = HOST.find(text)?.groupValues?.get(1)?.lowercase() ?: return false
+        return DOMAINS.any { host == it || host.endsWith(".$it") }
+    }
 
     fun openScanner(activity: Activity, text: String) = openScannerWithHelper(activity, PACKAGE, SCANNER, text)
 }

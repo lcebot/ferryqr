@@ -55,6 +55,8 @@
     <string name="app_alipay">支付宝</string>
     <string name="open_in_app">在%1$s中打开</string>
     <string name="scan_again_in_app">在%1$s中再次扫码</string>
+    <string name="scan_again_prompt">请再次扫描</string>
+    <string name="ferried_to_app">传递到%1$s</string>
     <string name="open_app_scanner">打开%1$s扫一扫</string>
     <string name="pick_from_album_in_app">请在%1$s扫一扫中从相册选择这张图片。</string>
     <string name="needs_module_in_app">在%1$s中打开需要在 LSPosed 中启用 FerryQR</string>
@@ -98,9 +100,10 @@
     <string name="action_settings">设置</string>
     <string name="settings_title">设置</string>
     <string name="settings_open_in_title">在其他应用中打开</string>
-    <string name="settings_open_in_intro">在 LSPosed 中启用 FerryQR 后，这些应用的码会直接在它们自己的扫一扫中打开。“直接返回”把内容作为扫码结果交给应用；“相机画面”把码显示给应用的相机。</string>
+    <string name="settings_open_in_intro">在 LSPosed 中为对应应用启用 FerryQR 后，其专用二维码也可以直接用 FerryQR 扫描。支付宝提供接收外部扫描结果的官方接口，无需模块，始终可用。</string>
+    <string name="settings_methods_intro">可以为每个应用分别选择二维码内容的传递方式：</string>
     <string name="app_wechat">微信</string>
-    <string name="app_didi">滴滴出行</string>
+    <string name="app_didi">滴滴</string>
     <string name="app_meituan">美团</string>
     <string name="app_not_installed">未安装</string>
     <string name="module_active">模块已生效</string>
@@ -108,12 +111,12 @@
     <string name="module_out_of_scope">未在 LSPosed 中加入 FerryQR 的作用域</string>
     <string name="module_enabled">已启用。如果%1$s已经在运行，请重启一次。</string>
     <string name="module_outdated">请重启%1$s以加载更新后的 FerryQR</string>
-    <string name="method_direct">直接返回</string>
+    <string name="method_direct">直接传递</string>
     <string name="method_camera">相机画面</string>
-    <string name="method_direct_desc">把内容作为扫码结果直接交给%1$s。速度最快，内容长短不限。</string>
-    <string name="method_camera_desc">把码显示给%1$s的相机，与真实扫码相同。速度较慢，但只依赖 Android 的相机接口，%1$s更新导致“直接返回”失效时仍然可用。</string>
-    <string name="method_didi_reason">仅支持相机画面。滴滴每次更新都会重新混淆扫码相关的代码，无法直接交出结果。</string>
-    <string name="method_meituan_reason">仅支持直接返回。美团的扫码界面能稳定接收返回的结果，无需经过相机。</string>
+    <string name="method_direct_desc">跳过应用自身的扫描，把二维码内容直接传递给应用。速度更快，请优先选择。</string>
+    <string name="method_camera_desc">把二维码显示给应用的相机重新扫描。只依赖 Android 的相机接口，可作为备选。</string>
+    <string name="method_didi_reason">仅支持相机画面。滴滴每次更新都会重新混淆扫码相关的代码，无法直接传递。</string>
+    <string name="method_meituan_reason">仅支持直接传递。美团的扫码界面能稳定接收直接传递的内容，无需经过相机。</string>
     <string name="history_title">历史记录</string>
     <plurals name="history_count">
         <item quantity="other">%1$d 条记录</item>
@@ -145,9 +148,6 @@
     <string name="shortcut_added">已添加，长按 FerryQR 图标即可打开</string>
     <string name="code_tap_enlarge">点击放大</string>
     <string name="code_tap_shrink">点击缩小</string>
-    <string name="code_tap_enlarge_more">点击放大，长按查看更多操作</string>
-    <string name="code_tap_shrink_more">点击缩小，长按查看更多操作</string>
-    <string name="code_more">更多操作</string>
     <string name="code_enlarge">放大</string>
     <string name="code_shrink">缩小</string>
 
@@ -170,5 +170,5 @@
     <string name="generate_clip_label">二维码</string>
     <string name="type_qr">QR 码</string>
 
-    <string name="xposed_description">FerryQR 是一个 Android 扫码应用。把摄像头对准二维码，FerryQR 会用对应的应用打开它。如果没有合适的应用，则直接显示二维码的内容，可以复制、搜索或分享。</string>
+    <string name="xposed_description">注重隐私的 Android 扫码应用，将每个二维码送到对应的应用。多数扫码应用扫完只给出一串内容，FerryQR 则将二维码直接交给能处理它的应用：收款码进支付应用，单车码进出行应用，小程序码进微信。</string>
 </resources>

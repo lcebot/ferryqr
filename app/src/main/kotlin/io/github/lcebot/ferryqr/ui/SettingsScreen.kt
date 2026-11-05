@@ -3,10 +3,6 @@
 package io.github.lcebot.ferryqr.ui
 
 import androidx.annotation.StringRes
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -131,7 +127,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             item(key = "header") {
-                SectionHeader(R.string.settings_open_in_title, R.string.settings_open_in_intro)
+                OpenInHeader()
             }
             itemsIndexed(apps, key = { _, app -> app.pkg }) { index, app ->
                 AppSettingItem(app, segmentShape(index, apps.size))
@@ -140,14 +136,42 @@ fun SettingsScreen(onBack: () -> Unit) {
     }
 }
 
+/**
+ * What the module does, then the two methods named once, so each app's buttons need no words of
+ * their own unless the app is limited to one method.
+ */
 @Composable
-private fun SectionHeader(@StringRes title: Int, @StringRes intro: Int) {
+private fun OpenInHeader() {
     Column(
         modifier = Modifier.padding(start = 4.dp, end = 4.dp, top = 8.dp, bottom = 14.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Text(stringResource(title), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-        Text(stringResource(intro), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            stringResource(R.string.settings_open_in_title),
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Text(
+            stringResource(R.string.settings_open_in_intro),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            stringResource(R.string.settings_methods_intro),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 12.dp),
+        )
+        Method.entries.forEach { method ->
+            Column(Modifier.padding(top = 8.dp)) {
+                Text(stringResource(method.label), style = MaterialTheme.typography.labelLarge)
+                Text(
+                    stringResource(method.description),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
     }
 }
 
@@ -160,8 +184,6 @@ private fun AppSettingItem(app: AppSetting, shape: Shape) {
     val state by OpenInHelper.state(app.pkg).collectAsStateWithLifecycle()
     var cameraFeed by remember(app.pkg) { mutableStateOf(OpenInHelper.cameraFeed(context, app.pkg)) }
     val method = app.fixed ?: if (cameraFeed) Method.Camera else Method.Direct
-    val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
-
     Surface(shape = shape, color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -204,9 +226,9 @@ private fun AppSettingItem(app: AppSetting, shape: Shape) {
                     OpenInHelper.setCameraFeed(context, app.pkg, cameraFeed)
                 },
             )
-            val description = if (app.reason != null) stringResource(app.reason) else stringResource(method.description, name)
-            AnimatedContent(targetState = description, transitionSpec = { fadeIn(fade) togetherWith fadeOut(fade) }) {
-                Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            // Only an app limited to one method says why; the methods themselves are described above.
+            if (app.reason != null) {
+                Text(stringResource(app.reason), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }

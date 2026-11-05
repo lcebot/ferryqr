@@ -10,6 +10,7 @@ import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.drawable.IconCompat
+import io.github.lcebot.ferryqr.HistoryActivity
 import io.github.lcebot.ferryqr.MainActivity
 import io.github.lcebot.ferryqr.content.Classifier
 import io.github.lcebot.ferryqr.dispatch.Cards
@@ -68,14 +69,19 @@ object FavoriteShortcuts {
         val payload = Classifier.classify(entry.text, entry.format)
         val kind = Cards.kindOf(payload)
         val title = entry.label ?: Cards.titleOf(payload) ?: context.getString(kind.label)
-        val intent = Intent(context, MainActivity::class.java)
+        // History opens above the scanner, so going back from it leads there as usual.
+        val scanner = Intent(context, MainActivity::class.java)
+            .setAction(Intent.ACTION_MAIN)
+            .addCategory(Intent.CATEGORY_LAUNCHER)
+            .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        val history = Intent(context, HistoryActivity::class.java)
             .setAction(ACTION_SHOW)
             .putExtra(EXTRA_TEXT, entry.text)
         return ShortcutInfoCompat.Builder(context, idOf(entry.text))
             .setShortLabel(title.shortened(SHORT_LABEL))
             .setLongLabel(title.shortened(LONG_LABEL))
             .setIcon(icon(context, kind.icon))
-            .setIntent(intent)
+            .setIntents(arrayOf(scanner, history))
             .setRank(rank)
             .build()
     }

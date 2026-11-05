@@ -7,12 +7,16 @@ import android.graphics.Bitmap
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.widget.Toast
 import androidx.core.content.edit
+import io.github.lcebot.ferryqr.R
+import io.github.lcebot.ferryqr.dispatch.Targets
 import io.github.lcebot.ferryqr.openin.OpenInProtocol.EXTRA_CAMERA_FEED
 import io.github.lcebot.ferryqr.openin.OpenInProtocol.EXTRA_ID
 import io.github.lcebot.ferryqr.openin.OpenInProtocol.EXTRA_IMAGE
 import io.github.lcebot.ferryqr.openin.OpenInProtocol.EXTRA_TEXT
 import io.github.lcebot.ferryqr.openin.OpenInProtocol.EXTRA_TYPE
+import io.github.lcebot.ferryqr.openin.OpenInProtocol.RESULT_ACCEPTED
 import io.github.lcebot.ferryqr.openin.OpenInProtocol.RESULT_UNANSWERED
 import io.github.libxposed.service.HookedTarget
 import io.github.libxposed.service.XposedService
@@ -194,12 +198,20 @@ object OpenInHelper {
         fun attempt() {
             val intent = Intent(OpenInProtocol.ACTION_HANDOFF).also(content).putExtra(EXTRA_ID, id)
             send(app, pkg, intent) { result ->
-                if (result == RESULT_UNANSWERED && SystemClock.uptimeMillis() < giveUpAt) {
-                    main.postDelayed({ attempt() }, HANDOFF_RETRY_MS)
+                when {
+                    // The app has taken the content, which is the one moment FerryQR knows it arrived.
+                    result == RESULT_ACCEPTED -> ferried(app, pkg)
+                    result == RESULT_UNANSWERED && SystemClock.uptimeMillis() < giveUpAt ->
+                        main.postDelayed({ attempt() }, HANDOFF_RETRY_MS)
                 }
             }
         }
         attempt()
+    }
+
+    private fun ferried(app: Context, pkg: String) {
+        val name = Targets.of(pkg)?.name ?: return
+        Toast.makeText(app, app.getString(R.string.ferried_to_app, app.getString(name)), Toast.LENGTH_SHORT).show()
     }
 
     private fun send(context: Context, pkg: String, intent: Intent, onResult: (Int) -> Unit) {

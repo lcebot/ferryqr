@@ -30,16 +30,30 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.FerryQR">
 
-        <!-- Compose makes room for the keyboard itself; without adjustResize the system also pans the window. -->
         <activity
             android:name=".MainActivity"
-            android:exported="true"
-            android:windowSoftInputMode="adjustResize">
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Pages above the scanner, each its own activity so the system animates going back. -->
+        <activity
+            android:name=".HistoryActivity"
+            android:exported="false"
+            android:theme="@style/Theme.FerryQR.Page" />
+        <!-- Compose makes room for the keyboard itself; without adjustResize the system also pans the window. -->
+        <activity
+            android:name=".GeneratorActivity"
+            android:exported="false"
+            android:theme="@style/Theme.FerryQR.Page"
+            android:windowSoftInputMode="adjustResize" />
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.FerryQR.Page" />
 
         <!-- Shared and opened images show their result in a sheet without starting the scanner. -->
         <activity

@@ -4,9 +4,10 @@ import android.util.Log
 import io.github.libxposed.api.XposedInterface
 
 /*
- * TEMPORARY, for comparing the results WeChat's QBar builds for mini program codes with what
- * FerryQR returns in their place. To remove: delete this file, and the ResultLog.attach call and
- * both ResultLog.log calls in OpenInHooks.kt.
+ * TEMPORARY, for learning what WeChat's QBar puts in its results for mini program codes, so they
+ * could be returned as results rather than shown as pictures, and for checking what FerryQR returns
+ * for other codes. To remove: delete this file, and the ResultLog.attach call and both
+ * ResultLog.log calls in OpenInHooks.kt.
  */
 
 /** Logs constructor arguments to the LSPosed log under the tag FerryQR-result. */

@@ -58,6 +58,8 @@
     <string name="app_alipay">Alipay</string>
     <string name="open_in_app">Open in %1$s</string>
     <string name="scan_again_in_app">Scan again in %1$s</string>
+    <string name="scan_again_prompt">Please scan again</string>
+    <string name="ferried_to_app">Ferried to %1$s</string>
     <string name="open_app_scanner">Open %1$s scanner</string>
     <string name="pick_from_album_in_app">Choose this image from the album in the %1$s scanner.</string>
     <string name="needs_module_in_app">Opening in %1$s needs FerryQR enabled in LSPosed</string>
@@ -101,7 +103,8 @@
     <string name="action_settings">Settings</string>
     <string name="settings_title">Settings</string>
     <string name="settings_open_in_title">Opening in other apps</string>
-    <string name="settings_open_in_intro">With FerryQR enabled in LSPosed, codes for these apps open right in their own scanners. Direct hands over the content as the scan result; Camera shows the code to the camera of the scanner.</string>
+    <string name="settings_open_in_intro">With FerryQR enabled for an app in LSPosed, the codes only that app opens properly can be scanned with FerryQR too. Alipay takes scan results from other apps through its official entry, so it always works, module or not.</string>
+    <string name="settings_methods_intro">Choose how codes are “ferried” to each app:</string>
     <string name="app_wechat">WeChat</string>
     <string name="app_didi">DiDi</string>
     <string name="app_meituan">Meituan</string>
@@ -113,10 +116,10 @@
     <string name="module_outdated">Restart %1$s to load the updated FerryQR</string>
     <string name="method_direct">Direct</string>
     <string name="method_camera">Camera</string>
-    <string name="method_direct_desc">Hands the content to %1$s as the scan result. Quickest, and works for content of any length.</string>
-    <string name="method_camera_desc">Shows the code to the camera of %1$s, just like a real scan. Slower, but relies on the Android camera alone, so it keeps working if a %1$s update breaks Direct.</string>
-    <string name="method_didi_reason">Camera only. DiDi renames its scanner code in every update, so the result cannot be handed over directly.</string>
-    <string name="method_meituan_reason">Direct only. The Meituan scan screen takes the result back reliably, so its camera is not needed.</string>
+    <string name="method_direct_desc">Ferries the content straight past the app’s own scanner. Faster, and the one to choose first.</string>
+    <string name="method_camera_desc">Shows the code to the app’s camera to scan again. It relies on the Android camera alone, which makes it the fallback.</string>
+    <string name="method_didi_reason">Camera only. DiDi renames its scanner code in every update, so content cannot be ferried to it directly.</string>
+    <string name="method_meituan_reason">Direct only. The Meituan scan screen reliably takes the content ferried to it, so its camera is not needed.</string>
     <string name="history_title">History</string>
     <plurals name="history_count">
         <item quantity="one">%1$d entry</item>
@@ -129,7 +132,7 @@
     <string name="history_clear_body">All history except favorites will be deleted. This cannot be undone.</string>
     <string name="history_cleared">History cleared</string>
     <string name="history_empty_title">No history yet</string>
-    <string name="history_empty_body">Scanned codes are saved on this device only. You can clear them at any time.</string>
+    <string name="history_empty_body">Scanned codes are saved on this device only and can be cleared at any time.</string>
     <string name="history_deleted">Entry deleted</string>
     <string name="entry_more">More options</string>
 
@@ -150,9 +153,6 @@
     <string name="shortcut_added">Added. Long press the FerryQR icon to open it.</string>
     <string name="code_tap_enlarge">Tap to enlarge</string>
     <string name="code_tap_shrink">Tap to shrink</string>
-    <string name="code_tap_enlarge_more">Tap to enlarge, hold for more</string>
-    <string name="code_tap_shrink_more">Tap to shrink, hold for more</string>
-    <string name="code_more">More options</string>
     <string name="code_enlarge">Enlarge</string>
     <string name="code_shrink">Shrink</string>
 
@@ -161,7 +161,7 @@
     <string name="generate_input">Content</string>
     <string name="generate_placeholder">Type or paste text</string>
     <string name="generate_clear">Clear text</string>
-    <string name="generate_empty">Your code appears here as you type</string>
+    <string name="generate_empty">The code appears here while typing</string>
     <string name="code_copy">Copy image</string>
     <string name="code_save">Save to Pictures</string>
     <string name="code_copied">Image copied</string>
@@ -178,5 +178,5 @@
     <string name="type_data_matrix" translatable="false">Data Matrix</string>
     <string name="type_pdf417" translatable="false">PDF417</string>
 
-    <string name="xposed_description">FerryQR is a QR code scanner for Android. Point the camera at a code and FerryQR opens it in the matching app. If no app fits, it shows the content of the code, which you can copy, search or share.</string>
+    <string name="xposed_description">A privacy-first QR scanner for Android that ferries each code to the right app. Where most scanners stop at the text of a code, FerryQR hands the code to the app that can act on it: payment codes to the payment app, bike codes to the bike app, mini program codes to WeChat.</string>
 </resources>
