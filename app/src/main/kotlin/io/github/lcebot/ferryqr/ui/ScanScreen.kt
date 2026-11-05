@@ -15,11 +15,6 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.text.TextAutoSize
@@ -58,9 +53,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.mutableIntStateOf
@@ -91,8 +83,6 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
     val phase by vm.phase.collectAsStateWithLifecycle()
     val sighting by vm.sighting.collectAsStateWithLifecycle()
     val session by vm.cameraSession.collectAsStateWithLifecycle()
-    val helperNotice by vm.helperNotice.collectAsStateWithLifecycle()
-    val helperReady by vm.helperReady.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var torch by rememberSaveable { mutableStateOf(false) }
@@ -113,7 +103,7 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
     LaunchedEffect(phase) {
         (phase as? Phase.MiniCodeFound)?.let { found ->
             haptics.found()
-            vm.show(Cards.miniProgram(activity, found.crop, helperReady, live = found.live))
+            vm.show(Cards.miniProgram(activity, found.crop, live = found.live))
             return@LaunchedEffect
         }
         val routing = phase as? Phase.Routing ?: return@LaunchedEffect
@@ -184,16 +174,6 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
                 verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {
                 if (camera.granted) {
-                    // The column grows upwards, so the notice appearing moves nothing below it.
-                    AnimatedVisibility(
-                        visible = helperNotice,
-                        enter = fadeIn(MaterialTheme.motionScheme.slowEffectsSpec()) +
-                            scaleIn(MaterialTheme.motionScheme.defaultSpatialSpec(), initialScale = 0.8f),
-                        exit = fadeOut(MaterialTheme.motionScheme.slowEffectsSpec()) +
-                            scaleOut(MaterialTheme.motionScheme.defaultSpatialSpec(), targetScale = 0.9f),
-                    ) {
-                        HelperNotice()
-                    }
                     // The hint gives way to the zoom pill, which is short, so both stay inside the edges.
                     Row(
                         modifier = Modifier.padding(horizontal = 24.dp),
@@ -380,26 +360,6 @@ private fun TorchButton(checked: Boolean, onCheckedChange: (Boolean) -> Unit, mo
             )
         }
         ControlLabel(stringResource(R.string.action_torch))
-    }
-}
-
-/** Tells the user that WeChat codes skip the second scan, because the module is enabled for WeChat. */
-@Composable
-private fun HelperNotice() {
-    Surface(
-        shape = MaterialTheme.shapes.extraLarge,
-        color = MaterialTheme.colorScheme.tertiaryContainer,
-        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
-        modifier = Modifier.padding(horizontal = 24.dp).semantics { liveRegion = LiveRegionMode.Polite },
-    ) {
-        Row(
-            modifier = Modifier.padding(start = 16.dp, end = 20.dp, top = 12.dp, bottom = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(painterResource(R.drawable.ic_qr_code_scanner), contentDescription = null, modifier = Modifier.size(20.dp))
-            Text(stringResource(R.string.helper_ready), style = MaterialTheme.typography.titleSmallEmphasized)
-        }
     }
 }
 

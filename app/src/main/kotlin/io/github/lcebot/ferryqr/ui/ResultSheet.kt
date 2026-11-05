@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class, ExperimentalLayoutApi::class)
+@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 
 package io.github.lcebot.ferryqr.ui
 
@@ -17,8 +17,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -57,6 +55,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -155,31 +155,21 @@ fun ResultCardContent(card: ResultCard, onAction: (CardAction) -> Unit, modifier
 }
 
 /**
- * The card's actions in two rows under its content. Round icon buttons for what can be done with
- * the content itself come first, each named in a tooltip and to screen readers. Under them, in
- * reading order so the main way out is met first, the primary action as a filled button, then
- * whatever else opens the content elsewhere, such as the browser or other apps, as tonal buttons
- * that keep their labels, since one app can be offered in more than one way. Both rows wrap when
- * the screen is narrow or the text large.
+ * The card's actions under its content. In reading order, so the main way out is met first, the
+ * primary action as a filled button, then whatever else opens the content elsewhere, such as the
+ * browser or other apps, as tonal buttons that keep their labels, since one app can be offered in
+ * more than one way. Round icon buttons for what can be done with the content itself, each named
+ * in a tooltip and to screen readers, end the same line when it holds them all; otherwise they
+ * take a line of their own above it.
  */
 @Composable
 private fun CardActions(actions: List<CardAction>, onAction: (CardAction) -> Unit, modifier: Modifier = Modifier) {
     val primary = actions.firstOrNull() ?: return
     val (opens, tools) = actions.drop(1).partition { it.opens }
-    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        if (tools.isNotEmpty()) {
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                tools.forEach { action -> ToolButton(action, onAction) }
-            }
-        }
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            itemVerticalAlignment = Alignment.CenterVertically,
-        ) {
+    ActionLines(
+        modifier = modifier,
+        tools = { tools.forEach { action -> ToolButton(action, onAction) } },
+        main = {
             Button(onClick = { onAction(primary) }, shapes = ButtonDefaults.shapes()) {
                 ActionIcon(primary, ButtonDefaults.IconSize)
                 Spacer(Modifier.width(ButtonDefaults.IconSpacing))
@@ -192,6 +182,74 @@ private fun CardActions(actions: List<CardAction>, onAction: (CardAction) -> Uni
                     Text(labelOf(action))
                 }
             }
+        },
+    )
+}
+
+private val ACTION_GAP = 8.dp
+private val ACTION_LINE_GAP = 12.dp
+
+/**
+ * [main] and [tools] on one line, [tools] at its end, when the width holds both. Otherwise [tools]
+ * go on a line above [main], and each wraps onto further lines when it is too long by itself, as
+ * on a narrow screen or with large text. Items on a line are centred on each other.
+ */
+@Composable
+private fun ActionLines(main: @Composable () -> Unit, tools: @Composable () -> Unit, modifier: Modifier = Modifier) {
+    Layout(contents = listOf(main, tools), modifier = modifier.fillMaxWidth()) { (mainItems, toolItems), constraints ->
+        val loose = constraints.copy(minWidth = 0, minHeight = 0)
+        val mains = mainItems.map { it.measure(loose) }
+        val tooling = toolItems.map { it.measure(loose) }
+        val gap = ACTION_GAP.roundToPx()
+        fun span(items: List<Placeable>) = items.sumOf { it.width } + gap * (items.size - 1).coerceAtLeast(0)
+        val together = span(mains) + if (tooling.isEmpty()) 0 else gap + span(tooling)
+        val width = if (constraints.hasBoundedWidth) constraints.maxWidth else together
+
+        // Each placement is an item with its position, worked out before the layout's size is known.
+        val placements = mutableListOf<Triple<Placeable, Int, Int>>()
+
+        /** Places [items] in lines starting at [top], and returns the height used. */
+        fun flow(items: List<Placeable>, top: Int): Int {
+            var y = top
+            var line = mutableListOf<Placeable>()
+            fun close() {
+                val height = line.maxOfOrNull { it.height } ?: 0
+                var x = 0
+                for (item in line) {
+                    placements += Triple(item, x, y + (height - item.height) / 2)
+                    x += item.width + gap
+                }
+                y += height + gap
+                line = mutableListOf()
+            }
+            for (item in items) {
+                if (line.isNotEmpty() && span(line) + gap + item.width > width) close()
+                line += item
+            }
+            if (line.isNotEmpty()) close()
+            return (y - top - gap).coerceAtLeast(0)
+        }
+
+        val height = if (together <= width) {
+            val lineHeight = (mains + tooling).maxOfOrNull { it.height } ?: 0
+            var x = 0
+            for (item in mains) {
+                placements += Triple(item, x, (lineHeight - item.height) / 2)
+                x += item.width + gap
+            }
+            x = width - span(tooling)
+            for (item in tooling) {
+                placements += Triple(item, x, (lineHeight - item.height) / 2)
+                x += item.width + gap
+            }
+            lineHeight
+        } else {
+            val toolsHeight = flow(tooling, 0)
+            val top = if (tooling.isEmpty()) 0 else toolsHeight + ACTION_LINE_GAP.roundToPx()
+            top + flow(mains, top)
+        }
+        layout(width, height) {
+            for ((item, x, y) in placements) item.placeRelative(x, y)
         }
     }
 }

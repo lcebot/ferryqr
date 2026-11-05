@@ -6,7 +6,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import io.github.lcebot.ferryqr.openin.OpenInApps
-import io.github.lcebot.ferryqr.openin.OpenInHelper
+import io.github.lcebot.ferryqr.openin.OpenInModule
 import io.github.lcebot.wxcode.WxText
 
 private const val NEW_TASK_CLEAR_TOP = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -34,7 +34,7 @@ internal object Alipay {
 
 /**
  * WeChat has no public entry that takes scanned content, so its scanner is opened. With the
- * optional LSPosed helper, the scanner then opens the content at once, as though it had read it.
+ * optional LSPosed module, the scanner then opens the content at once, as though it had read it.
  */
 internal object WeChat {
     const val PACKAGE = OpenInApps.WECHAT
@@ -56,22 +56,22 @@ internal object WeChat {
     fun claims(text: String) = CODES.matches(text) || text.contains("wechat/oauth2")
 
     fun openScanner(activity: Activity, text: String): Boolean =
-        launchScanner(activity).also { if (it) OpenInHelper.handoff(activity, PACKAGE, text) }
+        launchScanner(activity).also { if (it) OpenInModule.handoff(activity, PACKAGE, text) }
 
     /**
-     * For a mini program code that was read: the helper returns [payload] as WeChat's own decoder
+     * For a mini program code that was read: the module returns [payload] as WeChat's own decoder
      * reports it, so WeChat opens the mini program as after a scan of its own. [picture] is the code
      * drawn again, which the scanner is shown instead when the camera feed is chosen or the result
      * cannot be replaced.
      */
     fun openMiniProgram(activity: Activity, payload: String, picture: Bitmap): Boolean =
         launchScanner(activity).also {
-            if (it) OpenInHelper.handoff(activity, PACKAGE, WxText.forWeChat(payload), OpenInApps.MINI_PROGRAM_TYPE, picture)
+            if (it) OpenInModule.handoff(activity, PACKAGE, WxText.forWeChat(payload), OpenInApps.MINI_PROGRAM_TYPE, picture)
         }
 
     /** For a located code that FerryQR cannot read: [image] is its region, for the scanner to read. */
     fun openScanner(activity: Activity, image: Bitmap): Boolean =
-        launchScanner(activity).also { if (it) OpenInHelper.handoff(activity, PACKAGE, image) }
+        launchScanner(activity).also { if (it) OpenInModule.handoff(activity, PACKAGE, image) }
 
     private fun launchScanner(activity: Activity): Boolean = Launch.start(
         activity,
@@ -83,12 +83,12 @@ internal object WeChat {
 }
 
 /**
- * Opens the scanner of [pkg] at [scanner] and has the LSPosed helper hand it [text]. Without the
- * helper only the scanner opens, for the user to scan the code again.
+ * Opens the scanner of [pkg] at [scanner] and has the LSPosed module hand it [text]. Without the
+ * module only the scanner opens, for the user to scan the code again.
  */
-private fun openScannerWithHelper(activity: Activity, pkg: String, scanner: String, text: String): Boolean {
+private fun openScannerWithModule(activity: Activity, pkg: String, scanner: String, text: String): Boolean {
     val intent = Intent(Intent.ACTION_VIEW, Uri.parse(scanner)).setPackage(pkg).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    return Launch.start(activity, intent).also { if (it) OpenInHelper.handoff(activity, pkg, text) }
+    return Launch.start(activity, intent).also { if (it) OpenInModule.handoff(activity, pkg, text) }
 }
 
 /** Bike and e-bike codes, and Didi's short links, which its scanner sends to the right service. */
@@ -99,7 +99,7 @@ internal object Didi {
 
     fun claims(text: String) = CODES.matches(text)
 
-    fun openScanner(activity: Activity, text: String) = openScannerWithHelper(activity, PACKAGE, SCANNER, text)
+    fun openScanner(activity: Activity, text: String) = openScannerWithModule(activity, PACKAGE, SCANNER, text)
 }
 
 /**
@@ -126,7 +126,7 @@ internal object Meituan {
         return DOMAINS.any { host == it || host.endsWith(".$it") }
     }
 
-    fun openScanner(activity: Activity, text: String) = openScannerWithHelper(activity, PACKAGE, SCANNER, text)
+    fun openScanner(activity: Activity, text: String) = openScannerWithModule(activity, PACKAGE, SCANNER, text)
 }
 
 /** Xiaomi apps reached through private intents that no generic link resolution can find. */

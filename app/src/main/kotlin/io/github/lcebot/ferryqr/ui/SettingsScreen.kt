@@ -63,7 +63,7 @@ import io.github.lcebot.ferryqr.dispatch.Targets
 import io.github.lcebot.ferryqr.openin.OpenInApp
 import io.github.lcebot.ferryqr.openin.OpenInApps
 import io.github.lcebot.ferryqr.openin.ModuleState
-import io.github.lcebot.ferryqr.openin.OpenInHelper
+import io.github.lcebot.ferryqr.openin.OpenInModule
 import io.github.lcebot.ferryqr.openin.Strategy
 
 /** How a code reaches an app's scanner, in the terms the settings use. */
@@ -100,7 +100,7 @@ fun SettingsScreen(onBack: () -> Unit) {
     // Coming back from LSPosed, or from an app that restarted, the framework may say otherwise.
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(lifecycle) {
-        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) { OpenInHelper.refresh() }
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) { OpenInModule.refresh() }
     }
 
     Scaffold(
@@ -181,8 +181,8 @@ private fun AppSettingItem(app: AppSetting, shape: Shape) {
     val haptics = rememberHaptics()
     val name = stringResource(app.name)
     val installed = remember(app.pkg) { Launch.isInstalled(context, app.pkg) }
-    val state by OpenInHelper.state(app.pkg).collectAsStateWithLifecycle()
-    var cameraFeed by remember(app.pkg) { mutableStateOf(OpenInHelper.cameraFeed(context, app.pkg)) }
+    val state by OpenInModule.state(app.pkg).collectAsStateWithLifecycle()
+    var cameraFeed by remember(app.pkg) { mutableStateOf(OpenInModule.cameraFeed(context, app.pkg)) }
     val method = app.fixed ?: if (cameraFeed) Method.Camera else Method.Direct
     Surface(shape = shape, color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -223,7 +223,7 @@ private fun AppSettingItem(app: AppSetting, shape: Shape) {
                 onSelect = { chosen ->
                     haptics.toggle(chosen == Method.Camera)
                     cameraFeed = chosen == Method.Camera
-                    OpenInHelper.setCameraFeed(context, app.pkg, cameraFeed)
+                    OpenInModule.setCameraFeed(context, app.pkg, cameraFeed)
                 },
             )
             // Only an app limited to one method says why; the methods themselves are described above.

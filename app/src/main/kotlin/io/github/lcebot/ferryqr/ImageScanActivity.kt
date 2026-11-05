@@ -11,8 +11,7 @@ import androidx.core.view.WindowCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import io.github.lcebot.ferryqr.dispatch.WeChat
-import io.github.lcebot.ferryqr.openin.OpenInHelper
+import io.github.lcebot.ferryqr.openin.OpenInModule
 import io.github.lcebot.ferryqr.scan.StillResult
 import io.github.lcebot.ferryqr.scan.WeChatEngine
 import io.github.lcebot.ferryqr.scan.ZxingEngine
@@ -63,9 +62,6 @@ class ImageScanViewModel(app: Application) : AndroidViewModel(app) {
     private val _result = MutableStateFlow<StillResult?>(null)
     val result = _result.asStateFlow()
 
-    /** Whether the module is enabled for WeChat, which decides how WeChat codes are handed over. */
-    val helperReady = OpenInHelper.ready(WeChat.PACKAGE)
-
     /** The image is read once per activity, so a rotation shows the same result. */
     fun load(uri: Uri) {
         if (loaded) return
@@ -73,6 +69,6 @@ class ImageScanViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             _result.value = readStillImage(getApplication<Application>(), uri, zxing, wechat)
         }
-        viewModelScope.launch { OpenInHelper.refresh() }
+        viewModelScope.launch { OpenInModule.refresh() }
     }
 }

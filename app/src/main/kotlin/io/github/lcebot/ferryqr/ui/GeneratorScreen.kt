@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.exclude
-import androidx.compose.foundation.layout.imeAnimationSource
 import androidx.compose.foundation.layout.imeAnimationTarget
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -90,13 +89,14 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.window.PopupProperties
 import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.dispatch.Target
 import io.github.lcebot.ferryqr.dispatch.Targets
 import io.github.lcebot.ferryqr.generate.CodeGenerator
 import io.github.lcebot.ferryqr.generate.CodeType
 import io.github.lcebot.ferryqr.generate.Generated
-import io.github.lcebot.ferryqr.openin.OpenInHelper
+import io.github.lcebot.ferryqr.openin.OpenInModule
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -114,7 +114,7 @@ private const val LARGE_TEXT_DELAY_MS = 350L
 private val TOOLBAR_PADDING = 16.dp
 private val TOOLBAR_BUTTON = 48.dp
 private val GROUP_GAP = 4.dp
-private val TOOLBAR_FAB = 64.dp
+private val TOOLBAR_FAB = TOOLBAR_TO_FAB_GAP + SHARE_FAB_SIZE
 
 /** Copy, save and favorite, which always stay in the toolbar. */
 private const val CODE_ACTIONS = 3
@@ -122,8 +122,8 @@ private const val CODE_ACTIONS = 3
 /** Layout estimates used only to decide how many lines the text field can keep. */
 private val GAP = 12.dp
 private val CHIPS_HEIGHT = 48.dp
-/** A floating toolbar with a FAB is laid out as tall as the largest FAB it allows, not its own 64dp. */
-private val TOOLBAR_HEIGHT = 80.dp
+/** The floating toolbar's own height, which the share FAB beside it does not exceed. */
+private val TOOLBAR_HEIGHT = 64.dp
 private val FIELD_ONE_LINE = 64.dp
 private val SUPPORTING_HEIGHT = 24.dp
 private const val MAX_FIELD_LINES = 4
@@ -146,11 +146,11 @@ fun GeneratorScreen(onBack: () -> Unit) {
     val appFade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
     val appResize = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
     val ready = candidates.associate { target ->
-        target.pkg to (!target.viaModule || OpenInHelper.ready(target.pkg).collectAsState().value)
+        target.pkg to (!target.viaModule || OpenInModule.ready(target.pkg).collectAsState().value)
     }
 
     // The scope may have changed in LSPosed since the scanner last asked.
-    LaunchedEffect(Unit) { OpenInHelper.refresh() }
+    LaunchedEffect(Unit) { OpenInModule.refresh() }
 
     // Android only lets the focused app read the clipboard, so wait for focus before reading it.
     LaunchedEffect(Unit) {
@@ -218,14 +218,13 @@ fun GeneratorScreen(onBack: () -> Unit) {
         ) {
             // Everything fits on one screen: the text field gives up lines first, then the code shrinks.
             // The line count follows where the keyboard is heading rather than each frame of its
-            // animation: it drops as soon as the keyboard starts opening and rises only once it has
-            // closed, so the field changes size once instead of stepping through every line count.
+            // animation, so the field changes size once, as the keyboard starts to move, and the
+            // page settles in one motion with it. The keyboard also closes when a menu or the share
+            // sheet takes focus, and the field then grows while the keyboard leaves, rather than
+            // the code first filling the space and giving it back afterwards.
             val density = LocalDensity.current
             val navigationBar = WindowInsets.navigationBars.getBottom(density)
-            val keyboardPx = maxOf(
-                WindowInsets.imeAnimationSource.getBottom(density),
-                WindowInsets.imeAnimationTarget.getBottom(density),
-            ) - navigationBar
+            val keyboardPx = WindowInsets.imeAnimationTarget.getBottom(density) - navigationBar
             val keyboard = with(density) { keyboardPx.coerceAtLeast(0).toDp() }
             val lineHeight = with(density) { MaterialTheme.typography.bodyLarge.lineHeight.toDp() }
             val roomBesideCode = maxHeight - keyboard - CHIPS_HEIGHT - TOOLBAR_HEIGHT - GAP * 3 - maxWidth
@@ -267,7 +266,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
                 // the ones result cards offer for the same content.
                 val apps = candidates.associateWith { target ->
                     val name = context.getString(target.name)
-                    // Without the helper the app could only open its scanner on nothing, so the
+                    // Without the module the app could only open its scanner on nothing, so the
                     // button looks disabled but still explains why when tapped.
                     val looksEnabled = ready.getValue(target.pkg)
                     SendApp(context.getString(R.string.open_in_app, name), target.pkg, looksEnabled) {
@@ -402,7 +401,12 @@ private fun SendMenu(apps: List<SendApp>, enabled: Boolean) {
                 Icon(painterResource(R.drawable.ic_more_vert), stringResource(R.string.entry_more))
             }
         }
-        DropdownMenuPopup(expanded = open, onDismissRequest = { open = false }) {
+        // The menu leaves focus with the text field, so the keyboard stays and the page keeps still.
+        DropdownMenuPopup(
+            expanded = open,
+            onDismissRequest = { open = false },
+            properties = PopupProperties(focusable = false),
+        ) {
             DropdownMenuGroup(shapes = MenuDefaults.groupShape(0, 1)) {
                 apps.forEachIndexed { index, app ->
                     val dim = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)

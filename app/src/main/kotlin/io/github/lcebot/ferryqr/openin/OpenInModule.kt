@@ -58,12 +58,12 @@ enum class ModuleState {
 }
 
 /**
- * FerryQR's end of the optional LSPosed helper in other apps. Whether the module is enabled for an
+ * FerryQR's end of the optional LSPosed module in other apps. Whether the module is enabled for an
  * app comes from the framework itself, through the libxposed service it hands FerryQR when FerryQR
  * starts, so it is known whether or not the app is running. Without the module there is no service,
  * nothing answers a handoff, and every call quietly comes to nothing.
  */
-object OpenInHelper {
+object OpenInModule {
     private val main = Handler(Looper.getMainLooper())
     private val service = MutableStateFlow<XposedService?>(null)
     private val states = ConcurrentHashMap<String, MutableStateFlow<ModuleState>>()
@@ -76,7 +76,7 @@ object OpenInHelper {
     private val framework = Executors.newSingleThreadExecutor { Thread(it, "ferry-framework") }.asCoroutineDispatcher()
 
     init {
-        // The framework may hand the service over before this runs; the helper keeps it until then.
+        // The framework may hand the service over before this runs; XposedServiceHelper keeps it until then.
         XposedServiceHelper.registerListener(object : XposedServiceHelper.OnServiceListener {
             override fun onServiceBind(bound: XposedService) {
                 service.value = bound
@@ -198,6 +198,8 @@ object OpenInHelper {
         fun attempt() {
             val intent = Intent(OpenInProtocol.ACTION_HANDOFF).also(content).putExtra(EXTRA_ID, id)
             send(app, pkg, intent) { result ->
+                // TEMPORARY, removed together with the hook package's TraceLog.
+                android.util.Log.i("FerryQR-trace", "handoff $id to $pkg answered $result")
                 when {
                     // The app has taken the content, which is the one moment FerryQR knows it arrived.
                     result == RESULT_ACCEPTED -> ferried(app, pkg)

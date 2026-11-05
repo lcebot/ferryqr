@@ -50,7 +50,7 @@ internal data class TypeMapping(val id: Int, val name: String)
 internal data class OpenInApp(val pkg: String, val strategy: Strategy)
 
 /**
- * The apps the LSPosed helper supports. Each one also needs its line in META-INF/xposed/scope.list
+ * The apps the LSPosed module supports. Each one also needs its line in META-INF/xposed/scope.list
  * and its package query in the manifest, which OpenInAppsTest checks.
  */
 internal object OpenInApps {

@@ -98,20 +98,21 @@ object Cards {
     }
 
     /**
-     * A probable WeChat mini program code that could not be read, shown as [crop]. With the WeChat
-     * helper the crop goes to WeChat's scanner, which then simply opens it. Without the helper, a
+     * A probable WeChat mini program code that could not be read, shown as [crop]. With the module
+     * in WeChat the crop goes to WeChat's scanner, which then simply opens it. Without the module, a
      * code the camera saw ([live]) is scanned again in WeChat; an image FerryQR holds cannot reach
      * WeChat's camera, so the user is pointed to the scanner's own album button instead.
      */
-    fun miniProgram(activity: Activity, crop: Bitmap, helperReady: Boolean, live: Boolean): ResultCard {
+    fun miniProgram(activity: Activity, crop: Bitmap, live: Boolean): ResultCard {
         val installed = Targets.WECHAT.installed(activity)
+        val ready = Targets.WECHAT.ready
         val label = when {
-            helperReady -> R.string.open_in_app
+            ready -> R.string.open_in_app
             live -> R.string.scan_again_in_app
             else -> R.string.open_app_scanner
         }
         val body = when {
-            helperReady -> R.string.mini_body_helper
+            ready -> R.string.mini_body_module
             live -> R.string.mini_body_scan
             else -> R.string.mini_body_album
         }
@@ -175,7 +176,7 @@ object Cards {
 
     /**
      * A mini program code that was read. Its content means nothing outside WeChat, so the card
-     * shows the code drawn again from it. With the helper, WeChat opens the mini program from what
+     * shows the code drawn again from it. With the module, WeChat opens the mini program from what
      * was read, as after a scan of its own; without it, the user scans the code again in WeChat.
      */
     private fun miniProgramCode(activity: Activity, payload: MiniProgramPayload, origin: Origin): ResultCard {
@@ -203,7 +204,7 @@ object Cards {
 
     /**
      * The action that hands content to [target], which [open] does. Ready, the app opens the content
-     * wherever it came from. An app waiting for the helper only opens its scanner, which can still
+     * wherever it came from. An app waiting for the module only opens its scanner, which can still
      * see a code in front of the camera, or pick an image from its album if it has one; a history
      * entry then gets no action.
      */
@@ -225,7 +226,7 @@ object Cards {
         }
     }
 
-    /** What the user has to do in an app waiting for the helper, beyond what its action says. */
+    /** What the user has to do in an app waiting for the module, beyond what its action says. */
     private fun targetNote(activity: Activity, target: Target, origin: Origin): String? {
         if (target.ready || !target.installed(activity)) return null
         val name = activity.getString(target.name)

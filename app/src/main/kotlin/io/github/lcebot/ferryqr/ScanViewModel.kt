@@ -9,9 +9,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.lcebot.ferryqr.dispatch.Origin
 import io.github.lcebot.ferryqr.dispatch.ResultCard
-import io.github.lcebot.ferryqr.dispatch.WeChat
 import io.github.lcebot.ferryqr.history.HistoryStore
-import io.github.lcebot.ferryqr.openin.OpenInHelper
+import io.github.lcebot.ferryqr.openin.OpenInModule
 import io.github.lcebot.ferryqr.scan.AutoZoom
 import io.github.lcebot.ferryqr.scan.Detection
 import io.github.lcebot.ferryqr.scan.isLocatedMiniCode
@@ -24,23 +23,14 @@ import io.github.lcebot.ferryqr.scan.StillResult
 import io.github.lcebot.ferryqr.scan.readStillImage
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 
 /** A code that was just dismissed is ignored until it has been out of view this long. */
 private const val SUPPRESS_MS = 1500L
-
-/** How long the notice that the WeChat helper is ready stays on screen. */
-private const val HELPER_NOTICE_MS = 3000L
-
-/** How long the WeChat notice waits for the framework's service after the scanner starts. */
-private const val SERVICE_WAIT_MS = 1500L
 
 sealed interface Phase {
     data object Scanning : Phase
@@ -89,13 +79,6 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     private val _cameraSession = MutableStateFlow(0)
     val cameraSession = _cameraSession.asStateFlow()
 
-    /** True for a few seconds once the module is found enabled for WeChat, once per scanner start. */
-    private val _helperNotice = MutableStateFlow(false)
-    val helperNotice = _helperNotice.asStateFlow()
-
-    /** Whether the module is enabled for WeChat, which decides how WeChat codes are handed over. */
-    val helperReady = OpenInHelper.ready(WeChat.PACKAGE)
-
     /** Set while a card for a live mini program code is shown, so dismissing it mutes that code. */
     @Volatile
     private var showingLiveMiniCode = false
@@ -113,16 +96,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     init {
-        // Only WeChat gets a notice; the other apps just take their codes once enabled. The framework
-        // hands its service over shortly after FerryQR starts, so the notice waits for it a little.
-        viewModelScope.launch {
-            OpenInHelper.refresh()
-            if (withTimeoutOrNull(SERVICE_WAIT_MS) { OpenInHelper.ready(WeChat.PACKAGE).first { it } } != null) {
-                _helperNotice.value = true
-                delay(HELPER_NOTICE_MS)
-                _helperNotice.value = false
-            }
-        }
+        viewModelScope.launch { OpenInModule.refresh() }
     }
 
     @Volatile

@@ -81,7 +81,7 @@ import io.github.lcebot.ferryqr.dispatch.Kind
 import io.github.lcebot.ferryqr.dispatch.Origin
 import io.github.lcebot.ferryqr.history.HistoryStore
 import io.github.lcebot.ferryqr.openin.OpenInApps
-import io.github.lcebot.ferryqr.openin.OpenInHelper
+import io.github.lcebot.ferryqr.openin.OpenInModule
 import io.github.lcebot.ferryqr.scan.Detection
 import io.github.lcebot.ferryqr.scan.isLocatedMiniCode
 import io.github.lcebot.ferryqr.scan.locatedCrop
@@ -105,7 +105,6 @@ private const val THUMBNAIL_MARGIN = 0.15f
 fun ImageScanSheet(vm: ImageScanViewModel, onClose: () -> Unit) {
     val haptics = rememberHaptics()
     val result by vm.result.collectAsStateWithLifecycle()
-    val helperReady by vm.helperReady.collectAsStateWithLifecycle()
     val sheetState = rememberBottomSheetState(
         initialValue = SheetValue.Hidden,
         enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded),
@@ -142,8 +141,8 @@ fun ImageScanSheet(vm: ImageScanViewModel, onClose: () -> Unit) {
         ) { read ->
             when {
                 read == null -> Reading()
-                read is StillResult.Read && read.detections.isNotEmpty() -> Found(read, helperReady, onHandoff = onClose)
-                read is StillResult.Read && read.miniCodes.isNotEmpty() -> MiniFound(read, helperReady, onHandoff = onClose)
+                read is StillResult.Read && read.detections.isNotEmpty() -> Found(read, onHandoff = onClose)
+                read is StillResult.Read && read.miniCodes.isNotEmpty() -> MiniFound(read, onHandoff = onClose)
                 read is StillResult.Read -> SheetMessage(
                     icon = R.drawable.ic_search_off,
                     title = R.string.image_no_code_title,
@@ -222,19 +221,17 @@ private fun SheetMessage(@DrawableRes icon: Int, @StringRes title: Int, @StringR
 }
 
 @Composable
-private fun Found(read: StillResult.Read, helperReady: Boolean, onHandoff: () -> Unit) {
+private fun Found(read: StillResult.Read, onHandoff: () -> Unit) {
     val activity = LocalActivity.current ?: return
     val context = LocalContext.current
     val haptics = rememberHaptics()
     var selected by rememberSaveable { mutableIntStateOf(0) }
     val detection = read.detections[selected.coerceIn(read.detections.indices)]
-    // A card offers an app once the framework reports the module enabled for it, which may come
-    // after the card is first built.
-    val readyApps = OpenInApps.all.map { OpenInHelper.ready(it.pkg).collectAsState().value }
-    val card = remember(detection, helperReady, readyApps) {
+    val readyApps = readyApps()
+    val card = remember(detection, readyApps) {
         // A mini program code that could not be read has no content to route; WeChat gets its picture.
         val crop = if (detection.isLocatedMiniCode) detection.locatedCrop(read.frame) else null
-        if (crop != null) Cards.miniProgram(activity, crop, helperReady, live = false)
+        if (crop != null) Cards.miniProgram(activity, crop, live = false)
         else Cards.build(activity, Classifier.classify(detection.text, detection.format), detection.format, Origin.IMAGE)
     }
 
@@ -291,14 +288,23 @@ private fun Found(read: StillResult.Read, helperReady: Boolean, onHandoff: () ->
     }
 }
 
+/**
+ * Whether the module is enabled for each supported app. A card offers an app once the framework
+ * reports the module enabled for it, which may come after the card is first built, so cards are
+ * built again when this changes.
+ */
+@Composable
+private fun readyApps(): List<Boolean> = OpenInApps.all.map { OpenInModule.ready(it.pkg).collectAsState().value }
+
 /** A probable mini program code, the only thing found in the image, offered to WeChat. */
 @Composable
-private fun MiniFound(read: StillResult.Read, helperReady: Boolean, onHandoff: () -> Unit) {
+private fun MiniFound(read: StillResult.Read, onHandoff: () -> Unit) {
     val activity = LocalActivity.current ?: return
     val context = LocalContext.current
     val haptics = rememberHaptics()
     val crop = remember(read) { read.miniCodes.first().crop(read.frame) } ?: return
-    val card = remember(crop, helperReady) { Cards.miniProgram(activity, crop, helperReady, live = false) }
+    val readyApps = readyApps()
+    val card = remember(crop, readyApps) { Cards.miniProgram(activity, crop, live = false) }
     ResultCardContent(
         card = card,
         onAction = { action ->

@@ -7,7 +7,6 @@
     <string name="hint_aim">Point the camera at a code</string>
     <string name="hint_hold">Hold steady</string>
     <string name="hint_looking">Looking closer…</string>
-    <string name="helper_ready">WeChat codes open directly in WeChat</string>
     <string name="action_torch">Flashlight</string>
     <string name="action_gallery">Scan an image</string>
     <string name="action_reset">Reset</string>
@@ -65,7 +64,7 @@
     <string name="needs_module_in_app">Opening in %1$s needs FerryQR enabled in LSPosed</string>
     <string name="kind_mini_program">Mini program code</string>
     <string name="mini_headline">Possibly a WeChat mini program code</string>
-    <string name="mini_body_helper">FerryQR could not read this code. Try opening it in WeChat.</string>
+    <string name="mini_body_module">FerryQR could not read this code. Try opening it in WeChat.</string>
     <string name="mini_body_album">FerryQR could not read this code. Try choosing this image again from the album in the WeChat scanner.</string>
     <string name="mini_body_scan">FerryQR could not read this code. Try scanning it again in WeChat.</string>
     <string name="mini_no_wechat">WeChat is not installed</string>

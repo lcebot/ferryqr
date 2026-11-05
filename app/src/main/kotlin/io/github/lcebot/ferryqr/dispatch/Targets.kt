@@ -4,7 +4,7 @@ import android.app.Activity
 import android.content.Context
 import androidx.annotation.StringRes
 import io.github.lcebot.ferryqr.R
-import io.github.lcebot.ferryqr.openin.OpenInHelper
+import io.github.lcebot.ferryqr.openin.OpenInModule
 
 /**
  * An app content can be handed to. Result cards, the create page and automatic opening all ask
@@ -12,7 +12,7 @@ import io.github.lcebot.ferryqr.openin.OpenInHelper
  *
  * A [general] app opens any link or text, and is offered for anything. Any other app is only
  * offered for its own codes, since it is no general scanner and would show an error or a blank
- * page for anything else. An app reached [viaModule] takes content only with the LSPosed helper;
+ * page for anything else. An app reached [viaModule] takes content only with the LSPosed module;
  * without it, handing over just opens its scanner.
  */
 internal class Target(
@@ -20,7 +20,7 @@ internal class Target(
     @StringRes val name: Int,
     val general: Boolean,
     val viaModule: Boolean,
-    /** Whether its scanner can read a picture from the gallery, which without the helper is the way in. */
+    /** Whether its scanner can read a picture from the gallery, which without the module is the way in. */
     val album: Boolean,
     private val codes: (String) -> Boolean,
     private val handoff: (Activity, String) -> Boolean,
@@ -29,7 +29,7 @@ internal class Target(
     fun claims(text: String) = codes(text)
 
     /** Whether handing content over opens it, rather than only the scanner. */
-    val ready: Boolean get() = !viaModule || OpenInHelper.ready(pkg).value
+    val ready: Boolean get() = !viaModule || OpenInModule.ready(pkg).value
 
     fun installed(context: Context) = Launch.isInstalled(context, pkg)
 

@@ -7,7 +7,7 @@
 
     <uses-permission android:name="android.permission.CAMERA" />
 
-    <!-- The apps the optional LSPosed helper supports accept its broadcasts only from holders of
+    <!-- The apps the optional LSPosed module supports accept its broadcasts only from holders of
          this, so no other app can make them open content it chose. -->
     <permission
         android:name="io.github.lcebot.ferryqr.permission.OPEN_IN"

@@ -141,8 +141,9 @@ internal object FrameFeed {
             text != null -> symbol(text)
             image != null -> picture(image)
             else -> null
-        } ?: return false
+        } ?: return false.also { TraceLog.log("frame feed not armed: the content could not be drawn") }
         session = Session(source, SystemClock.uptimeMillis() + WAIT_MS)
+        TraceLog.log("frame feed armed with ${if (text != null) "text" else "a picture"}")
         return true
     }
 
@@ -175,11 +176,15 @@ internal object FrameFeed {
         val s = session ?: return null
         val now = SystemClock.uptimeMillis()
         val live = when (val until = s.feedUntil) {
-            0L -> (now <= s.expiresAt).also { if (it) s.feedUntil = now + FEED_MS }
+            0L -> (now <= s.expiresAt).also {
+                if (it) s.feedUntil = now + FEED_MS
+                TraceLog.log(if (it) "frame feed started" else "frame feed expired before the camera ran")
+            }
             else -> now <= until
         }
         if (live) return s
         synchronized(this) { if (session === s) session = null }
+        if (s.feedUntil != 0L) TraceLog.log("frame feed ended")
         return null
     }
 

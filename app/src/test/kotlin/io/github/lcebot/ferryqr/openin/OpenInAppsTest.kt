@@ -34,7 +34,7 @@ class OpenInAppsTest {
 
     @Test
     fun everyAppCanBeOffered() {
-        for (pkg in packages) assertTrue(Targets.of(pkg)?.viaModule == true, "$pkg is not offered through the helper")
+        for (pkg in packages) assertTrue(Targets.of(pkg)?.viaModule == true, "$pkg is not offered through the module")
     }
 
     @Test

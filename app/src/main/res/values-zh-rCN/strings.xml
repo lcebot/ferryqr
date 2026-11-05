@@ -6,7 +6,6 @@
     <string name="hint_aim">将摄像头对准二维码</string>
     <string name="hint_hold">请保持稳定</string>
     <string name="hint_looking">正在仔细识别…</string>
-    <string name="helper_ready">微信二维码将直接在微信中打开</string>
     <string name="action_torch">手电筒</string>
     <string name="action_gallery">识别图片</string>
     <string name="action_reset">重置</string>
@@ -62,7 +61,7 @@
     <string name="needs_module_in_app">在%1$s中打开需要在 LSPosed 中启用 FerryQR</string>
     <string name="kind_mini_program">小程序码</string>
     <string name="mini_headline">可能是微信小程序码</string>
-    <string name="mini_body_helper">FerryQR 未能解析此二维码。可尝试在微信中打开。</string>
+    <string name="mini_body_module">FerryQR 未能解析此二维码。可尝试在微信中打开。</string>
     <string name="mini_body_album">FerryQR 未能解析此二维码。可尝试在微信扫一扫中从相册再次选择这张图片。</string>
     <string name="mini_body_scan">FerryQR 未能解析此二维码。可尝试在微信中再次扫描。</string>
     <string name="mini_no_wechat">未安装微信</string>

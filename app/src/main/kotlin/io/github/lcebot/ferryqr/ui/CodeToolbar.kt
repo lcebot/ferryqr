@@ -7,7 +7,8 @@ import android.graphics.Bitmap
 import android.os.Build
 import androidx.annotation.StringRes
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
@@ -37,11 +38,23 @@ import kotlinx.coroutines.withContext
 /*
  * The save and copy glyphs are drawn at sizes that make them look as large as the 24dp star beside
  * them. Measured by rasterising each glyph on its 960 unit viewport, the square root of the convex
- * hull of each glyph's ink is 0.540 of the side for save, 0.739 for copy and 0.591 for the star,
- * so save is drawn at 24 * 0.591 / 0.540 and copy at 24 * 0.591 / 0.739.
+ * hull of each glyph's ink is 0.540 of the side for save and 0.591 for the star, so save is drawn
+ * at 24 * 0.591 / 0.540. Its lines, 80 units wide like every glyph here, grow to 2.17dp with it,
+ * close to the star's 2dp. Copy would shrink to 19dp and its lines to 1.58dp, which looks thin, so
+ * its toolbar glyph adds a 23 unit outline stroke: that widens its hull to 0.762, so it is drawn at
+ * 24 * 0.591 / 0.762, and its lines, 103 units at that size, come to 2dp.
  */
 private val SAVE_ICON = 26.dp
-private val COPY_ICON = 19.dp
+private val COPY_ICON = 18.6.dp
+
+/**
+ * The share FAB and its gap from the toolbar, at the sizes the floating toolbar gives its own FAB
+ * when expanded. The FAB sits beside the toolbar rather than in its FAB slot: that slot reserves
+ * the toolbar's widest possible content, which counts every app still fading in or out at full
+ * width, so the toolbar would jump sideways whenever the apps change.
+ */
+internal val SHARE_FAB_SIZE = 56.dp
+internal val TOOLBAR_TO_FAB_GAP = 8.dp
 
 /**
  * The actions on a code image, in one floating toolbar under the code: [favorite] when given,
@@ -83,11 +96,12 @@ fun CodeToolbar(
         }
     }
 
-    Box(modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-        HorizontalFloatingToolbar(
-            expanded = true,
-            floatingActionButton = { ShareButton(enabled = code != null, onClick = ::share) },
-        ) {
+    Row(
+        modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(TOOLBAR_TO_FAB_GAP, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        HorizontalFloatingToolbar(expanded = true) {
             favorite?.invoke()
             Labeled(R.string.code_save) {
                 IconButton(
@@ -108,11 +122,12 @@ fun CodeToolbar(
                     enabled = code != null,
                     shapes = IconButtonDefaults.shapes(),
                 ) {
-                    Icon(painterResource(R.drawable.ic_content_copy), stringResource(R.string.code_copy), Modifier.size(COPY_ICON))
+                    Icon(painterResource(R.drawable.ic_content_copy_small), stringResource(R.string.code_copy), Modifier.size(COPY_ICON))
                 }
             }
             extra()
         }
+        ShareButton(enabled = code != null, onClick = ::share, modifier = Modifier.size(SHARE_FAB_SIZE))
     }
 }
 
@@ -131,7 +146,7 @@ fun handoffContainer(): Color = MaterialTheme.colorScheme.surfaceContainerHighes
  * takes the disabled colours and answers a tap only with a rejecting buzz.
  */
 @Composable
-private fun ShareButton(enabled: Boolean, onClick: () -> Unit) {
+private fun ShareButton(enabled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val haptics = rememberHaptics()
     val defaults = FloatingToolbarDefaults.standardFloatingToolbarColors()
     val effects = MaterialTheme.motionScheme.defaultEffectsSpec<Color>()
@@ -148,6 +163,7 @@ private fun ShareButton(enabled: Boolean, onClick: () -> Unit) {
     Labeled(R.string.code_share) {
         FloatingToolbarDefaults.StandardFloatingActionButton(
             onClick = { if (enabled) onClick() else haptics.reject() },
+            modifier = modifier,
             containerColor = container,
             contentColor = content,
         ) {

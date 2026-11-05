@@ -20,6 +20,7 @@ class HookEntry : XposedModule() {
 
     override fun onModuleLoaded(param: ModuleLoadedParam) {
         HookLog.attach(this)
+        TraceLog.attach(this)
         processName = param.processName
     }
 
@@ -45,6 +46,7 @@ class HookEntry : XposedModule() {
      */
     override fun onHotReloaded(param: HotReloadedParam) {
         HookLog.attach(this)
+        TraceLog.attach(this)
         processName = param.processName
         super.onHotReloaded(param)
         OpenInHooks.resume(this, param.savedInstanceState)
