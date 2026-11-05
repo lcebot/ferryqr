@@ -10,6 +10,22 @@ import androidx.activity.compose.LocalActivity
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.rememberSplineBasedDecay
+import androidx.compose.foundation.gestures.AnchoredDraggableState
+import androidx.compose.foundation.gestures.DraggableAnchors
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.anchoredDraggable
+import androidx.compose.foundation.gestures.animateTo
+import androidx.compose.foundation.gestures.snapping.SnapLayoutInfoProvider
+import androidx.compose.foundation.gestures.snapping.snapFlingBehavior
+import androidx.compose.foundation.layout.offset
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.LayoutDirection
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -55,9 +71,6 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxDefaults
-import androidx.compose.material3.SwipeToDismissBoxState
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -413,6 +426,18 @@ private fun DayHeader(day: LocalDate, sample: Long, modifier: Modifier = Modifie
 }
 
 /**
+ * How far a row must travel, as a share of its width, before letting go deletes it or changes its
+ * favorite: half, the default swipe threshold of Android's ItemTouchHelper and of the first
+ * Material swipe to dismiss. A swipe is decided by distance rather than speed, so a short quick flick
+ * springs back, as a full swipe does on iOS, and the tick felt at this point always means that
+ * letting go will act.
+ */
+private const val SWIPE_COMMIT = 0.5f
+
+/** A release faster than this toward the row's rest place takes a committed swipe back; Compose's fling threshold. */
+private val SWIPE_RETURN_VELOCITY = 125.dp
+
+/**
  * One entry: a tap opens it, a long press opens its menu, a swipe toward the start deletes it, and a
  * swipe toward the end makes it a favorite or stops it being one. A favorite swipe slides the row
  * back once done. The swipe state lives only as long as the row, so an entry brought back by undo
@@ -421,40 +446,85 @@ private fun DayHeader(day: LocalDate, sample: Long, modifier: Modifier = Modifie
 @Composable
 private fun EntryRow(entry: HistoryEntry, shape: Shape, actions: EntryActions, modifier: Modifier = Modifier) {
     val haptics = rememberHaptics()
-    val scope = rememberCoroutineScope()
     var menu by remember { mutableStateOf(false) }
-    val threshold = SwipeToDismissBoxDefaults.positionalThreshold
-    val swipe = remember { SwipeToDismissBoxState(SwipeToDismissBoxValue.Settled, threshold) }
-    val armed = swipe.targetValue != SwipeToDismissBoxValue.Settled
+    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val density = LocalDensity.current
+    val swipe = remember { AnchoredDraggableState(SwipeToDismissBoxValue.Settled) }
+    var width by remember { mutableIntStateOf(0) }
+    val offset = swipe.offset.takeUnless { it.isNaN() } ?: 0f
+    val direction = when {
+        offset == 0f -> SwipeToDismissBoxValue.Settled
+        (offset > 0f) != rtl -> SwipeToDismissBoxValue.StartToEnd
+        else -> SwipeToDismissBoxValue.EndToStart
+    }
+    val armed = width > 0 && abs(offset) >= width * SWIPE_COMMIT
     LaunchedEffect(armed) { if (armed) haptics.step() }
+
+    val decay = rememberSplineBasedDecay<Float>()
+    val settle = MaterialTheme.motionScheme.defaultSpatialSpec<Float>()
+    val returnVelocity = with(density) { SWIPE_RETURN_VELOCITY.toPx() }
+    val fling = remember(swipe, decay, settle, returnVelocity, rtl) {
+        snapFlingBehavior(
+            snapLayoutInfoProvider = object : SnapLayoutInfoProvider {
+                // No glide first: where the row ends up depends on where it was let go, not on speed.
+                override fun calculateApproachOffset(velocity: Float, decayOffset: Float): Float = 0f
+
+                override fun calculateSnapOffset(velocity: Float): Float {
+                    val at = swipe.offset.takeUnless { it.isNaN() } ?: return 0f
+                    val committed = width > 0 && abs(at) >= width * SWIPE_COMMIT
+                    val flungBack = at != 0f && velocity * at < 0f && abs(velocity) >= returnVelocity
+                    val target = when {
+                        !committed || flungBack -> SwipeToDismissBoxValue.Settled
+                        (at > 0f) != rtl -> SwipeToDismissBoxValue.StartToEnd
+                        else -> SwipeToDismissBoxValue.EndToStart
+                    }
+                    return swipe.anchors.positionOf(target) - at
+                }
+            },
+            decayAnimationSpec = decay,
+            snapAnimationSpec = settle,
+        )
+    }
 
     // What a favorite swipe will do is fixed when it starts, so the row sliding back after the
     // change still shows the change it made rather than the opposite one.
     var becomesFavorite by remember { mutableStateOf(!entry.favorite) }
-    LaunchedEffect(swipe.dismissDirection, entry.favorite) {
-        if (swipe.dismissDirection == SwipeToDismissBoxValue.Settled) becomesFavorite = !entry.favorite
+    LaunchedEffect(direction, entry.favorite) {
+        if (direction == SwipeToDismissBoxValue.Settled) becomesFavorite = !entry.favorite
     }
 
-    // The box reruns its dismiss callback whenever the callback changes, so it must stay the same one.
     val current by rememberUpdatedState(entry)
     val delete by rememberUpdatedState(actions.onDelete)
     val favorite by rememberUpdatedState(actions.onFavorite)
-    val onDismiss: (SwipeToDismissBoxValue) -> Unit = remember {
-        { direction ->
-            if (direction == SwipeToDismissBoxValue.EndToStart) {
-                delete(current)
-            } else {
+    LaunchedEffect(swipe.settledValue) {
+        when (swipe.settledValue) {
+            SwipeToDismissBoxValue.EndToStart -> delete(current)
+            SwipeToDismissBoxValue.StartToEnd -> {
                 favorite(current, !current.favorite)
-                scope.launch { swipe.reset() }
+                swipe.animateTo(SwipeToDismissBoxValue.Settled, settle)
             }
+            SwipeToDismissBoxValue.Settled -> Unit
         }
     }
 
-    Box(modifier) {
-        SwipeToDismissBox(
-            state = swipe,
-            backgroundContent = { SwipeBackground(swipe, armed, becomesFavorite, shape) },
-            onDismiss = onDismiss,
+    Box(
+        modifier.onSizeChanged { size ->
+            width = size.width
+            val end = size.width.toFloat()
+            swipe.updateAnchors(
+                DraggableAnchors {
+                    SwipeToDismissBoxValue.Settled at 0f
+                    SwipeToDismissBoxValue.StartToEnd at if (rtl) -end else end
+                    SwipeToDismissBoxValue.EndToStart at if (rtl) end else -end
+                },
+            )
+        },
+    ) {
+        SwipeBackground(direction, armed, becomesFavorite, shape, Modifier.matchParentSize())
+        Box(
+            Modifier
+                .offset { IntOffset(offset.roundToInt(), 0) }
+                .anchoredDraggable(swipe, Orientation.Horizontal, flingBehavior = fling),
         ) {
             EntryItem(entry, shape, onClick = { actions.onOpen(entry) }, onLongClick = { menu = true })
         }
@@ -527,9 +597,14 @@ private fun EntryItem(entry: HistoryEntry, shape: Shape, onClick: () -> Unit, on
  * new favorite, and the primary colours of other entries for one that stops being a favorite.
  */
 @Composable
-private fun SwipeBackground(swipe: SwipeToDismissBoxState, armed: Boolean, becomesFavorite: Boolean, shape: Shape) {
+private fun SwipeBackground(
+    direction: SwipeToDismissBoxValue,
+    armed: Boolean,
+    becomesFavorite: Boolean,
+    shape: Shape,
+    modifier: Modifier = Modifier,
+) {
     val colors = MaterialTheme.colorScheme
-    val direction = swipe.dismissDirection
     val (armedContainer, armedContent) = when {
         direction == SwipeToDismissBoxValue.EndToStart -> colors.errorContainer to colors.onErrorContainer
         becomesFavorite -> colors.tertiaryContainer to colors.onTertiaryContainer
@@ -557,8 +632,7 @@ private fun SwipeBackground(swipe: SwipeToDismissBoxState, armed: Boolean, becom
         SwipeToDismissBoxValue.Settled -> null to null
     }
     Box(
-        modifier = Modifier
-            .fillMaxSize()
+        modifier = modifier
             .clip(shape)
             .background(if (alignment == null) Color.Transparent else container)
             .padding(horizontal = 24.dp),
