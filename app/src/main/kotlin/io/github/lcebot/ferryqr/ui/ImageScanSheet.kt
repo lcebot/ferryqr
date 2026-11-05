@@ -50,6 +50,7 @@ import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -79,6 +80,8 @@ import io.github.lcebot.ferryqr.dispatch.Cards
 import io.github.lcebot.ferryqr.dispatch.Kind
 import io.github.lcebot.ferryqr.dispatch.Origin
 import io.github.lcebot.ferryqr.history.HistoryStore
+import io.github.lcebot.ferryqr.openin.OpenInApps
+import io.github.lcebot.ferryqr.openin.OpenInHelper
 import io.github.lcebot.ferryqr.scan.Detection
 import io.github.lcebot.ferryqr.scan.isLocatedMiniCode
 import io.github.lcebot.ferryqr.scan.locatedCrop
@@ -225,7 +228,10 @@ private fun Found(read: StillResult.Read, helperReady: Boolean, onHandoff: () ->
     val haptics = rememberHaptics()
     var selected by rememberSaveable { mutableIntStateOf(0) }
     val detection = read.detections[selected.coerceIn(read.detections.indices)]
-    val card = remember(detection, helperReady) {
+    // A card offers an app once the framework reports the module enabled for it, which may come
+    // after the card is first built.
+    val readyApps = OpenInApps.all.map { OpenInHelper.ready(it.pkg).collectAsState().value }
+    val card = remember(detection, helperReady, readyApps) {
         // A mini program code that could not be read has no content to route; WeChat gets its picture.
         val crop = if (detection.isLocatedMiniCode) detection.locatedCrop(read.frame) else null
         if (crop != null) Cards.miniProgram(activity, crop, helperReady, live = false)

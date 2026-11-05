@@ -86,9 +86,16 @@ android {
     }
 }
 
+// OpenInAppsTest reads these as files, so a change to any of them alone must rerun it.
+tasks.withType<Test>().configureEach {
+    inputs.files("src/main/AndroidManifest.xml", "src/main/resources/META-INF/xposed/scope.list", "../lsposed-repo/SCOPE")
+}
+
 dependencies {
     // The optional LSPosed half; the framework provides the API at runtime, so it is not packaged.
     compileOnly(libs.libxposed.api)
+    // Tells the app whether the module is enabled for each app, from the framework itself.
+    implementation(libs.libxposed.service)
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
@@ -116,4 +123,6 @@ dependencies {
     implementation(libs.wechat.qrcode)
 
     implementation(project(":wxcode"))
+
+    testImplementation(libs.kotlin.test.junit)
 }

@@ -36,12 +36,12 @@ FerryQR needs Android 11 or later on a 64-bit ARM (arm64-v8a) phone. Download th
 
 ## LSPosed module
 
-FerryQR is also an optional LSPosed module. After FerryQR takes you to the WeChat scanner, the module shows WeChat the code you just scanned in place of the camera image for a few seconds, so WeChat reads it at once, without aiming again or choosing between several codes. WeChat's viewfinder keeps showing the real camera.
+FerryQR is also an optional LSPosed module for WeChat, DiDi and Meituan, whose codes only open properly from their own scanners. After FerryQR takes you to one of these scanners, the module has the app open the code you just scanned at once, without aiming again or choosing between several codes.
 
 To enable it:
 
-1. In LSPosed, enable FerryQR with WeChat in its scope.
-2. Restart WeChat.
+1. In LSPosed, enable FerryQR with WeChat, DiDi and Meituan in its scope.
+2. Restart those apps.
 3. Open FerryQR; the scanner screen confirms that the module is ready.
 
 With the module:
@@ -50,18 +50,27 @@ With the module:
 - WeChat codes and mini program codes in history open directly in WeChat; without the module, they cannot be opened in WeChat from history.
 - WeChat mini program codes open directly in WeChat.
 - The create page can open its text in WeChat.
+- DiDi bike and short link codes, and Meituan bike, shop and grocery codes, open directly in those apps, and their result cards offer Open in DiDi or Open in Meituan.
 
-The module only hooks Android camera APIs inside the WeChat process, leaves WeChat's own code untouched, and accepts requests from FerryQR alone. Without LSPosed, FerryQR works as described above.
+Each app is handled the way its version changes affect least:
+
+- In WeChat, the module hooks Android camera APIs and the result class of WeChat's QR code library, whose name stays the same across WeChat versions. For a moment it shows the scanner a small placeholder code in place of the camera image, and the result read from it carries the content you scanned. A mini program code FerryQR read is returned the same way, as a mini program result; one it could not read is shown to the scanner as a picture of the code. WeChat's viewfinder keeps showing the real camera.
+- In DiDi, the module only hooks Android camera APIs, and the scanner reads a code drawn from the content you scanned in place of the camera image.
+- In Meituan, the module closes Meituan's camera screen as soon as it opens and returns the content you scanned, as if the camera had read it.
+
+Settings, at the top left of the scanner, show for each app whether the module is enabled and loaded, as LSPosed reports it, so the apps need not be running. When FerryQR is updated, apps that are already running usually take the new version without a restart; the settings say so when one is still needed. WeChat can also be switched to Camera, which shows every code to its camera, as for DiDi, in case a WeChat update stops the result from being replaced.
+
+The module accepts requests from FerryQR alone. Without LSPosed, FerryQR works as described above.
 
 ## History
 
-The history button at the top right lists the codes you have scanned, grouped by day. Tap one to copy, open or share it again. Swipe an entry left to delete it, with an option to undo, or right to add it to or remove it from favorites. The clear button at the top of the history page removes every entry except favorites.
+The history button at the top right lists the codes you have scanned, grouped by day. Tap one to open, copy or share it again; the code is drawn again too, and tapping it enlarges it for someone else to scan, while holding it shares, copies or saves it as an image. Swipe an entry left to delete it, with an option to undo, or right to add it to or remove it from favorites. The clear button at the top of the history page removes every entry except favorites.
 
-Codes you use often can be kept as favorites: tap the star on a result card or on the create page, or swipe right or long press an entry in history. Favorites stay at the top of the history page, can be renamed, and fold away when there are more than 4. Opening one draws the code again, and tapping it enlarges it for someone else to scan. From the long press menu, up to 4 favorites can also be added to the app shortcuts, which open when you long press the FerryQR icon.
+Codes you use often can be kept as favorites: tap the star on a result card or on the create page, or swipe right or long press an entry in history. Favorites stay at the top of the history page, can be renamed, and fold away when there are more than 4. From the long press menu, up to 4 favorites can also be added to the app shortcuts, which open when you long press the FerryQR icon.
 
 ## Creating codes
 
-The create button at the top right turns text into a code. When it opens, it fills in text from the clipboard and shows the code right away, and the code updates as you edit the text. Besides regular QR codes you can choose Aztec, Data Matrix or PDF417. If the text is too long for the chosen type, a message below the text field says so. You can share the code as an image to any app, copy it to the clipboard, save it to Pictures/FerryQR, or add it to favorites. The text can also be opened directly in Alipay, and with the LSPosed module in WeChat as well.
+The create button at the top right turns text into a code. When it opens, it fills in text from the clipboard and shows the code right away, and the code updates as you edit the text. Besides regular QR codes you can choose Aztec, Data Matrix or PDF417. If the text is too long for the chosen type, a message below the text field says so. You can share the code as an image to any app, copy it to the clipboard, save it to Pictures/FerryQR, or add it to favorites. The text can also be opened directly in Alipay, and with the LSPosed module in WeChat as well; when it is a DiDi or Meituan code, the page offers that app too.
 
 ## Tips
 

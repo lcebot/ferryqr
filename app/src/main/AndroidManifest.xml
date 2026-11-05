@@ -7,16 +7,18 @@
 
     <uses-permission android:name="android.permission.CAMERA" />
 
-    <!-- The WeChat side of the optional LSPosed helper only accepts broadcasts from holders of this,
-         so no other app can make WeChat scan a code it chose. -->
+    <!-- The apps the optional LSPosed helper supports accept its broadcasts only from holders of
+         this, so no other app can make them open content it chose. -->
     <permission
-        android:name="io.github.lcebot.ferryqr.permission.WECHAT_HELPER"
+        android:name="io.github.lcebot.ferryqr.permission.OPEN_IN"
         android:protectionLevel="signature" />
 
-    <uses-permission android:name="io.github.lcebot.ferryqr.permission.WECHAT_HELPER" />
+    <uses-permission android:name="io.github.lcebot.ferryqr.permission.OPEN_IN" />
 
     <queries>
         <package android:name="com.tencent.mm" />
+        <package android:name="com.sdu.didi.psnger" />
+        <package android:name="com.sankuai.meituan" />
         <package android:name="com.eg.android.AlipayGphone" />
     </queries>
 

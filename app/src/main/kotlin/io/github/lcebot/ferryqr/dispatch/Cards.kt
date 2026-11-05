@@ -19,14 +19,13 @@ import io.github.lcebot.ferryqr.content.WebPayload
 import io.github.lcebot.ferryqr.content.WifiPayload
 import io.github.lcebot.ferryqr.content.WifiSecurity
 import io.github.lcebot.ferryqr.generate.MiniCodeArt
-import io.github.lcebot.ferryqr.helper.WeChatHelper
 
-/** Where a code came from, which decides whether WeChat's camera can still see it. */
+/** Where a code came from, which decides whether an app's own camera can still see it. */
 enum class Origin {
     /** The live camera; the code is still in front of it. */
     CAMERA,
 
-    /** An image on the phone; WeChat's scanner can only reach it through its album. */
+    /** An image on the phone; another app's scanner can only reach it through its album. */
     IMAGE,
 
     /** A history entry; no code is left to scan. */
@@ -47,18 +46,24 @@ enum class ActionResult {
     Unavailable,
 }
 
-/** [app] is the package the action hands off to; its own icon then replaces [icon]. */
+/**
+ * [app] is the package the action hands off to; its own icon then replaces [icon]. [appName] is the
+ * name formatted into [label], for the labels that name the app.
+ */
 data class CardAction(
     @param:StringRes val label: Int,
     @param:DrawableRes val icon: Int,
     val app: String? = null,
+    @param:StringRes val appName: Int? = null,
     val run: (Activity) -> ActionResult,
 )
 
 /**
  * What the result sheet shows. The first action is the primary one. [image] is the code itself: a
  * picture of one that could not be read, or one drawn again from its content to be scanned from the
- * screen. [format] is empty for a code that was not read, which leaves nothing to keep in history.
+ * screen. [exportable] lets that drawing be shared, copied or saved, for history, where the original
+ * is out of sight. [format] is empty for a code that was not read, which leaves nothing to keep in
+ * history.
  */
 data class ResultCard(
     val raw: String,
@@ -66,10 +71,11 @@ data class ResultCard(
     @param:DrawableRes val icon: Int,
     val headline: String,
     val body: String?,
-    val notes: List<Int>,
+    val notes: List<String>,
     val actions: List<CardAction>,
     val image: Bitmap? = null,
     val format: String = "",
+    val exportable: Boolean = false,
 )
 
 data class Kind(@param:StringRes val label: Int, @param:DrawableRes val icon: Int)
@@ -96,18 +102,18 @@ object Cards {
      * WeChat's camera, so the user is pointed to the scanner's own album button instead.
      */
     fun miniProgram(activity: Activity, crop: Bitmap, helperReady: Boolean, live: Boolean): ResultCard {
-        val installed = Launch.isInstalled(activity, WeChat.PACKAGE)
+        val installed = Targets.WECHAT.installed(activity)
         val label = when {
-            helperReady -> R.string.open_in_wechat
-            live -> R.string.scan_in_wechat
-            else -> R.string.open_wechat_scanner
+            helperReady -> R.string.open_in_app
+            live -> R.string.scan_again_in_app
+            else -> R.string.open_app_scanner
         }
         val body = when {
             helperReady -> R.string.mini_body_helper
             live -> R.string.mini_body_scan
             else -> R.string.mini_body_album
         }
-        val action = CardAction(label, R.drawable.ic_open_in_new, WeChat.PACKAGE) {
+        val action = CardAction(label, R.drawable.ic_open_in_new, WeChat.PACKAGE, Targets.WECHAT.name) {
             if (WeChat.openScanner(it, crop)) ActionResult.Handoff else ActionResult.Unavailable
         }
         return ResultCard(
@@ -116,7 +122,7 @@ object Cards {
             icon = R.drawable.ic_qr_code_scanner,
             headline = activity.getString(R.string.mini_headline),
             body = activity.getString(body),
-            notes = if (installed) emptyList() else listOf(R.string.mini_no_wechat),
+            notes = if (installed) emptyList() else listOf(activity.getString(R.string.mini_no_wechat)),
             actions = if (installed) listOf(action) else emptyList(),
             image = crop,
         )
@@ -139,22 +145,14 @@ object Cards {
 
     private fun card(activity: Activity, payload: Payload, format: String, origin: Origin): ResultCard = when (payload) {
         is WebPayload -> web(activity, payload, origin)
-        is SchemePayload -> ResultCard(
-            raw = payload.raw,
-            kind = R.string.kind_app_link,
-            icon = R.drawable.ic_apps,
-            headline = payload.raw,
-            body = null,
-            notes = listOf(R.string.scheme_unhandled),
-            actions = listOf(copy(payload.raw), share(payload.raw)),
-        )
+        is SchemePayload -> scheme(activity, payload, origin)
         is FidoPayload -> ResultCard(
             payload.raw, R.string.kind_fido, R.drawable.ic_key, payload.raw, null,
-            listOf(R.string.fido_unhandled), listOf(copy(payload.raw)),
+            listOf(activity.getString(R.string.fido_unhandled)), listOf(copy(payload.raw)),
         )
         is EsimPayload -> ResultCard(
             payload.raw, R.string.kind_esim, R.drawable.ic_sim_card, payload.raw, null,
-            listOf(R.string.esim_unhandled),
+            listOf(activity.getString(R.string.esim_unhandled)),
             listOf(
                 copy(payload.raw),
                 CardAction(R.string.open_sim_settings, R.drawable.ic_settings) {
@@ -164,7 +162,7 @@ object Cards {
         )
         is DppPayload -> ResultCard(
             payload.raw, R.string.kind_dpp, R.drawable.ic_wifi, payload.raw, null,
-            listOf(R.string.dpp_unsupported), listOf(copy(payload.raw)),
+            listOf(activity.getString(R.string.dpp_unsupported)), listOf(copy(payload.raw)),
         )
         is WifiPayload -> wifi(activity, payload)
         is ContactPayload -> contact(payload)
@@ -175,16 +173,16 @@ object Cards {
 
     /**
      * A mini program code that was read. Its content means nothing outside WeChat, so the card
-     * shows the code drawn again from it. With the helper, WeChat's scanner is shown that drawing
-     * and opens the mini program; without it, the user scans the code again in WeChat.
+     * shows the code drawn again from it. With the helper, WeChat takes the content as a mini
+     * program code; without it, the user scans the code again in WeChat.
      */
     private fun miniProgramCode(activity: Activity, payload: MiniProgramPayload, origin: Origin): ResultCard {
         val image = MiniCodeArt.draw(payload.raw)
-        val installed = Launch.isInstalled(activity, WeChat.PACKAGE)
+        val wechat = Targets.WECHAT
+        val installed = wechat.installed(activity)
         val actions = buildList {
-            if (installed && image != null) {
-                wechatAction(origin) { if (WeChat.openScanner(it, image)) ActionResult.Handoff else ActionResult.Unavailable }
-                    ?.let { add(it) }
+            if (image != null) {
+                targetAction(activity, wechat, origin) { WeChat.openMiniProgram(it, payload.raw, image) }?.let { add(it) }
             }
             add(copy(payload.raw))
         }
@@ -194,58 +192,91 @@ object Cards {
             icon = R.drawable.ic_qr_code_scanner,
             headline = activity.getString(R.string.mini_read_headline),
             body = activity.getString(R.string.mini_read_body),
-            notes = if (installed) listOfNotNull(wechatGuide(origin)) else listOf(R.string.mini_no_wechat),
+            notes = if (installed) listOfNotNull(targetNote(activity, wechat, origin))
+            else listOf(activity.getString(R.string.mini_no_wechat)),
             actions = actions,
             image = image,
         )
     }
 
     /**
-     * The action that hands a code to WeChat's scanner. With the helper the scanner is shown the
-     * code and opens it, wherever it came from. Without it the scanner can only see what is in
-     * front of the camera, or an image picked from its album, so a history entry gets no action.
+     * The action that hands content to [target], which [open] does. Ready, the app opens the content
+     * wherever it came from. An app waiting for the helper only opens its scanner, which can still
+     * see a code in front of the camera, or pick an image from its album if it has one; a history
+     * entry then gets no action.
      */
-    private fun wechatAction(origin: Origin, run: (Activity) -> ActionResult): CardAction? {
+    private fun targetAction(
+        activity: Activity,
+        target: Target,
+        origin: Origin,
+        open: (Activity) -> Boolean,
+    ): CardAction? {
+        if (!target.installed(activity)) return null
         val label = when {
-            WeChatHelper.ready.value -> R.string.open_in_wechat
-            origin == Origin.CAMERA -> R.string.scan_in_wechat
-            origin == Origin.IMAGE -> R.string.open_wechat_scanner
+            target.ready -> R.string.open_in_app
+            origin == Origin.CAMERA -> R.string.scan_again_in_app
+            origin == Origin.IMAGE && target.album -> R.string.open_app_scanner
             else -> return null
         }
-        return CardAction(label, R.drawable.ic_open_in_new, WeChat.PACKAGE, run)
+        return CardAction(label, R.drawable.ic_open_in_new, target.pkg, target.name) {
+            if (open(it)) ActionResult.Handoff else ActionResult.Unavailable
+        }
     }
 
-    /** What the user has to do in WeChat without the helper, beyond what the action label says. */
-    private fun wechatGuide(origin: Origin): Int? = when {
-        WeChatHelper.ready.value -> null
-        origin == Origin.IMAGE -> R.string.wechat_pick_from_album
-        origin == Origin.HISTORY -> R.string.wechat_needs_module
-        else -> null
+    /** What the user has to do in an app waiting for the helper, beyond what its action says. */
+    private fun targetNote(activity: Activity, target: Target, origin: Origin): String? {
+        if (target.ready || !target.installed(activity)) return null
+        val name = activity.getString(target.name)
+        return when {
+            origin == Origin.CAMERA -> null
+            origin == Origin.IMAGE && target.album -> activity.getString(R.string.pick_from_album_in_app, name)
+            else -> activity.getString(R.string.needs_module_in_app, name)
+        }
     }
 
+    /**
+     * An app link nothing opened. The app it belongs to is offered when it has its own way in, and
+     * the general apps are not, since they open web links rather than other apps' schemes.
+     */
+    private fun scheme(activity: Activity, payload: SchemePayload, origin: Origin): ResultCard {
+        val owner = Targets.claimant(payload.raw)
+        val notes = listOfNotNull(
+            activity.getString(R.string.scheme_unhandled),
+            owner?.let { targetNote(activity, it, origin) },
+        )
+        val actions = listOfNotNull(
+            owner?.let { o -> targetAction(activity, o, origin) { o.open(it, payload.raw) } },
+            copy(payload.raw),
+            share(payload.raw),
+        )
+        return ResultCard(payload.raw, R.string.kind_app_link, R.drawable.ic_apps, payload.raw, null, notes, actions)
+    }
+
+    /**
+     * A web link. A code of an app that only its own scanner opens properly leads with that app;
+     * otherwise the browser does, followed by the general apps that open any link.
+     */
     private fun web(activity: Activity, payload: WebPayload, origin: Origin): ResultCard {
         val host = payload.host
-        val wechatInstalled = Launch.isInstalled(activity, WeChat.PACKAGE)
+        // A link printed without its scheme is claimed by its URL, and still handed over as printed.
+        val owner = Targets.claimant(payload.url)
         val notes = buildList {
-            if (payload.url.startsWith("http:", ignoreCase = true)) add(R.string.warn_http)
-            if (host.split('.').any { it.startsWith("xn--") } || host.any { it.code > 127 }) add(R.string.warn_idn)
-            if (IP_LITERAL.matches(host)) add(R.string.warn_ip)
-            // Only a WeChat code needs WeChat; for other links its scanner is just one more option.
-            if (wechatInstalled && WeChat.claims(payload.url)) wechatGuide(origin)?.let { add(it) }
+            if (payload.url.startsWith("http:", ignoreCase = true)) add(activity.getString(R.string.warn_http))
+            if (host.split('.').any { it.startsWith("xn--") } || host.any { it.code > 127 }) add(activity.getString(R.string.warn_idn))
+            if (IP_LITERAL.matches(host)) add(activity.getString(R.string.warn_ip))
+            // Only a code that belongs to an app needs that app; for other links it is one more option.
+            owner?.let { targetNote(activity, it, origin) }?.let { add(it) }
+        }
+        val offered = Targets.forText(payload.url).mapNotNull { target ->
+            targetAction(activity, target, origin) { target.open(it, payload.raw) }?.let { target to it }
+        }
+        val browser = CardAction(R.string.open, R.drawable.ic_open_in_new) {
+            if (Launch.browser(it, payload.url)) ActionResult.Handoff else ActionResult.Unavailable
         }
         val actions = buildList {
-            add(CardAction(R.string.open, R.drawable.ic_open_in_new) {
-                if (Launch.browser(it, payload.url)) ActionResult.Handoff else ActionResult.Unavailable
-            })
-            if (Launch.isInstalled(activity, Alipay.PACKAGE)) {
-                add(CardAction(R.string.open_in_alipay, R.drawable.ic_open_in_new, Alipay.PACKAGE) {
-                    if (Alipay.handoff(it, payload.raw)) ActionResult.Handoff else ActionResult.Unavailable
-                })
-            }
-            if (wechatInstalled) {
-                wechatAction(origin) { if (WeChat.openScanner(it, payload.raw)) ActionResult.Handoff else ActionResult.Unavailable }
-                    ?.let { add(it) }
-            }
+            offered.filter { it.first === owner }.forEach { add(it.second) }
+            add(browser)
+            offered.filter { it.first !== owner }.forEach { add(it.second) }
             add(copy(payload.raw))
             add(share(payload.raw))
         }
@@ -287,8 +318,8 @@ object Cards {
         val notes = when {
             suggestion != null || payload.security == WifiSecurity.OPEN -> emptyList()
             payload.security == WifiSecurity.WEP || payload.security == WifiSecurity.EAP ->
-                listOf(R.string.wifi_connect_unsupported)
-            else -> listOf(R.string.wifi_password_invalid)
+                listOf(activity.getString(R.string.wifi_connect_unsupported))
+            else -> listOf(activity.getString(R.string.wifi_password_invalid))
         }
         return ResultCard(payload.raw, R.string.kind_wifi, R.drawable.ic_wifi, payload.ssid, body, notes, actions)
     }

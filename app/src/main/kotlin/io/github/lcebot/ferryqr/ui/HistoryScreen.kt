@@ -21,6 +21,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -78,6 +80,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -130,6 +133,7 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
     var renaming by remember { mutableStateOf<HistoryEntry?>(null) }
     var showing by remember { mutableStateOf<ResultCard?>(null) }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    val layoutDirection = LocalLayoutDirection.current
     val favorites = remember(entries) { entries.filter { it.favorite }.sortedByDescending { it.favoritedAt } }
     val recent = remember(entries) { entries.filterNot { it.favorite } }
     val shortcutsFull = favorites.count { it.shortcut } >= FavoriteShortcuts.MAX
@@ -139,10 +143,12 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
         { Text(pluralStringResource(R.plurals.history_count, entries.size, entries.size)) }
     }
 
-    // A favorite is shown with its code drawn again, since it is usually kept to be scanned by others.
+    // The original code is no longer in sight, so every entry is shown with its code drawn again,
+    // to be scanned by another phone or kept as an image.
     fun open(entry: HistoryEntry) {
         val card = Cards.build(activity, Classifier.classify(entry.text, entry.format), entry.format, Origin.HISTORY)
-        showing = if (entry.favorite && card.image == null) card.copy(image = CodeGenerator.redraw(entry.text, entry.format)) else card
+        val image = card.image ?: CodeGenerator.redraw(entry.text, entry.format)
+        showing = card.copy(image = image, exportable = image != null)
     }
 
     LaunchedEffect(openText) {
@@ -222,8 +228,8 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
             )
             LazyColumn(
                 contentPadding = PaddingValues(
-                    start = 16.dp,
-                    end = 16.dp,
+                    start = padding.calculateStartPadding(layoutDirection) + 16.dp,
+                    end = padding.calculateEndPadding(layoutDirection) + 16.dp,
                     top = padding.calculateTopPadding(),
                     bottom = padding.calculateBottomPadding() + 24.dp,
                 ),
@@ -688,7 +694,7 @@ private fun EmptyHistory(modifier: Modifier) {
  * follow a row that becomes the first or last of its group, as when a neighbour is deleted.
  */
 @Composable
-private fun segmentShape(index: Int, count: Int): Shape {
+fun segmentShape(index: Int, count: Int): Shape {
     val spec = MaterialTheme.motionScheme.defaultEffectsSpec<Dp>()
     val top by animateDpAsState(if (index == 0) OUTER_CORNER else INNER_CORNER, spec, label = "row-top")
     val bottom by animateDpAsState(if (index == count - 1) OUTER_CORNER else INNER_CORNER, spec, label = "row-bottom")

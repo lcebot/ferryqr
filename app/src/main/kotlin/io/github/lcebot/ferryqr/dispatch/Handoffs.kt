@@ -5,7 +5,8 @@ import android.content.ComponentName
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
-import io.github.lcebot.ferryqr.helper.WeChatHelper
+import io.github.lcebot.ferryqr.openin.OpenInApps
+import io.github.lcebot.ferryqr.openin.OpenInHelper
 
 private const val NEW_TASK_CLEAR_TOP = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
 
@@ -32,10 +33,10 @@ internal object Alipay {
 
 /**
  * WeChat has no public entry that takes scanned content, so its scanner is opened. With the
- * optional LSPosed helper, the scanner is then shown the code in place of the camera image.
+ * optional LSPosed helper, the scanner then opens the content at once, as though it had read it.
  */
 internal object WeChat {
-    const val PACKAGE = "com.tencent.mm"
+    const val PACKAGE = OpenInApps.WECHAT
     /**
      * Profile, group and official account codes, the international profile host, mini program codes
      * that carry a plain link, website and web client login codes, and WeChat Pay merchant codes.
@@ -52,11 +53,21 @@ internal object WeChat {
     fun claims(text: String) = CODES.matches(text) || text.contains("wechat/oauth2")
 
     fun openScanner(activity: Activity, text: String): Boolean =
-        launchScanner(activity).also { if (it) WeChatHelper.handoff(activity, text) }
+        launchScanner(activity).also { if (it) OpenInHelper.handoff(activity, PACKAGE, text) }
+
+    /**
+     * For a mini program code that was read: the helper returns [text] as a mini program result.
+     * [picture] is the code drawn again, which the scanner is shown instead where the result cannot
+     * be replaced.
+     */
+    fun openMiniProgram(activity: Activity, text: String, picture: Bitmap): Boolean =
+        launchScanner(activity).also {
+            if (it) OpenInHelper.handoff(activity, PACKAGE, text, OpenInApps.MINI_PROGRAM_TYPE, picture)
+        }
 
     /** For a located code FerryQR cannot read, such as a mini program code: [image] is its region. */
     fun openScanner(activity: Activity, image: Bitmap): Boolean =
-        launchScanner(activity).also { if (it) WeChatHelper.handoff(activity, image) }
+        launchScanner(activity).also { if (it) OpenInHelper.handoff(activity, PACKAGE, image) }
 
     private fun launchScanner(activity: Activity): Boolean = Launch.start(
         activity,
@@ -65,6 +76,46 @@ internal object WeChat {
             .putExtra("LauncherUI.From.Scaner.Shortcut", true)
             .addFlags(NEW_TASK_CLEAR_TOP),
     )
+}
+
+/**
+ * Opens the scanner of [pkg] at [scanner] and has the LSPosed helper hand it [text]. Without the
+ * helper only the scanner opens, for the user to scan the code again.
+ */
+private fun openScannerWithHelper(activity: Activity, pkg: String, scanner: String, text: String): Boolean {
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(scanner)).setPackage(pkg).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    return Launch.start(activity, intent).also { if (it) OpenInHelper.handoff(activity, pkg, text) }
+}
+
+/** Bike and e-bike codes, and Didi's short links, which its scanner sends to the right service. */
+internal object Didi {
+    const val PACKAGE = OpenInApps.DIDI
+    private const val SCANNER = "OneTravel://router/page/open_scan"
+    private val CODES = Regex("^https?://(?:z\\.didi\\.cn|dc\\.tt)/.*", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+
+    fun claims(text: String) = CODES.matches(text)
+
+    fun openScanner(activity: Activity, text: String) = openScannerWithHelper(activity, PACKAGE, SCANNER, text)
+}
+
+/**
+ * Bike codes, and the shop and grocery codes that Meituan's scan screen hands on to their own
+ * pages. Meituan matches these by exact prefix, case included. Rebate codes are left out, since
+ * Meituan handles them inside the camera screen, which the helper closes.
+ */
+internal object Meituan {
+    const val PACKAGE = OpenInApps.MEITUAN
+    private const val SCANNER = "imeituan://www.meituan.com/scanQRCode"
+    private val CODES = Regex(
+        "^(?:http://(?:www\\.mobike\\.com/download/app\\.html\\?b=|t8\\.pub|t9\\.pub)" +
+            "|https://g\\.meituan\\.com/qrcode/transfer\\?" +
+            "|https://mall\\.meituan\\.com/maicai/jumpBD\\.html).*",
+        RegexOption.DOT_MATCHES_ALL,
+    )
+
+    fun claims(text: String) = CODES.matches(text)
+
+    fun openScanner(activity: Activity, text: String) = openScannerWithHelper(activity, PACKAGE, SCANNER, text)
 }
 
 /** Xiaomi apps reached through private intents that no generic link resolution can find. */

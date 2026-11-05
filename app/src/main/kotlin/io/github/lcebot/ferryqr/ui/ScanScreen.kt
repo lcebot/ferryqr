@@ -85,7 +85,7 @@ import kotlin.math.abs
 private val MIN_LABEL_SIZE = 9.sp
 
 @Composable
-fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: () -> Unit) {
+fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: () -> Unit, onOpenSettings: () -> Unit) {
     val activity = LocalActivity.current ?: return
     val context = LocalContext.current
     val phase by vm.phase.collectAsStateWithLifecycle()
@@ -252,6 +252,15 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
                 TopIconButton(R.drawable.ic_history, R.string.action_history, onOpenHistory)
             }
 
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(padding)
+                    .padding(16.dp),
+            ) {
+                TopIconButton(R.drawable.ic_settings, R.string.action_settings, onOpenSettings)
+            }
+
             (phase as? Phase.Picking)?.let { picking ->
                 PickOverlay(picking.frame, picking.detections, picking.alreadyShown, onPick = vm::pick, onClose = vm::resume)
             }
@@ -374,7 +383,7 @@ private fun TorchButton(checked: Boolean, onCheckedChange: (Boolean) -> Unit, mo
     }
 }
 
-/** Tells the user that WeChat codes skip the second scan, because the LSPosed helper answered. */
+/** Tells the user that WeChat codes skip the second scan, because the module is enabled for WeChat. */
 @Composable
 private fun HelperNotice() {
     Surface(

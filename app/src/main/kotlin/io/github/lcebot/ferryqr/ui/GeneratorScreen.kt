@@ -9,7 +9,15 @@ import android.os.Build
 import androidx.activity.compose.LocalActivity
 import androidx.annotation.StringRes
 import androidx.compose.foundation.Image
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -75,6 +83,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.material3.DropdownMenuGroup
 import androidx.compose.material3.DropdownMenuItem
@@ -86,23 +95,16 @@ import androidx.compose.material3.FloatingToolbarDefaults
 import androidx.compose.material3.HorizontalFloatingToolbar
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LocalContentColor
-import androidx.compose.material3.PlainTooltip
-import androidx.compose.material3.TooltipAnchorPosition
-import androidx.compose.material3.TooltipBox
-import androidx.compose.material3.TooltipDefaults
-import androidx.compose.material3.rememberTooltipState
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import io.github.lcebot.ferryqr.R
-import io.github.lcebot.ferryqr.dispatch.Alipay
-import io.github.lcebot.ferryqr.dispatch.Launch
-import io.github.lcebot.ferryqr.dispatch.WeChat
+import io.github.lcebot.ferryqr.dispatch.Targets
 import io.github.lcebot.ferryqr.generate.CodeExport
 import io.github.lcebot.ferryqr.generate.CodeGenerator
 import io.github.lcebot.ferryqr.generate.CodeType
 import io.github.lcebot.ferryqr.generate.Generated
-import io.github.lcebot.ferryqr.helper.WeChatHelper
+import io.github.lcebot.ferryqr.openin.OpenInHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -145,12 +147,17 @@ fun GeneratorScreen(onBack: () -> Unit) {
     var type by rememberSaveable { mutableStateOf(CodeType.QR) }
     var prefilled by rememberSaveable { mutableStateOf(false) }
     var result by remember { mutableStateOf<Generated?>(null) }
-    val alipayInstalled = remember { Launch.isInstalled(context, Alipay.PACKAGE) }
-    val wechatInstalled = remember { Launch.isInstalled(context, WeChat.PACKAGE) }
-    val helperReady by WeChatHelper.ready.collectAsState()
+    // Every installed app the text could go to, in the order the toolbar shows them: an app that
+    // appears for its own code comes first, as it does on result cards.
+    val candidates = remember { Targets.all.filter { it.installed(context) }.sortedBy { it.general } }
+    val appFade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+    val appResize = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
+    val ready = candidates.associate { target ->
+        target.pkg to (!target.viaModule || OpenInHelper.ready(target.pkg).collectAsState().value)
+    }
 
-    // The scanner probes on start, but the generator can be reached before that probe has answered.
-    LaunchedEffect(Unit) { if (!WeChatHelper.ready.value) WeChatHelper.probe(context) }
+    // The scope may have changed in LSPosed since the scanner last asked.
+    LaunchedEffect(Unit) { OpenInHelper.refresh() }
 
     // Android only lets the focused app read the clipboard, so wait for focus before reading it.
     LaunchedEffect(Unit) {
@@ -208,7 +215,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
                 context.startActivity(chooser)
             } else {
                 haptics.reject()
-                snackbar.showSnackbar(context.getString(R.string.generate_share_failed))
+                snackbar.showSnackbar(context.getString(R.string.code_share_failed))
             }
         }
     }
@@ -300,57 +307,56 @@ fun GeneratorScreen(onBack: () -> Unit) {
                 )
 
                 // What is done with the code sits in one toolbar: actions on the code itself, then the
-                // apps that can open the text, with sharing as the main way out.
-                val apps = buildList {
-                    if (activity == null) return@buildList
-                    if (alipayInstalled) {
-                        add(SendApp(R.string.generate_send_alipay, Alipay.PACKAGE, looksEnabled = true) {
-                            haptics.tap()
-                            if (!Alipay.handoff(activity, text)) scope.launch { snackbar.showSnackbar(context.getString(R.string.no_app)) }
-                        })
-                    }
-                    if (wechatInstalled) {
-                        // Without the helper WeChat could only open its scanner on nothing, so the
-                        // button looks disabled but still explains why when tapped.
-                        add(SendApp(R.string.generate_send_wechat, WeChat.PACKAGE, looksEnabled = helperReady) {
-                            if (!helperReady) {
+                // apps that can open the text, with sharing as the main way out. The apps are the ones
+                // result cards offer for the same content.
+                val apps = candidates.associateWith { target ->
+                    val name = context.getString(target.name)
+                    // Without the helper the app could only open its scanner on nothing, so the
+                    // button looks disabled but still explains why when tapped.
+                    val looksEnabled = ready.getValue(target.pkg)
+                    SendApp(context.getString(R.string.open_in_app, name), target.pkg, looksEnabled) {
+                        when {
+                            activity == null -> Unit
+                            !looksEnabled -> {
                                 haptics.reject()
-                                scope.launch { snackbar.showSnackbar(context.getString(R.string.wechat_needs_module)) }
-                            } else {
-                                haptics.tap()
-                                if (!WeChat.openScanner(activity, text)) scope.launch { snackbar.showSnackbar(context.getString(R.string.no_app)) }
+                                scope.launch { snackbar.showSnackbar(context.getString(R.string.needs_module_in_app, name)) }
                             }
-                        })
+                            else -> {
+                                haptics.tap()
+                                if (!target.open(activity, text)) scope.launch { snackbar.showSnackbar(context.getString(R.string.no_app)) }
+                            }
+                        }
                     }
                 }
-                val placement = sendPlacement(apps.size, toolbarRoom)
+                val offered = remember(text, candidates) { Targets.forText(text).filter { it in candidates }.toSet() }
+                val placement = sendPlacement(offered.size, toolbarRoom)
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                     HorizontalFloatingToolbar(
                         expanded = true,
                         floatingActionButton = { ShareButton(enabled = code != null, onClick = ::share) },
                     ) {
-                        Labeled(R.string.generate_copy) {
+                        Labeled(R.string.code_copy) {
                             IconButton(
                                 onClick = {
                                     // Android 13 and later preview clipboard contents themselves.
-                                    export(CodeExport::copy, R.string.generate_copied, R.string.generate_copy_failed,
+                                    export(CodeExport::copy, R.string.code_copied, R.string.code_copy_failed,
                                         quietOnSuccess = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
                                 },
                                 enabled = code != null,
                                 shapes = IconButtonDefaults.shapes(),
                             ) {
-                                Icon(painterResource(R.drawable.ic_content_copy), stringResource(R.string.generate_copy))
+                                Icon(painterResource(R.drawable.ic_content_copy), stringResource(R.string.code_copy))
                             }
                         }
-                        Labeled(R.string.generate_save) {
+                        Labeled(R.string.code_save) {
                             IconButton(
                                 onClick = {
-                                    export(CodeExport::save, R.string.generate_saved, R.string.generate_save_failed, quietOnSuccess = false)
+                                    export(CodeExport::save, R.string.code_saved, R.string.code_save_failed, quietOnSuccess = false)
                                 },
                                 enabled = code != null,
                                 shapes = IconButtonDefaults.shapes(),
                             ) {
-                                Icon(painterResource(R.drawable.ic_download), stringResource(R.string.generate_save))
+                                Icon(painterResource(R.drawable.ic_download), stringResource(R.string.code_save))
                             }
                         }
                         // Kept codes are shown again from history, drawn the same way as here. The toggle
@@ -366,13 +372,40 @@ fun GeneratorScreen(onBack: () -> Unit) {
                                 ),
                             )
                         }
-                        if (placement != SendPlacement.NONE) {
-                            Spacer(Modifier.width(GROUP_GAP))
-                            AppGroup {
-                                if (placement == SendPlacement.MENU) {
-                                    SendMenu(apps, enabled = text.isNotEmpty())
-                                } else {
-                                    apps.forEach { app -> AppButton(app, enabled = text.isNotEmpty()) }
+                        AnimatedVisibility(
+                            visible = placement != SendPlacement.NONE,
+                            enter = fadeIn(appFade) + expandHorizontally(appResize),
+                            exit = fadeOut(appFade) + shrinkHorizontally(appResize),
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Spacer(Modifier.width(GROUP_GAP))
+                                AppGroup {
+                                    // Crossing the width at which the apps no longer fit folds them into
+                                    // the overflow button, and the pill resizes between the two.
+                                    AnimatedContent(
+                                        targetState = placement == SendPlacement.MENU,
+                                        transitionSpec = {
+                                            fadeIn(appFade) togetherWith fadeOut(appFade) using
+                                                SizeTransform(clip = false) { _, _ -> appResize }
+                                        },
+                                        label = "app-placement",
+                                    ) { inMenu ->
+                                        if (inMenu) {
+                                            SendMenu(candidates.filter { it in offered }.map(apps::getValue), enabled = text.isNotEmpty())
+                                        } else {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                for (target in candidates) {
+                                                    AnimatedVisibility(
+                                                        visible = target in offered,
+                                                        enter = fadeIn(appFade) + expandHorizontally(appResize),
+                                                        exit = fadeOut(appFade) + shrinkHorizontally(appResize),
+                                                    ) {
+                                                        AppButton(apps.getValue(target), enabled = text.isNotEmpty())
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -385,7 +418,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
 
 /** An app the text can be opened in. [looksEnabled] false draws it disabled while it still explains itself. */
 private class SendApp(
-    @StringRes val label: Int,
+    val label: String,
     val app: String,
     val looksEnabled: Boolean,
     val onClick: () -> Unit,
@@ -453,7 +486,7 @@ private fun SendMenu(apps: List<SendApp>, enabled: Boolean) {
                             open = false
                             app.onClick()
                         },
-                        text = { Text(stringResource(app.label)) },
+                        text = { Text(app.label) },
                         shape = menuItemShape(index, apps.size),
                         leadingIcon = {
                             AppIcon(
@@ -468,17 +501,6 @@ private fun SendMenu(apps: List<SendApp>, enabled: Boolean) {
             }
         }
     }
-}
-
-/** Icon-only controls name themselves in a tooltip on long press, as well as to screen readers. */
-@Composable
-private fun Labeled(@StringRes label: Int, content: @Composable () -> Unit) {
-    TooltipBox(
-        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
-        tooltip = { PlainTooltip { Text(stringResource(label)) } },
-        state = rememberTooltipState(),
-        content = content,
-    )
 }
 
 /**
@@ -501,13 +523,13 @@ private fun ShareButton(enabled: Boolean, onClick: () -> Unit) {
         effects,
         label = "share-content",
     )
-    Labeled(R.string.generate_share) {
+    Labeled(R.string.code_share) {
         FloatingToolbarDefaults.StandardFloatingActionButton(
             onClick = { if (enabled) onClick() else haptics.reject() },
             containerColor = container,
             contentColor = content,
         ) {
-            Icon(painterResource(R.drawable.ic_share), stringResource(R.string.generate_share))
+            Icon(painterResource(R.drawable.ic_share), stringResource(R.string.code_share))
         }
     }
 }
@@ -520,7 +542,7 @@ private fun AppButton(app: SendApp, enabled: Boolean) {
         MaterialTheme.motionScheme.defaultEffectsSpec(),
         label = "app-button",
     )
-    val description = stringResource(app.label)
+    val description = app.label
     Labeled(app.label) {
         IconButton(
             onClick = app.onClick,

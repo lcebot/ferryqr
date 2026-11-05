@@ -91,7 +91,7 @@ jobs:
           echo "$tag -> versionName=$name versionCode=$code"
 
       - name: test
-        run: gradle :wxcode:test --no-daemon
+        run: gradle :wxcode:test :app:testDebugUnitTest --no-daemon
 
       - name: build
         env:

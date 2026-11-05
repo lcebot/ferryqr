@@ -52,16 +52,17 @@
     <string name="wifi_password_invalid">密码无效，无法自动连接</string>
 
     <string name="open">在浏览器中打开</string>
-    <string name="open_in_alipay">在支付宝中打开</string>
-    <string name="scan_in_wechat">在微信中再次扫码</string>
-    <string name="open_in_wechat">在微信中打开</string>
-    <string name="wechat_pick_from_album">请在微信扫一扫中从相册选择这张图片。</string>
+    <string name="app_alipay">支付宝</string>
+    <string name="open_in_app">在%1$s中打开</string>
+    <string name="scan_again_in_app">在%1$s中再次扫码</string>
+    <string name="open_app_scanner">打开%1$s扫一扫</string>
+    <string name="pick_from_album_in_app">请在%1$s扫一扫中从相册选择这张图片。</string>
+    <string name="needs_module_in_app">在%1$s中打开需要在 LSPosed 中启用 FerryQR</string>
     <string name="kind_mini_program">小程序码</string>
     <string name="mini_headline">可能是微信小程序码</string>
     <string name="mini_body_helper">FerryQR 未能解析此二维码。可尝试在微信中打开。</string>
     <string name="mini_body_album">FerryQR 未能解析此二维码。可尝试在微信扫一扫中从相册再次选择这张图片。</string>
     <string name="mini_body_scan">FerryQR 未能解析此二维码。可尝试在微信中再次扫描。</string>
-    <string name="open_wechat_scanner">打开微信扫一扫</string>
     <string name="mini_no_wechat">未安装微信</string>
     <string name="mini_read_headline">微信小程序码</string>
     <string name="mini_read_body">小程序只能在微信中打开。</string>
@@ -94,6 +95,25 @@
     <string name="list_separator">、</string>
 
     <string name="action_history">扫描历史</string>
+    <string name="action_settings">设置</string>
+    <string name="settings_title">设置</string>
+    <string name="settings_open_in_title">在其他应用中打开</string>
+    <string name="settings_open_in_intro">在 LSPosed 中启用 FerryQR 后，这些应用的码会直接在它们自己的扫一扫中打开。“直接返回”把内容作为扫码结果交给应用；“相机画面”把码显示给应用的相机。</string>
+    <string name="app_wechat">微信</string>
+    <string name="app_didi">滴滴出行</string>
+    <string name="app_meituan">美团</string>
+    <string name="app_not_installed">未安装</string>
+    <string name="module_active">模块已生效</string>
+    <string name="module_inactive">未在 LSPosed 中启用 FerryQR</string>
+    <string name="module_out_of_scope">未在 LSPosed 中加入 FerryQR 的作用域</string>
+    <string name="module_enabled">已启用。如果%1$s已经在运行，请重启一次。</string>
+    <string name="module_outdated">请重启%1$s以加载更新后的 FerryQR</string>
+    <string name="method_direct">直接返回</string>
+    <string name="method_camera">相机画面</string>
+    <string name="method_direct_desc">把内容作为扫码结果直接交给%1$s。速度最快，内容长短不限。</string>
+    <string name="method_camera_desc">把码显示给%1$s的相机，与真实扫码相同。速度较慢，但只依赖 Android 的相机接口，%1$s更新导致“直接返回”失效时仍然可用。</string>
+    <string name="method_didi_reason">仅支持相机画面。滴滴每次更新都会重新混淆扫码相关的代码，无法直接交出结果。</string>
+    <string name="method_meituan_reason">仅支持直接返回。美团的扫码界面能稳定接收返回的结果，无需经过相机。</string>
     <string name="history_title">历史记录</string>
     <plurals name="history_count">
         <item quantity="other">%1$d 条记录</item>
@@ -125,6 +145,9 @@
     <string name="shortcut_added">已添加，长按 FerryQR 图标即可打开</string>
     <string name="code_tap_enlarge">点击放大</string>
     <string name="code_tap_shrink">点击缩小</string>
+    <string name="code_tap_enlarge_more">点击放大，长按查看更多操作</string>
+    <string name="code_tap_shrink_more">点击缩小，长按查看更多操作</string>
+    <string name="code_more">更多操作</string>
     <string name="code_enlarge">放大</string>
     <string name="code_shrink">缩小</string>
 
@@ -134,21 +157,18 @@
     <string name="generate_placeholder">输入或粘贴文字</string>
     <string name="generate_clear">清除文字</string>
     <string name="generate_empty">输入内容后显示生成的二维码</string>
-    <string name="generate_copy">复制图片</string>
-    <string name="generate_save">保存到相册</string>
-    <string name="generate_copied">已复制图片</string>
-    <string name="generate_copy_failed">无法复制图片</string>
-    <string name="generate_saved">已保存到 Pictures/FerryQR</string>
-    <string name="generate_save_failed">无法保存图片</string>
-    <string name="generate_share">分享图片</string>
-    <string name="generate_share_failed">无法分享图片</string>
-    <string name="generate_send_alipay">在支付宝中打开</string>
-    <string name="generate_send_wechat">在微信中打开</string>
-    <string name="wechat_needs_module">在微信中打开需要在 LSPosed 中启用 FerryQR</string>
+    <string name="code_copy">复制图片</string>
+    <string name="code_save">保存到相册</string>
+    <string name="code_copied">已复制图片</string>
+    <string name="code_copy_failed">无法复制图片</string>
+    <string name="code_saved">已保存到 Pictures/FerryQR</string>
+    <string name="code_save_failed">无法保存图片</string>
+    <string name="code_share">分享图片</string>
+    <string name="code_share_failed">无法分享图片</string>
     <string name="generate_too_long">内容超出%1$s的容量，可改用%2$s。</string>
     <string name="generate_too_long_all">内容超出所有码制的容量</string>
     <string name="generate_clip_label">二维码</string>
     <string name="type_qr">QR 码</string>
 
-    <string name="xposed_description">直接在微信中打开微信二维码，无需再次扫描</string>
+    <string name="xposed_description">FerryQR 是一个 Android 扫码应用。把摄像头对准二维码，FerryQR 会用对应的应用打开它。如果没有合适的应用，则直接显示二维码的内容，可以复制、搜索或分享。</string>
 </resources>

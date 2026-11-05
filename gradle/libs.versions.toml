@@ -36,6 +36,8 @@ wechat-opencv = { module = "com.github.jenly1314.WeChatQRCode:opencv", version.r
 wechat-opencv-arm64 = { module = "com.github.jenly1314.WeChatQRCode:opencv-armv64", version.ref = "wechatQrcode" }
 wechat-qrcode = { module = "com.github.jenly1314.WeChatQRCode:wechat-qrcode", version.ref = "wechatQrcode" }
 libxposed-api = { module = "io.github.libxposed:api", version.ref = "libxposed" }
+libxposed-service = { module = "io.github.libxposed:service", version.ref = "libxposed" }
+kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
