@@ -12,7 +12,7 @@ name: build
 on:
   push:
     branches: ["**"]
-    paths: ["app/**", "wxcode/**", "*.gradle.kts", "gradle/**", ".github/workflows/build.yml"]
+    paths: ["app/**", "wxcode/**", "lsposed-repo/**", "*.gradle.kts", "gradle.properties", "gradle/**", ".github/workflows/build.yml"]
   release:
     types: [published]
   workflow_dispatch:

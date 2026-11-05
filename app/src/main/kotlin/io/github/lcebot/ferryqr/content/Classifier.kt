@@ -16,7 +16,7 @@ object Classifier {
     private val WHITESPACE = Regex("\\s")
 
     /** Schemes that must never be handed to another app from untrusted input. */
-    private val BLOCKED_SCHEMES = setOf("file", "content", "javascript", "data", "about", "blob")
+    val BLOCKED_SCHEMES = setOf("file", "content", "javascript", "data", "about", "blob")
 
     /** [format] is the symbology the content came from, which settles it for mini program codes. */
     fun classify(raw: String, format: String = ""): Payload {

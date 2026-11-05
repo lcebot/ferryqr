@@ -30,11 +30,10 @@ object WxDecoder {
     /**
      * Reads the code whose eyes are at [eyes], in any order, or returns null. The eyes fix the
      * geometry up to perspective; the badge, when found, fixes that too. A small search around
-     * that geometry absorbs the eyes' own error. [thorough] adds a search over perspective tilts,
-     * for tilted codes whose badge is hidden or misread, which costs tens of milliseconds when
-     * nothing decodes.
+     * that geometry absorbs the eyes' own error, and a search over perspective tilts covers tilted
+     * codes whose badge is hidden or misread, at a cost of tens of milliseconds when nothing decodes.
      */
-    fun decode(image: LumaImage, eyes: List<Point>, thorough: Boolean = true): WxCode? {
+    fun decode(image: LumaImage, eyes: List<Point>): WxCode? {
         require(eyes.size == 3) { "a code has three eyes" }
         val ordered = orderEyes(eyes)
         val affine = Homography.throughEyes(ordered, 0.0, 0.0)
@@ -45,10 +44,8 @@ object WxDecoder {
         val fourPoint = badge?.let { Homography.through(WxStyle.eyes + WxStyle.badge, ordered.toList() + it) }
         if (fourPoint != null) search.run(listOf(fourPoint), NEAR, strict = true)?.let { return it }
         search.run(listOf(affine), WIDE, strict = true)?.let { return it }
-        if (thorough) {
-            search.run(PERSPECTIVES.map { (p, q) -> Homography.throughEyes(ordered, p, q) }, TIGHT, strict = true)
-                ?.let { return it }
-        }
+        search.run(PERSPECTIVES.map { (p, q) -> Homography.throughEyes(ordered, p, q) }, TIGHT, strict = true)
+            ?.let { return it }
         return search.run(listOf(affine), NEAR, strict = false)
     }
 

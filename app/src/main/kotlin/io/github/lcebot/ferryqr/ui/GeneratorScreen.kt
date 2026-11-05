@@ -57,7 +57,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -92,11 +91,11 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.window.PopupProperties
 import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.dispatch.Target
+import io.github.lcebot.ferryqr.content.Classifier
 import io.github.lcebot.ferryqr.dispatch.Targets
 import io.github.lcebot.ferryqr.generate.CodeGenerator
 import io.github.lcebot.ferryqr.generate.CodeType
 import io.github.lcebot.ferryqr.generate.Generated
-import io.github.lcebot.ferryqr.openin.OpenInModule
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -145,12 +144,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
     val candidates = remember { Targets.all.filter { it.installed(context) }.sortedBy { it.general } }
     val appFade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
     val appResize = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
-    val ready = candidates.associate { target ->
-        target.pkg to (!target.viaModule || OpenInModule.ready(target.pkg).collectAsState().value)
-    }
-
-    // The scope may have changed in LSPosed since the scanner last asked.
-    LaunchedEffect(Unit) { OpenInModule.refresh() }
+    val ready = targetsReady()
 
     // Android only lets the focused app read the clipboard, so wait for focus before reading it.
     LaunchedEffect(Unit) {
@@ -268,7 +262,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
                     val name = context.getString(target.name)
                     // Without the module the app could only open its scanner on nothing, so the
                     // button looks disabled but still explains why when tapped.
-                    val looksEnabled = ready.getValue(target.pkg)
+                    val looksEnabled = ready.getValue(target)
                     SendApp(context.getString(R.string.open_in_app, name), target.pkg, looksEnabled) {
                         when {
                             activity == null -> Unit
@@ -283,16 +277,27 @@ fun GeneratorScreen(onBack: () -> Unit) {
                         }
                     }
                 }
-                val offered = remember(text, candidates) { Targets.forText(text).filter { it in candidates } }
-                val owner = remember(text, candidates) { Targets.claimant(text)?.takeIf { it in candidates } }
+                val payload = remember(text) { Classifier.classify(text) }
+                val offered = remember(payload, candidates) { Targets.offeredFor(payload).filter { it in candidates } }
+                val owner = remember(payload, candidates) { Targets.claimant(payload)?.takeIf { it in candidates } }
                 val layout = sendLayout(offered, owner, toolbarRoom)
                 CodeToolbar(
                     code = code,
                     onMessage = { message -> scope.launch { snackbar.showSnackbar(context.getString(message)) } },
                     favorite = {
-                        // Kept codes are shown again from history, drawn the same way as here.
+                        // Kept codes are shown again from history, drawn the same way as here. Unstarred,
+                        // the toggle takes the toolbar's own content colour, like save and copy beside it;
+                        // starred, it fills like the favorite on result cards.
                         Labeled(R.string.favorite) {
-                            FavoriteToggle(text, type.format.name, enabled = code != null)
+                            FavoriteToggle(
+                                text,
+                                type.format.name,
+                                enabled = code != null,
+                                colors = IconButtonDefaults.iconToggleButtonColors(
+                                    checkedContainerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                                    checkedContentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                                ),
+                            )
                         }
                     },
                 ) {

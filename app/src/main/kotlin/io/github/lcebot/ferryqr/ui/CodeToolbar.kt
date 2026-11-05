@@ -25,6 +25,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -143,20 +144,25 @@ fun handoffContainer(): Color = MaterialTheme.colorScheme.surfaceContainerHighes
 /**
  * Sharing is the toolbar's floating action button, in the same tone as any group of apps, since it
  * too hands the code to another app. A FAB has no disabled state of its own, so with no code yet it
- * takes the disabled colours and answers a tap only with a rejecting buzz.
+ * takes the disabled colours and answers a tap only with a rejecting buzz. Those colours are laid
+ * onto the page first: fading from a translucent colour would pass through a lighter one, and the
+ * FAB's shadow would show through it.
  */
 @Composable
 private fun ShareButton(enabled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val haptics = rememberHaptics()
     val defaults = FloatingToolbarDefaults.standardFloatingToolbarColors()
     val effects = MaterialTheme.motionScheme.defaultEffectsSpec<Color>()
+    val onSurface = MaterialTheme.colorScheme.onSurface
+    val disabledContainer = onSurface.copy(alpha = 0.12f).compositeOver(MaterialTheme.colorScheme.surface)
+    val disabledContent = onSurface.copy(alpha = 0.38f).compositeOver(disabledContainer)
     val container by animateColorAsState(
-        if (enabled) handoffContainer() else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
+        if (enabled) handoffContainer() else disabledContainer,
         effects,
         label = "share-container",
     )
     val content by animateColorAsState(
-        if (enabled) defaults.toolbarContentColor else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+        if (enabled) defaults.toolbarContentColor else disabledContent,
         effects,
         label = "share-content",
     )

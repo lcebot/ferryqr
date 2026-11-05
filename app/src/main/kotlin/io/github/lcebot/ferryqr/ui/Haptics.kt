@@ -23,7 +23,7 @@ class Haptics(private val feedback: HapticFeedback) {
     /** Something could not be done. */
     fun reject() = feedback.performHapticFeedback(HapticFeedbackType.Reject)
 
-    /** A code was found while the rest of the frame is still being read. */
+    /** A code was found: while the rest of the frame is still being read, or a mini program code located. */
     fun found() = feedback.performHapticFeedback(HapticFeedbackType.SegmentTick)
 
     /** The lightest feedback, for selections and for passing a step while dragging. */

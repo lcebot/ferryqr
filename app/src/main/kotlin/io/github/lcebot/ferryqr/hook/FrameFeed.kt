@@ -20,7 +20,7 @@ import kotlin.math.min
 /** How long an armed feed waits for the scanner's camera to deliver its first frame. */
 private const val WAIT_MS = 8_000L
 
-/** How long frames are replaced once the first one was; WeChat reads a clean code in far less. */
+/** How long frames are replaced once the first one was; a scanner reads a clean code in far less. */
 private const val FEED_MS = 3_000L
 
 /** The symbol's share of the frame's shorter side, small enough to sit inside any scan window. */
@@ -36,10 +36,11 @@ private const val LIGHT: Byte = -1
 private const val NEUTRAL_CHROMA: Byte = -128
 
 /**
- * Replaces the luma of WeChat's camera frames with the handed-off code for a few seconds, so its
- * scanner reads exactly that one code at once: no aiming, and no choice between several codes.
- * A readable code is drawn by FerryQR's own [CodeGenerator]; one FerryQR cannot read, such as a
- * mini program code, arrives as a picture of its region. Either is centred on a white frame.
+ * Replaces the luma of a supported app's camera frames with the handed-off code for a few seconds,
+ * so its scanner reads exactly that one code at once: no aiming, and no choice between several
+ * codes. Text is drawn as a QR code by FerryQR's own [CodeGenerator]; a code that is not a QR
+ * code arrives as a picture, either the region of a code FerryQR could not read or a mini program
+ * code drawn again from what it read. Either is centred on a white frame.
  */
 internal object FrameFeed {
 

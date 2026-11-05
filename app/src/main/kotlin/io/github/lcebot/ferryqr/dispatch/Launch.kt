@@ -19,6 +19,7 @@ import android.provider.ContactsContract
 import android.provider.ContactsContract.Intents.Insert
 import android.provider.Settings
 import io.github.lcebot.ferryqr.content.CalendarEvent
+import io.github.lcebot.ferryqr.content.Classifier
 import io.github.lcebot.ferryqr.content.Contact
 import io.github.lcebot.ferryqr.content.WifiPayload
 import io.github.lcebot.ferryqr.content.WifiSecurity
@@ -26,7 +27,6 @@ import java.net.URISyntaxException
 
 internal object Launch {
 
-    private val BLOCKED_SCHEMES = setOf("file", "content", "javascript", "data", "about", "blob")
 
     fun start(activity: Activity, intent: Intent): Boolean = try {
         activity.startActivity(intent)
@@ -63,7 +63,7 @@ internal object Launch {
         intent.selector = null
         intent.flags = 0
         intent.addCategory(Intent.CATEGORY_BROWSABLE)
-        if (intent.data?.scheme?.lowercase() in BLOCKED_SCHEMES) return false
+        if (intent.data?.scheme?.lowercase() in Classifier.BLOCKED_SCHEMES) return false
         if (start(activity, intent)) return true
         val fallbackUri = fallback?.let(Uri::parse)
             ?.takeIf { it.scheme.equals("https", true) || it.scheme.equals("http", true) }

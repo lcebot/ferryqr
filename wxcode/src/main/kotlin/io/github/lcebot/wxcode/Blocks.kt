@@ -14,9 +14,6 @@ enum class EcLevel(internal val formatBits: Int) {
     }
 }
 
-/** The supported versions, 0 to 3. They share the grid and differ in which cells hold data. */
-internal const val VERSIONS = 4
-
 /** How a version and level split their codewords into Reed-Solomon blocks. */
 internal class BlockLayout(val ecPerBlock: Int, val dataPerBlock: IntArray) {
     val dataCodewords = dataPerBlock.sum()

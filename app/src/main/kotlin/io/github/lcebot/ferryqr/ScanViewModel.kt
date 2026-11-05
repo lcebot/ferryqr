@@ -53,8 +53,8 @@ sealed interface Phase {
     data class Routing(val detection: Detection, val origin: Origin) : Phase
 
     /**
-     * Probably a mini program code, which FerryQR cannot read, shown as [crop]. [live] is set when
-     * the camera saw it, so WeChat's own scanner can still see it too.
+     * Probably a mini program code, located but not read, shown as [crop]. [live] is set when the
+     * camera saw it, so WeChat's own scanner can still see it too.
      */
     data class MiniCodeFound(val crop: Bitmap, val live: Boolean) : Phase
     data class Showing(val card: ResultCard) : Phase

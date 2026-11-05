@@ -55,6 +55,14 @@ enum class ModuleState {
 
     /** The running app still holds the FerryQR from before an update, until it restarts. */
     Outdated,
+    ;
+
+    /**
+     * Whether the app takes content from FerryQR: the module is enabled for it, whether or not the
+     * app is running, unless the running app still holds an older FerryQR, which may not understand
+     * this one and waits for a restart.
+     */
+    val takesContent: Boolean get() = this == Enabled || this == Loaded
 }
 
 /**
@@ -97,9 +105,8 @@ object OpenInModule {
     fun state(pkg: String): StateFlow<ModuleState> = stateFlow(pkg)
 
     /**
-     * Whether [pkg] takes content from FerryQR: the module is enabled for it, whether or not the app
-     * is running, unless the running app still holds an older FerryQR. Every call returns the same flow, so a composable collecting it is not restarted
-     * on recomposition.
+     * Whether [pkg] takes content from FerryQR, as [ModuleState.takesContent] says. Every call
+     * returns the same flow, so a composable collecting it is not restarted on recomposition.
      */
     fun ready(pkg: String): StateFlow<Boolean> = readyFlow(pkg)
 
@@ -144,8 +151,7 @@ object OpenInModule {
                 }
             }
             stateFlow(app.pkg).value = state
-            // A running app with an older FerryQR may not understand this one, so it waits for a restart.
-            readyFlow(app.pkg).value = state == ModuleState.Enabled || state == ModuleState.Loaded
+            readyFlow(app.pkg).value = state.takesContent
         }
     }
 
@@ -192,6 +198,9 @@ object OpenInModule {
     private fun prefs(context: Context) = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     private fun handoff(context: Context, pkg: String, content: (Intent) -> Unit) {
+        // An app that does not take content only has its scanner opened, for the code to be scanned
+        // again; an older module there is left alone rather than handed what it may misread.
+        if (!readyFlow(pkg).value) return
         val app = context.applicationContext
         val id = SystemClock.elapsedRealtimeNanos()
         val giveUpAt = SystemClock.uptimeMillis() + HANDOFF_WINDOW_MS

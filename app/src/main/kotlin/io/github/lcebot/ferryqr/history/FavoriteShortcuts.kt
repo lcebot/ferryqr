@@ -68,7 +68,7 @@ object FavoriteShortcuts {
     private fun shortcut(context: Context, entry: HistoryEntry, rank: Int): ShortcutInfoCompat {
         val payload = Classifier.classify(entry.text, entry.format)
         val kind = Cards.kindOf(payload)
-        val title = entry.label ?: Cards.titleOf(payload) ?: context.getString(kind.label)
+        val title = entry.label ?: Cards.titleOf(context, payload) ?: context.getString(kind.label)
         // History opens above the scanner, so going back from it leads there as usual.
         val scanner = Intent(context, MainActivity::class.java)
             .setAction(Intent.ACTION_MAIN)

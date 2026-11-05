@@ -94,7 +94,6 @@ import io.github.lcebot.ferryqr.content.Classifier
 import io.github.lcebot.ferryqr.dispatch.ActionResult
 import io.github.lcebot.ferryqr.dispatch.Cards
 import io.github.lcebot.ferryqr.dispatch.Origin
-import io.github.lcebot.ferryqr.dispatch.ResultCard
 import io.github.lcebot.ferryqr.generate.CodeGenerator
 import io.github.lcebot.ferryqr.history.FavoriteShortcuts
 import io.github.lcebot.ferryqr.history.HistoryEntry
@@ -131,7 +130,8 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
     var folded by remember { mutableStateOf(prefs.getBoolean(PREF_FAVORITES_FOLDED, false)) }
     var confirmClear by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf<HistoryEntry?>(null) }
-    var showing by remember { mutableStateOf<ResultCard?>(null) }
+    var showing by remember { mutableStateOf<HistoryEntry?>(null) }
+    val ready = targetsReady()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val layoutDirection = LocalLayoutDirection.current
     val favorites = remember(entries) { entries.filter { it.favorite }.sortedByDescending { it.favoritedAt } }
@@ -143,12 +143,8 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
         { Text(pluralStringResource(R.plurals.history_count, entries.size, entries.size)) }
     }
 
-    // The original code is no longer in sight, so every entry is shown with its code drawn again,
-    // to be scanned by another phone or kept as an image.
     fun open(entry: HistoryEntry) {
-        val card = Cards.build(activity, Classifier.classify(entry.text, entry.format), entry.format, Origin.HISTORY)
-        val image = card.image ?: CodeGenerator.redraw(entry.text, entry.format)
-        showing = card.copy(image = image, exportable = image != null)
+        showing = entry
     }
 
     LaunchedEffect(openText) {
@@ -314,7 +310,15 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
         }
     }
 
-    showing?.let { card ->
+    showing?.let { entry ->
+        // The original code is no longer in sight, so every entry is shown with its code drawn
+        // again, to be scanned by another phone or kept as an image. The card is built again once
+        // the framework reports which apps take content.
+        val card = remember(entry, ready) {
+            val built = Cards.build(activity, Classifier.classify(entry.text, entry.format), entry.format, Origin.HISTORY)
+            val image = built.image ?: CodeGenerator.redraw(entry.text, entry.format)
+            built.copy(image = image, exportable = image != null)
+        }
         ResultSheet(
             card = card,
             onDismiss = { showing = null },
@@ -335,7 +339,7 @@ private class EntryActions(
 /** What a favorite is called until the user names it: the same short title its shortcut shows. */
 private fun defaultTitle(context: Context, entry: HistoryEntry): String {
     val payload = Classifier.classify(entry.text, entry.format)
-    return Cards.titleOf(payload) ?: context.getString(Cards.kindOf(payload).label)
+    return Cards.titleOf(context, payload) ?: context.getString(Cards.kindOf(payload).label)
 }
 
 /** Rows and headers fade in and out and slide to their new places with the theme's motion. */
@@ -468,7 +472,7 @@ private fun EntryItem(entry: HistoryEntry, shape: Shape, onClick: () -> Unit, on
     val context = LocalContext.current
     val payload = remember(entry.text, entry.format) { Classifier.classify(entry.text, entry.format) }
     val kind = remember(payload) { Cards.kindOf(payload) }
-    val shown = remember(payload) { Cards.shownText(payload) }
+    val shown = remember(payload) { Cards.shownText(context, payload) }
     val time = remember(entry.time) { DateFormat.getTimeFormat(context).format(Date(entry.time)) }
     // Favorites take the tertiary colour, so they stay apart from the history at a glance.
     val container by animateColorAsState(

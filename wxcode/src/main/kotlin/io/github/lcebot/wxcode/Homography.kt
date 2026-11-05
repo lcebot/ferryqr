@@ -1,7 +1,6 @@
 package io.github.lcebot.wxcode
 
 import kotlin.math.abs
-import kotlin.math.atan2
 import kotlin.math.sqrt
 
 /**
@@ -20,10 +19,6 @@ class Homography internal constructor(internal val m: DoubleArray) {
 
     /** The eyes' circumradius in pixels, as the map's mean scale at the centre. */
     val circumradius: Double get() = sqrt(abs(m[0] * m[4] - m[1] * m[3])) / abs(m[8])
-
-    /** The code's clockwise rotation in degrees, 0 to 360, at its centre. */
-    val orientation: Double
-        get() = (Math.toDegrees(atan2(m[3], m[0])) + 360.0) % 360.0
 
     /** This map with the code moved by ([dx], [dy]) pixels and scaled by [scale] about its centre. */
     internal fun adjusted(dx: Double, dy: Double, scale: Double): Homography {

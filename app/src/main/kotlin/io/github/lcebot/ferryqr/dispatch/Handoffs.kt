@@ -14,16 +14,6 @@ private const val NEW_TASK_CLEAR_TOP = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.F
 /** Alipay accepts the scanned content itself, so its own scanner flow continues seamlessly. */
 internal object Alipay {
     const val PACKAGE = "com.eg.android.AlipayGphone"
-    /**
-     * Payment and collection codes on qr, the scanner landing page on ds, the short links Alipay
-     * mini programs share on ur, and campaign pages such as red packet codes on render.
-     */
-    private val CODES = Regex(
-        "^https?://(?:(?:qr|ds|ur)\\.alipay\\.com/|render\\.alipay\\.com/p/).*",
-        RegexOption.IGNORE_CASE,
-    )
-
-    fun claims(text: String) = CODES.matches(text)
 
     fun handoff(activity: Activity, text: String): Boolean = Launch.start(
         activity,
@@ -38,22 +28,6 @@ internal object Alipay {
  */
 internal object WeChat {
     const val PACKAGE = OpenInApps.WECHAT
-    /**
-     * Profile, group and official account codes, the international profile host, mini program codes
-     * that carry a plain link, website and web client login codes, WeChat Pay payment and merchant
-     * codes, and face to face red packet codes. The prefixes follow what WeChat's own scanner
-     * dispatches on, plus the hosts it resolves through its servers.
-     */
-    private val CODES = Regex(
-        "^(?:https?://weixin\\.qq\\.com/.*|https?://u\\.wechat\\.com/.*|weixin://.*|wxp\\s*:.*" +
-            "|wxhb://.*|wedropf2fhb://.*|https?://mp\\.weixin\\.qq\\.com/a/.*" +
-            "|https://open\\.weixin\\.qq\\.com/connect/confirm.*|https://login\\.weixin\\.qq\\.com/l/.*" +
-            "|https://wx\\.tenpay\\.com/f2f.*|https://payapp\\.weixin\\.qq\\.com/.*" +
-            "|https://payapp\\.wechatpay\\.cn/(?:sjt/)?qr/.*|https://wxpay\\.wxutil\\.com/mch/pay/.*)$",
-        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
-    )
-
-    fun claims(text: String) = CODES.matches(text) || text.contains("wechat/oauth2")
 
     fun openScanner(activity: Activity, text: String): Boolean =
         launchScanner(activity).also { if (it) OpenInModule.handoff(activity, PACKAGE, text) }
@@ -91,60 +65,31 @@ private fun openScannerWithModule(activity: Activity, pkg: String, scanner: Stri
     return Launch.start(activity, intent).also { if (it) OpenInModule.handoff(activity, pkg, text) }
 }
 
-/** Bike and e-bike codes, and Didi's short links, which its scanner sends to the right service. */
+/** DiDi's scanner sends its bike and e-bike codes and short links, listed in [KnownLink], to the right service. */
 internal object Didi {
     const val PACKAGE = OpenInApps.DIDI
     private const val SCANNER = "OneTravel://router/page/open_scan"
-    private val CODES = Regex("^https?://(?:z\\.didi\\.cn|dc\\.tt)/.*", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-
-    fun claims(text: String) = CODES.matches(text)
 
     fun openScanner(activity: Activity, text: String) = openScannerWithModule(activity, PACKAGE, SCANNER, text)
 }
 
-/**
- * Meituan's own links, which its scan screen opens in its own pages: those on its domains, such as
- * ordering links on rms.meituan.com, and the bike codes it recognises by exact prefix, case
- * included. Meituan opens any other link in its pages too, but it is no more Meituan's than the
- * browser's.
- */
+/** Meituan's scan screen opens its own links, listed in [KnownLink], in its own pages. */
 internal object Meituan {
     const val PACKAGE = OpenInApps.MEITUAN
     private const val SCANNER = "imeituan://www.meituan.com/scanQRCode"
-    private val BIKES = Regex(
-        "^http://(?:www\\.mobike\\.com/download/app\\.html\\?b=|t8\\.pub|t9\\.pub).*",
-        RegexOption.DOT_MATCHES_ALL,
-    )
-    private val HOST = Regex("^https?://([^/?#:@]+)", RegexOption.IGNORE_CASE)
-
-    /** Meituan, Dianping, Maoyan and Mobike, among the domains Meituan's scan screen trusts. */
-    private val DOMAINS = listOf("meituan.com", "meituan.net", "dianping.com", "dpurl.cn", "maoyan.com", "mobike.com")
-
-    fun claims(text: String): Boolean {
-        if (BIKES.matches(text)) return true
-        val host = HOST.find(text)?.groupValues?.get(1)?.lowercase() ?: return false
-        return DOMAINS.any { host == it || host.endsWith(".$it") }
-    }
 
     fun openScanner(activity: Activity, text: String) = openScannerWithModule(activity, PACKAGE, SCANNER, text)
 }
 
-/** Xiaomi apps reached through private intents that no generic link resolution can find. */
+/** Xiaomi apps reached through private intents that no generic link resolution can find, for the links [KnownLink] lists. */
 internal object Xiaomi {
-    private val ACCOUNT_LOGIN = Regex("^https://[^/]+\\.account\\.xiaomi\\.com/longPolling/login\\?.*")
-    private val MI_HOME_PREFIXES = listOf(
-        "https://home.mi.com/do/home.html?f=xz",
-        "https://home.mi.com/do/home.html?f=fnetsuoiea",
-        "https://home.mi.com/do/home.html?a=",
-    )
-
-    fun claim(activity: Activity, url: String): Boolean = when {
-        ACCOUNT_LOGIN.matches(url) -> Launch.start(
+    fun claim(activity: Activity, url: String): Boolean = when (KnownLink.of(url)) {
+        KnownLink.XIAOMI_LOGIN -> Launch.start(
             activity,
             Intent(Intent.ACTION_VIEW, Uri.parse(url))
                 .setClassName("com.xiaomi.account", "com.xiaomi.account.ui.AccountWebActivity"),
         )
-        MI_HOME_PREFIXES.any { url.startsWith(it) } -> Launch.start(activity, miHome(url))
+        KnownLink.MI_HOME_DEVICE -> Launch.start(activity, miHome(url))
         else -> false
     }
 

@@ -26,7 +26,6 @@ internal const val MODULE = 1.0 / MODULES_PER_RADIUS
 private val HALF_SQRT2 = sqrt(0.5)
 
 /** Eyes sit on the unit circle at sectors 9, 27 and 63; sector 9 is the triangle's right angle. */
-internal val EYE_SECTORS = intArrayOf(9, 27, 63)
 internal val EYE_U = doubleArrayOf(-HALF_SQRT2, HALF_SQRT2, -HALF_SQRT2)
 internal val EYE_V = doubleArrayOf(HALF_SQRT2, HALF_SQRT2, -HALF_SQRT2)
 

@@ -1,6 +1,7 @@
 package io.github.lcebot.ferryqr.dispatch
 
 import android.app.Activity
+import android.content.Context
 import android.graphics.Bitmap
 import android.text.format.DateUtils
 import androidx.annotation.DrawableRes
@@ -19,7 +20,6 @@ import io.github.lcebot.ferryqr.content.WebPayload
 import io.github.lcebot.ferryqr.content.WifiPayload
 import io.github.lcebot.ferryqr.content.WifiSecurity
 import io.github.lcebot.ferryqr.generate.MiniCodeArt
-import io.github.lcebot.wxcode.WxText
 
 /** Where a code came from, which decides whether an app's own camera can still see it. */
 enum class Origin {
@@ -102,24 +102,17 @@ object Cards {
      * A probable WeChat mini program code that could not be read, shown as [crop]. With the module
      * in WeChat the crop goes to WeChat's scanner, which then simply opens it. Without the module, a
      * code the camera saw ([live]) is scanned again in WeChat; an image FerryQR holds cannot reach
-     * WeChat's camera, so the user is pointed to the scanner's own album button instead.
+     * WeChat's camera, so the body points to the scanner's own album button instead.
      */
     fun miniProgram(activity: Activity, crop: Bitmap, live: Boolean): ResultCard {
-        val installed = Targets.WECHAT.installed(activity)
-        val ready = Targets.WECHAT.ready
-        val label = when {
-            ready -> R.string.open_in_app
-            live -> R.string.scan_again_in_app
-            else -> R.string.open_app_scanner
-        }
+        val wechat = Targets.WECHAT
+        val origin = if (live) Origin.CAMERA else Origin.IMAGE
         val body = when {
-            ready -> R.string.mini_body_module
+            wechat.ready -> R.string.mini_body_module
             live -> R.string.mini_body_scan
             else -> R.string.mini_body_album
         }
-        val action = CardAction(label, R.drawable.ic_open_in_new, WeChat.PACKAGE, Targets.WECHAT.name) {
-            if (WeChat.openScanner(it, crop)) ActionResult.Handoff else ActionResult.Unavailable
-        }
+        val installed = wechat.installed(activity)
         return ResultCard(
             raw = "",
             kind = R.string.kind_mini_program,
@@ -127,32 +120,28 @@ object Cards {
             headline = activity.getString(R.string.mini_headline),
             body = activity.getString(body),
             notes = if (installed) emptyList() else listOf(activity.getString(R.string.mini_no_wechat)),
-            actions = if (installed) listOf(action) else emptyList(),
+            actions = listOfNotNull(targetAction(activity, wechat, origin) { WeChat.openScanner(it, crop) }),
             image = crop,
         )
     }
 
     private val IP_LITERAL = Regex("^(\\d{1,3}\\.){3}\\d{1,3}$|^\\[.*]$")
 
-    /** A short name for content in lists and shortcuts, or null when only its kind describes it. */
-    fun titleOf(payload: Payload): String? = when (payload) {
+    /**
+     * A short name for content in shortcuts and as a favorite's name: the name the content carries,
+     * else a link's host or the text itself; null when only its kind describes it.
+     */
+    fun titleOf(context: Context, payload: Payload): String? = Titles.of(context, payload) ?: when (payload) {
         is WebPayload -> payload.host
-        is WifiPayload -> payload.ssid
-        is ContactPayload -> payload.contact.name ?: payload.contact.organization
-        is EventPayload -> payload.event.title
         is TextPayload, is SchemePayload -> payload.raw
-        is MiniProgramPayload -> WxText.forWeChat(payload.raw)
-        is FidoPayload, is EsimPayload, is DppPayload -> null
+        else -> null
     }
 
     /**
-     * The content as a list shows it: the text itself, except for a mini program code, whose
-     * payload means something only as WeChat reads it. The content itself stays as it was scanned.
+     * The content as a list shows it: the name it carries, else the content itself. The content
+     * itself stays as it was scanned, and is what is copied and drawn again.
      */
-    fun shownText(payload: Payload): String = when (payload) {
-        is MiniProgramPayload -> WxText.forWeChat(payload.raw)
-        else -> payload.raw
-    }
+    fun shownText(context: Context, payload: Payload): String = Titles.of(context, payload) ?: payload.raw
 
     fun build(activity: Activity, payload: Payload, format: String, origin: Origin): ResultCard =
         card(activity, payload, format, origin).copy(format = format)
@@ -253,7 +242,8 @@ object Cards {
      * the general apps are not, since they open web links rather than other apps' schemes.
      */
     private fun scheme(activity: Activity, payload: SchemePayload, origin: Origin): ResultCard {
-        val owner = Targets.claimant(payload.raw)
+        val owner = Targets.claimant(payload)
+        val title = Titles.of(activity, payload)
         val notes = listOfNotNull(
             activity.getString(R.string.scheme_unhandled),
             owner?.let { targetNote(activity, it, origin) },
@@ -263,7 +253,10 @@ object Cards {
             copy(payload.raw),
             share(payload.raw),
         )
-        return ResultCard(payload.raw, R.string.kind_app_link, R.drawable.ic_apps, payload.raw, null, notes, actions)
+        return ResultCard(
+            payload.raw, R.string.kind_app_link, R.drawable.ic_apps, title ?: payload.raw, payload.raw.takeIf { title != null },
+            notes, actions,
+        )
     }
 
     /**
@@ -272,8 +265,8 @@ object Cards {
      */
     private fun web(activity: Activity, payload: WebPayload, origin: Origin): ResultCard {
         val host = payload.host
-        // A link printed without its scheme is claimed by its URL, and still handed over as printed.
-        val owner = Targets.claimant(payload.url)
+        // A link printed without its scheme belongs to its app by its URL, and is handed over as printed.
+        val owner = Targets.claimant(payload)
         val notes = buildList {
             if (payload.url.startsWith("http:", ignoreCase = true)) add(activity.getString(R.string.warn_http))
             if (host.split('.').any { it.startsWith("xn--") } || host.any { it.code > 127 }) add(activity.getString(R.string.warn_idn))
@@ -281,7 +274,7 @@ object Cards {
             // Only a code that belongs to an app needs that app; for other links it is one more option.
             owner?.let { targetNote(activity, it, origin) }?.let { add(it) }
         }
-        val offered = Targets.forText(payload.url).mapNotNull { target ->
+        val offered = Targets.offeredFor(payload).mapNotNull { target ->
             targetAction(activity, target, origin) { target.open(it, payload.raw) }?.let { target to it }
         }
         val browser = CardAction(R.string.open, R.drawable.ic_open_in_new, opens = true) {
@@ -294,7 +287,8 @@ object Cards {
             add(copy(payload.raw))
             add(share(payload.raw))
         }
-        return ResultCard(payload.raw, R.string.kind_link, R.drawable.ic_link, host, payload.url, notes, actions)
+        val headline = Titles.link(activity, payload.url) ?: host
+        return ResultCard(payload.raw, R.string.kind_link, R.drawable.ic_link, headline, payload.url, notes, actions)
     }
 
     private fun wifi(activity: Activity, payload: WifiPayload): ResultCard {

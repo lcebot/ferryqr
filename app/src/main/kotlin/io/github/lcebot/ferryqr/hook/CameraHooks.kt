@@ -11,9 +11,9 @@ import java.lang.reflect.Modifier
 import java.util.Collections
 
 /**
- * Where camera frames reach WeChat's scanner. Only framework methods are hooked, and the methods
- * WeChat implements for framework interfaces, whose names minification cannot change, so nothing
- * here depends on a WeChat version. Every hooker returns at once unless [FrameFeed] is armed.
+ * Where camera frames reach a supported app's scanner. Only framework methods are hooked, and the
+ * methods the app implements for framework interfaces, whose names minification cannot change, so
+ * nothing here depends on an app's version. Every hooker returns at once unless [FrameFeed] is armed.
  */
 internal object CameraHooks {
     @Volatile

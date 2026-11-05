@@ -52,7 +52,7 @@ internal object HookLog {
 
     private fun report(priority: Int, message: String, error: Throwable?) {
         if (!reported.add(message)) return
-        // Logging runs inside WeChat and must never be what breaks it.
+        // Logging runs inside the supported app and must never be what breaks it.
         try {
             framework?.log(priority, TAG, message, error)
         } catch (_: Throwable) {
