@@ -6,11 +6,12 @@ A privacy-first QR scanner for Android that ferries each code to the right app. 
 
 ## Features
 
-- **Opens codes in their own apps.** Links go to the app that handles them; Wi-Fi, contacts, events, passkeys, eSIMs, phone numbers, messages, email and map locations go to the matching part of the phone.
-- **Strong scanning.** The advanced scanning found in Alipay and WeChat, such as automatic zoom and picking one of several codes, is here too. Images on the phone can be scanned by sharing them to FerryQR or opening them with it.
+- **Opens codes in their own apps.** Links go to the app that handles them; Wi-Fi, contacts, events, passkeys, eSIMs, phone numbers, messages, email and map locations go to the matching part of the phone. FerryQR also reads some specific codes and shows their content, so far the information in boarding pass codes.
+- **Strong scanning.** The advanced scanning found in Alipay and WeChat, such as automatic zoom and picking one of several codes, is here too. Images on the phone can be scanned by sharing them to FerryQR or opening them with it, and a screenshot shared to FerryQR quickly reads a code on the screen.
 - **One scanner in place of many.** Codes meant for a particular app, WeChat mini program codes included, open straight in that app after a scan in FerryQR, so its own scanner is no longer needed. Some apps need the [LSPosed module](#lsposed-module).
-- **History and favorites.** Scanned codes are kept on the phone as history, and entries can be added to favorites. Favorites stay at the top of the history and can be renamed; up to four can be added to the shortcuts shown when the FerryQR icon is long pressed. Tapping an entry draws its code again, to be scanned by another phone or saved as an image.
-- **Creates codes.** QR, Aztec, Data Matrix and PDF417 codes, ready to share, copy or save once created.
+- **History and favorites.** Scanned codes are kept on the phone as history, and entries can be added to favorites. Favorites stay at the top of the history and can be renamed and reordered; up to four can be added to the shortcuts shown when the FerryQR icon is long pressed.
+- **Shows codes.** Tapping an entry in the history draws its code again, to be scanned by another phone or saved as an image. The code can be switched to another format to suit the reader, enlarged, and shown at full brightness, so it scans more reliably.
+- **Creates codes and barcodes.** FerryQR draws every format ZXing writes and suggests the one that suits the text best. Codes are ready to share, copy or save once created.
 - **Quick Settings tile.** Once added to Quick Settings, it starts scanning from the notification shade.
 
 ## Install
