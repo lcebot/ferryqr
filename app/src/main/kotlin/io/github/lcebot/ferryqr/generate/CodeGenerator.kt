@@ -86,13 +86,15 @@ object CodeGenerator {
     /**
      * [heightRatio], for a long code, is the height wanted for every unit of width, quiet zone
      * included: a barcode gets bars that tall and a PDF417 rows that tall, so a code drawn to fill
-     * a taller area keeps every module sharp and in proportion.
+     * a taller area keeps every module sharp and in proportion. Without [quietZone] the code has no
+     * margin at all, for a preview that gives every format the same margin of its own.
      */
-    fun generate(text: String, type: CodeType, heightRatio: Float? = null): Generated {
+    fun generate(text: String, type: CodeType, heightRatio: Float? = null, quietZone: Boolean = true): Generated {
         val problem = CodeRules.problem(text, type)
         val matrix = if (problem == null) encode(text, type.format) else null
         if (matrix != null) {
-            return Generated.Code(render(matrix, type.quietZone, linear = type.linear, heightRatio = heightRatio.takeIf { type.long }))
+            val margin = if (quietZone) type.quietZone else 0
+            return Generated.Code(render(matrix, margin, linear = type.linear, heightRatio = heightRatio.takeIf { type.long }))
         }
         val alternatives = CodeType.COMMON.filter { it != type && CodeRules.problem(text, it) == null && encode(text, it.format) != null }
         return Generated.Unfit(problem ?: CodeRules.unencodable(type), alternatives)
@@ -134,13 +136,13 @@ object CodeGenerator {
 
     /**
      * One pixel per module. A [linear] code comes as a single row, which is repeated to give the
-     * bars a readable height, and its quiet zone is needed only at the sides. With [heightRatio] the
-     * bars, or the rows of a stacked code, are repeated until the image is about that much taller
-     * than it is wide.
+     * bars a readable height, and its quiet zone is needed only at the sides, with a sliver above and
+     * below unless [quietZone] is zero. With [heightRatio] the bars, or the rows of a stacked code,
+     * are repeated until the image is about that much taller than it is wide.
      */
     private fun render(matrix: BitMatrix, quietZone: Int, linear: Boolean, heightRatio: Float? = null): Bitmap {
         val single = linear && matrix.height == 1
-        val margin = if (linear) LINEAR_VERTICAL_MARGIN else quietZone
+        val margin = if (linear) minOf(quietZone, LINEAR_VERTICAL_MARGIN) else quietZone
         val width = matrix.width + 2 * quietZone
         val wanted = heightRatio?.let { (width * it).roundToInt() - 2 * margin }
         val repeat = if (single || wanted == null) 1 else max(1, (wanted.toFloat() / matrix.height).roundToInt())

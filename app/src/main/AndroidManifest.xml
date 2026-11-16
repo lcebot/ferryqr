@@ -40,8 +40,11 @@
         </activity>
 
         <!-- Pages above the scanner, each its own activity so the system animates going back. -->
+        <!-- History turns in place, so the full-screen view of a long code can turn the screen
+             sideways without closing the card under it. -->
         <activity
             android:name=".HistoryActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
             android:exported="false"
             android:theme="@style/Theme.FerryQR.Page" />
         <!-- Compose makes room for the keyboard itself; without adjustResize the system also pans the window. -->

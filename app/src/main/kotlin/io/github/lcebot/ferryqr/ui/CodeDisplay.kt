@@ -4,6 +4,8 @@ package io.github.lcebot.ferryqr.ui
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.view.View
 import android.view.Window
@@ -45,6 +47,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -73,9 +76,14 @@ internal fun View.hostWindow(): Window? {
         if (current is DialogWindowProvider) return current.window
         current = current.parent
     }
-    var context: Context? = context
+    return context.activity()?.window
+}
+
+/** The activity this context belongs to, through any wrappers such as a dialog's theme. */
+private fun Context.activity(): Activity? {
+    var context: Context? = this
     while (context is ContextWrapper) {
-        if (context is Activity) return context.window
+        if (context is Activity) return context
         context = context.baseContext
     }
     return null
@@ -115,8 +123,11 @@ private fun KeepScreenOn() {
  * A long code, a barcode or a PDF417, shown level over the whole window on white, one of the ways
  * the settings offer to enlarge it. It grows out of the card's own code at [source], in window
  * coordinates, and returns into it when closed by a tap or a back gesture, which shrinks it as it
- * goes. [drawTall], when given, draws the code again as tall as the window lets it be, so its bars
- * or rows grow rather than a scaled picture.
+ * goes. The screen turns sideways while it shows, where the code is longest, so the activity has
+ * to handle rotation itself, as the history does. A screen about to turn fades the code in and out
+ * instead, since the card's code is where it was only in the window's earlier shape. [drawTall],
+ * when given, draws the code again as tall as the window lets it be, so its bars or rows grow
+ * rather than a scaled picture.
  */
 @Composable
 fun CodeOverlay(
@@ -145,6 +156,16 @@ fun CodeOverlay(
         }
         if (brighten) FullBrightness()
         KeepScreenOn()
+        val configuration = LocalConfiguration.current
+        val turning = remember { configuration.orientation == Configuration.ORIENTATION_PORTRAIT }
+        DisposableEffect(view) {
+            val activity = view.context.activity()
+            val previous = activity?.requestedOrientation
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            onDispose {
+                if (activity != null && previous != null) activity.requestedOrientation = previous
+            }
+        }
 
         val scope = rememberCoroutineScope()
         val progress = remember { Animatable(0f) }
@@ -185,7 +206,7 @@ fun CodeOverlay(
                 val codeModifier = Modifier
                     .onGloballyPositioned { target = it.boundsInWindow() }
                     .graphicsLayer {
-                        val from = source
+                        val from = if (turning) null else source
                         val to = target
                         if (from == null || to == null || to.width <= 0f) return@graphicsLayer
                         val p = progress.value

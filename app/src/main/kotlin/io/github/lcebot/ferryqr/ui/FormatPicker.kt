@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -58,6 +59,20 @@ import kotlinx.coroutines.withContext
 /** How tall each format's preview is; wide enough tiles show a barcode at a readable size. */
 private val PREVIEW_HEIGHT = 72.dp
 
+/**
+ * The tile's corners and padding, from the shape and spacing scales. The preview inside is as much
+ * less rounded as the padding is wide, so the two outlines run parallel.
+ */
+private val TILE_CORNER = 16.dp
+private val TILE_PADDING = 12.dp
+private val PREVIEW_CORNER = TILE_CORNER - TILE_PADDING
+
+/**
+ * White space around every preview, the same for all of them. Previews are drawn without their
+ * quiet zones, which differ from format to format and would make some codes look far smaller.
+ */
+private val PREVIEW_PADDING = 8.dp
+
 /** A format as the picker shows it: the code drawn in it, or why it cannot hold the text. */
 private class FormatOption(val type: CodeType, val preview: Bitmap?, val problem: CodeProblem?)
 
@@ -82,7 +97,7 @@ fun FormatPickerSheet(
             CodeType.entries.map { type ->
                 // With nothing typed yet, every format can still be chosen; there is just nothing to preview.
                 if (text.isEmpty()) return@map FormatOption(type, null, null)
-                when (val result = CodeGenerator.generate(text, type)) {
+                when (val result = CodeGenerator.generate(text, type, quietZone = false)) {
                     is Generated.Code -> FormatOption(type, result.bitmap, null)
                     is Generated.Unfit -> FormatOption(type, null, result.problem)
                 }
@@ -135,17 +150,17 @@ private fun FormatTile(option: FormatOption, selected: Boolean, original: Boolea
     Surface(
         onClick = onClick,
         enabled = available,
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(TILE_CORNER),
         color = colors.surfaceContainerHigh,
         border = if (selected) BorderStroke(2.dp, colors.primary) else null,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.padding(TILE_PADDING), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(PREVIEW_HEIGHT)
-                    .clip(RoundedCornerShape(8.dp))
+                    .clip(RoundedCornerShape(PREVIEW_CORNER))
                     .background(if (available) Color.White else colors.surfaceContainerHighest),
                 contentAlignment = Alignment.Center,
             ) {
@@ -157,7 +172,9 @@ private fun FormatTile(option: FormatOption, selected: Boolean, original: Boolea
                         contentDescription = null,
                         contentScale = ContentScale.Fit,
                         filterQuality = FilterQuality.None,
-                        modifier = Modifier.fillMaxWidth().padding(6.dp),
+                        // Filling the box in both directions lets Fit scale the code up; with only the
+                        // width fixed, the image keeps its height of one pixel per module.
+                        modifier = Modifier.fillMaxSize().padding(PREVIEW_PADDING),
                     )
                 } else if (available) {
                     Icon(painterResource(R.drawable.ic_qr_code_2), contentDescription = null, tint = Color.Black.copy(alpha = 0.38f))
