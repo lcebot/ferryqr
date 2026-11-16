@@ -90,15 +90,18 @@ jobs:
           echo "VERSION_ARGS=-PversionNameOverride=$name -PversionCodeOverride=$code" >> "$GITHUB_ENV"
           echo "$tag -> versionName=$name versionCode=$code"
 
+      # The tests run on the release variant with the same properties as the build, so the build
+      # finds the app already compiled; the daemon stays up between the two steps, and test results
+      # whose inputs have not changed come from the build cache.
       - name: test
-        run: gradle :wxcode:test :app:testDebugUnitTest --no-daemon
+        run: gradle :wxcode:test :app:testReleaseUnitTest $VERSION_ARGS
 
       - name: build
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: gradle assembleRelease --no-daemon $VERSION_ARGS
+        run: gradle assembleRelease $VERSION_ARGS
 
       - name: collect APK
         run: |

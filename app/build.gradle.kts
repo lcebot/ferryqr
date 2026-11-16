@@ -86,9 +86,12 @@ android {
     }
 }
 
-// OpenInAppsTest reads these as files, so a change to any of them alone must rerun it.
+// OpenInAppsTest reads these as files, so a change to any of them alone must rerun it. Only their
+// place within the project counts, so cached results apply wherever the project is checked out.
 tasks.withType<Test>().configureEach {
     inputs.files("src/main/AndroidManifest.xml", "src/main/resources/META-INF/xposed/scope.list", "../lsposed-repo/SCOPE")
+        .withPropertyName("openInFiles")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
 dependencies {

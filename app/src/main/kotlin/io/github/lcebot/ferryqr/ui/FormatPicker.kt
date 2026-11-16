@@ -164,7 +164,7 @@ private fun FormatTile(option: FormatOption, selected: Boolean, original: Boolea
                     Icon(painterResource(R.drawable.ic_qr_code_2), contentDescription = null, tint = Color.Black.copy(alpha = 0.38f))
                 } else {
                     Text(
-                        option.problem?.let { problemText(it) }.orEmpty(),
+                        problemText(option.problem),
                         style = MaterialTheme.typography.labelMedium,
                         color = colors.onSurfaceVariant,
                         textAlign = TextAlign.Center,
