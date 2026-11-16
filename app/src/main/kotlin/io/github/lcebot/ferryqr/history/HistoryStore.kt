@@ -22,7 +22,9 @@ private const val MAX_ENTRIES = 500
 /**
  * [favoritedAt] is when the entry became a favorite, or 0 while it is not one. [label] is a name the
  * user gave the entry, shown in place of its content. [shortcutAt] is when the user added the
- * favorite to the app shortcuts, or 0 while it is not among them.
+ * favorite to the app shortcuts, or 0 while it is not among them. [favoriteRank] places a favorite
+ * among the others, lowest first; favorites of the same rank, as all are until the user reorders
+ * them, show the newest first.
  */
 data class HistoryEntry(
     val text: String,
@@ -31,6 +33,7 @@ data class HistoryEntry(
     val favoritedAt: Long = 0L,
     val label: String? = null,
     val shortcutAt: Long = 0L,
+    val favoriteRank: Int = 0,
 ) {
     val favorite: Boolean get() = favoritedAt > 0L
     val shortcut: Boolean get() = shortcutAt > 0L
@@ -82,17 +85,34 @@ class HistoryStore private constructor(private val context: Context) {
     fun setFavorite(text: String, format: String, favorite: Boolean) = update { entries ->
         val now = System.currentTimeMillis()
         val old = entries.find { it.text == text }
+        // A new favorite goes to the top, above whatever order the user gave the others.
+        val top = (entries.filter { it.favorite }.minOfOrNull { it.favoriteRank } ?: 0) - 1
         when {
-            old == null && favorite -> listOf(HistoryEntry(text, format, now, favoritedAt = now)) + entries
+            old == null && favorite -> listOf(HistoryEntry(text, format, now, favoritedAt = now, favoriteRank = top)) + entries
             old == null || old.favorite == favorite -> entries
             else -> entries.map {
                 when {
                     it.text != text -> it
-                    favorite -> it.copy(favoritedAt = now)
-                    else -> it.copy(favoritedAt = 0L, shortcutAt = 0L)
+                    favorite -> it.copy(favoritedAt = now, favoriteRank = top)
+                    else -> it.copy(favoritedAt = 0L, shortcutAt = 0L, favoriteRank = 0)
                 }
             }
         }
+    }
+
+    /** Puts the favorites in the order of [texts], the favorites' contents; any left out keep their place after them. */
+    fun setFavoriteOrder(texts: List<String>) = update { entries ->
+        val ranks = texts.withIndex().associate { (index, text) -> text to index }
+        entries.map { entry -> ranks[entry.text]?.takeIf { entry.favorite }?.let { entry.copy(favoriteRank = it) } ?: entry }
+    }
+
+    /** Moves the favorite with [text] to [index] among the favorites. */
+    fun moveFavorite(text: String, index: Int) = update { entries ->
+        val order = favoritesOf(entries).map { it.text }.toMutableList()
+        if (!order.remove(text)) return@update entries
+        order.add(index.coerceIn(0, order.size), text)
+        val ranks = order.withIndex().associate { (rank, value) -> value to rank }
+        entries.map { entry -> ranks[entry.text]?.let { entry.copy(favoriteRank = it) } ?: entry }
     }
 
     /** Only favorites become shortcuts, and no more than [FavoriteShortcuts.MAX] of them. */
@@ -140,7 +160,6 @@ class HistoryStore private constructor(private val context: Context) {
         }
     }
 
-    private fun favoritesOf(entries: List<HistoryEntry>) = entries.filter { it.favorite }
 
     private fun ensureLoaded() {
         if (loaded) return
@@ -156,6 +175,7 @@ class HistoryStore private constructor(private val context: Context) {
                     favoritedAt = o.optLong("favoritedAt"),
                     label = o.optString("label").ifEmpty { null },
                     shortcutAt = o.optLong("shortcutAt"),
+                    favoriteRank = o.optInt("favoriteRank"),
                 )
             }
         } catch (e: Exception) {
@@ -169,6 +189,7 @@ class HistoryStore private constructor(private val context: Context) {
             val o = JSONObject().put("text", it.text).put("format", it.format).put("time", it.time)
             if (it.favorite) o.put("favoritedAt", it.favoritedAt)
             if (it.shortcut) o.put("shortcutAt", it.shortcutAt)
+            if (it.favorite && it.favoriteRank != 0) o.put("favoriteRank", it.favoriteRank)
             it.label?.let { label -> o.put("label", label) }
             array.put(o)
         }
@@ -188,6 +209,10 @@ class HistoryStore private constructor(private val context: Context) {
     companion object {
         @Volatile
         private var instance: HistoryStore? = null
+
+        /** The favorites among [entries], in the order history shows them and shortcuts follow. */
+        fun favoritesOf(entries: List<HistoryEntry>): List<HistoryEntry> =
+            entries.filter { it.favorite }.sortedWith(compareBy<HistoryEntry> { it.favoriteRank }.thenByDescending { it.favoritedAt })
 
         fun get(context: Context): HistoryStore = instance ?: synchronized(this) {
             instance ?: HistoryStore(context.applicationContext).also { instance = it }

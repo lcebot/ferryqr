@@ -7,12 +7,15 @@ import android.text.format.DateUtils
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import io.github.lcebot.ferryqr.R
+import io.github.lcebot.ferryqr.content.BoardingPassParser
+import io.github.lcebot.ferryqr.content.BoardingPassPayload
 import io.github.lcebot.ferryqr.content.ContactPayload
 import io.github.lcebot.ferryqr.content.DppPayload
 import io.github.lcebot.ferryqr.content.EsimPayload
 import io.github.lcebot.ferryqr.content.EventPayload
 import io.github.lcebot.ferryqr.content.FidoPayload
 import io.github.lcebot.ferryqr.content.MiniProgramPayload
+import io.github.lcebot.ferryqr.content.PasskeyQr
 import io.github.lcebot.ferryqr.content.Payload
 import io.github.lcebot.ferryqr.content.SchemePayload
 import io.github.lcebot.ferryqr.content.TextPayload
@@ -20,6 +23,9 @@ import io.github.lcebot.ferryqr.content.WebPayload
 import io.github.lcebot.ferryqr.content.WifiPayload
 import io.github.lcebot.ferryqr.content.WifiSecurity
 import io.github.lcebot.ferryqr.generate.MiniCodeArt
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 
 /** Where a code came from, which decides whether an app's own camera can still see it. */
 enum class Origin {
@@ -66,7 +72,7 @@ data class CardAction(
  * picture of one that could not be read, or one drawn again from its content to be scanned from the
  * screen. [exportable] lets that drawing be shared, copied or saved, for history, where the original
  * is out of sight. [format] is empty for a code that was not read, which leaves nothing to keep in
- * history.
+ * history. [sections] lay out content with a structure of its own, under an empty [headline].
  */
 data class ResultCard(
     val raw: String,
@@ -79,7 +85,26 @@ data class ResultCard(
     val image: Bitmap? = null,
     val format: String = "",
     val exportable: Boolean = false,
+    val sections: List<CardSection> = emptyList(),
 )
+
+/** Parts of a card for content with a structure of its own, such as a boarding pass. */
+sealed interface CardSection {
+    /** A trip from one place to another, with [label] above it when there are several. */
+    data class Route(val label: String?, val from: String, val to: String, val caption: String) : CardSection
+
+    /** Named values, each a label with its value. */
+    data class Fields(val rows: List<Pair<String, String>>) : CardSection
+
+    /** The content exactly as the code holds it. */
+    data class Raw(val text: String) : CardSection
+}
+
+/**
+ * A passkey request is given up by the device that shows it within minutes: WebAuthn recommends
+ * that ceremonies time out between five and ten minutes, so one older than five has most likely ended.
+ */
+private const val PASSKEY_EXPIRY_MS = 5 * 60 * 1000L
 
 data class Kind(@param:StringRes val label: Int, @param:DrawableRes val icon: Int)
 
@@ -96,6 +121,7 @@ object Cards {
         is EventPayload -> Kind(R.string.kind_event, R.drawable.ic_event)
         is TextPayload -> Kind(R.string.kind_text, R.drawable.ic_notes)
         is MiniProgramPayload -> Kind(R.string.kind_mini_program, R.drawable.ic_qr_code_scanner)
+        is BoardingPassPayload -> Kind(R.string.kind_boarding_pass, R.drawable.ic_flight)
     }
 
     /**
@@ -143,20 +169,29 @@ object Cards {
      */
     fun shownText(context: Context, payload: Payload): String = Titles.of(context, payload) ?: payload.raw
 
-    fun build(activity: Activity, payload: Payload, format: String, origin: Origin): ResultCard =
-        card(activity, payload, format, origin).copy(format = format)
+    /** [scannedAt] is when the code was read, which dates what a code leaves undated. */
+    fun build(
+        activity: Activity,
+        payload: Payload,
+        format: String,
+        origin: Origin,
+        scannedAt: Long = System.currentTimeMillis(),
+    ): ResultCard = card(activity, payload, format, origin, scannedAt).copy(format = format)
 
-    private fun card(activity: Activity, payload: Payload, format: String, origin: Origin): ResultCard = when (payload) {
+    private fun card(activity: Activity, payload: Payload, format: String, origin: Origin, scannedAt: Long): ResultCard = when (payload) {
         is WebPayload -> web(activity, payload, origin)
         is SchemePayload -> scheme(activity, payload, origin)
-        is FidoPayload -> ResultCard(
-            payload.raw, R.string.kind_fido, R.drawable.ic_key, payload.raw, null,
-            listOf(activity.getString(R.string.fido_unhandled)), listOf(copy(payload.raw)),
-        )
+        is FidoPayload -> passkey(activity, payload, origin, scannedAt)
+        is BoardingPassPayload -> boardingPass(activity, payload, scannedAt)
+        // Only a code from the camera has already been offered to the system by the time its card
+        // shows, so only then does the card say it was not taken; from elsewhere it offers to try.
         is EsimPayload -> ResultCard(
             payload.raw, R.string.kind_esim, R.drawable.ic_sim_card, payload.raw, null,
-            listOf(activity.getString(R.string.esim_unhandled)),
+            listOfNotNull(activity.getString(R.string.esim_unhandled).takeIf { origin == Origin.CAMERA }),
             listOf(
+                CardAction(R.string.add_esim, R.drawable.ic_sim_card) {
+                    if (Launch.esim(it, payload.raw)) ActionResult.Handoff else ActionResult.Unavailable
+                },
                 copy(payload.raw),
                 CardAction(R.string.open_sim_settings, R.drawable.ic_settings) {
                     if (Launch.simSettings(it)) ActionResult.Done else ActionResult.Unavailable
@@ -165,7 +200,13 @@ object Cards {
         )
         is DppPayload -> ResultCard(
             payload.raw, R.string.kind_dpp, R.drawable.ic_wifi, payload.raw, null,
-            listOf(activity.getString(R.string.dpp_unsupported)), listOf(copy(payload.raw)),
+            listOfNotNull(activity.getString(R.string.dpp_unsupported).takeIf { origin == Origin.CAMERA }),
+            listOf(
+                CardAction(R.string.connect, R.drawable.ic_wifi) {
+                    if (Launch.dpp(it, payload.raw)) ActionResult.Handoff else ActionResult.Unavailable
+                },
+                copy(payload.raw),
+            ),
         )
         is WifiPayload -> wifi(activity, payload)
         is ContactPayload -> contact(payload)
@@ -235,6 +276,88 @@ object Cards {
             origin == Origin.IMAGE && target.album -> activity.getString(R.string.pick_from_album_in_app, name)
             else -> activity.getString(R.string.needs_module_in_app, name)
         }
+    }
+
+    /**
+     * A passkey request from another device. Its passkey manager is offered again, which is what a
+     * code in history is for: a quick retry while the other device still waits. A request older than
+     * [PASSKEY_EXPIRY_MS], by the time the code says it was made or else by when it was scanned, has
+     * most likely ended, which the card says, and copying it then comes first. Only a code from the
+     * camera has already been offered to the passkey managers by the time its card shows.
+     */
+    private fun passkey(activity: Activity, payload: FidoPayload, origin: Origin, scannedAt: Long): ResultCard {
+        val now = System.currentTimeMillis()
+        val created = PasskeyQr.createdAt(payload.raw)?.times(1000)?.takeIf { it <= now } ?: scannedAt
+        val expired = now - created > PASSKEY_EXPIRY_MS
+        val use = CardAction(R.string.use_passkey, R.drawable.ic_key, opens = true) {
+            if (Launch.fido(it, payload.raw)) ActionResult.Handoff else ActionResult.Unavailable
+        }
+        val notes = listOfNotNull(
+            activity.getString(R.string.fido_unhandled).takeIf { origin == Origin.CAMERA },
+            activity.getString(
+                R.string.passkey_expired,
+                DateUtils.getRelativeTimeSpanString(created, now, DateUtils.MINUTE_IN_MILLIS),
+            ).takeIf { expired },
+        )
+        val actions = if (expired) listOf(copy(payload.raw), use) else listOf(use, copy(payload.raw))
+        return ResultCard(payload.raw, R.string.kind_fido, R.drawable.ic_key, payload.raw, null, notes, actions)
+    }
+
+    /**
+     * A boarding pass: each flight's route with its own details, then the passenger's, then the
+     * content as the code holds it, which keeps everything the card leaves out. Blank fields are left
+     * out and fields that read as nothing known are shown as printed. A pass gives its dates without
+     * the year, which [scannedAt] settles.
+     */
+    private fun boardingPass(activity: Activity, payload: BoardingPassPayload, scannedAt: Long): ResultCard {
+        val pass = payload.pass
+        val zone = ZoneId.systemDefault()
+        val scanned = Instant.ofEpochMilli(scannedAt).atZone(zone).toLocalDate()
+        fun rows(vararg pairs: Pair<Int, String?>) =
+            pairs.mapNotNull { (label, value) -> value?.takeIf { it.isNotEmpty() }?.let { activity.getString(label) to it } }
+        val sections = buildList {
+            pass.legs.forEachIndexed { index, leg ->
+                val caption = listOfNotNull(leg.flight.ifEmpty { null }, flightDay(activity, leg.dayOfYear, scanned, zone))
+                add(
+                    CardSection.Route(
+                        label = if (pass.legs.size > 1) activity.getString(R.string.boarding_leg, index + 1) else null,
+                        from = leg.from,
+                        to = leg.to,
+                        caption = caption.joinToString("  "),
+                    ),
+                )
+                val details = rows(
+                    R.string.boarding_seat to leg.shownSeat,
+                    R.string.boarding_class to leg.compartment,
+                    R.string.boarding_sequence to leg.shownSequence,
+                    R.string.boarding_booking_reference to leg.bookingReference,
+                )
+                if (details.isNotEmpty()) add(CardSection.Fields(details))
+            }
+            val traveller = rows(
+                R.string.boarding_passenger to pass.passenger,
+                R.string.boarding_frequent_flyer to pass.frequentFlyer,
+                R.string.boarding_bag_tag to pass.bagTag,
+            )
+            if (traveller.isNotEmpty()) add(CardSection.Fields(traveller))
+            add(CardSection.Raw(payload.raw))
+        }
+        val notes = listOfNotNull(
+            activity.getString(R.string.boarding_incomplete).takeUnless { pass.complete },
+            activity.getString(R.string.boarding_privacy),
+        )
+        return ResultCard(
+            payload.raw, R.string.kind_boarding_pass, R.drawable.ic_flight, "", null, notes,
+            listOf(copy(payload.raw), share(payload.raw)),
+            sections = sections,
+        )
+    }
+
+    /** The flight's day as a month and day, or as printed when it is not a day of the year. */
+    private fun flightDay(activity: Activity, dayOfYear: String, scanned: LocalDate, zone: ZoneId): String? {
+        val date = dayOfYear.toIntOrNull()?.let { BoardingPassParser.flightDate(it, scanned) } ?: return dayOfYear.ifEmpty { null }
+        val millis = date.atStartOfDay(zone).toInstant().toEpochMilli()
+        return DateUtils.formatDateTime(activity, millis, DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_NO_YEAR)
     }
 
     /**

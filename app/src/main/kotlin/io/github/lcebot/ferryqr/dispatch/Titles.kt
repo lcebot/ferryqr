@@ -3,6 +3,7 @@ package io.github.lcebot.ferryqr.dispatch
 import android.content.Context
 import android.net.Uri
 import io.github.lcebot.ferryqr.R
+import io.github.lcebot.ferryqr.content.BoardingPassPayload
 import io.github.lcebot.ferryqr.content.ContactPayload
 import io.github.lcebot.ferryqr.content.EsimPayload
 import io.github.lcebot.ferryqr.content.EventPayload
@@ -42,6 +43,9 @@ internal object Titles {
         is EsimPayload -> esimServer(payload.raw)
         // The payload means something only as WeChat reads it.
         is MiniProgramPayload -> WxText.forWeChat(payload.raw)
+        is BoardingPassPayload -> payload.pass.legs.firstOrNull()?.flight?.ifEmpty { null }
+            ?.let { context.getString(R.string.title_boarding_pass, it) }
+            ?: context.getString(R.string.kind_boarding_pass)
         else -> null
     }
 

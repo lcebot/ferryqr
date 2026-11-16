@@ -28,7 +28,7 @@ private const val FALLBACK_CONTAINER = 0xFFEADDFF.toInt()
 private const val FALLBACK_ON_CONTAINER = 0xFF21005D.toInt()
 
 /**
- * Offers the favorites the user chose as app shortcuts, in the order they were added. Shortcuts
+ * Offers the favorites the user chose as app shortcuts, in the order of the favorites. Shortcuts
  * the user dragged onto the home screen cannot be removed by the app, so those of entries that are
  * no longer favorites are disabled, and the system explains why when one is tapped.
  */
@@ -42,7 +42,7 @@ object FavoriteShortcuts {
 
     fun update(context: Context, favorites: List<HistoryEntry>) {
         try {
-            val chosen = favorites.filter { it.shortcut }.sortedBy { it.shortcutAt }.take(MAX)
+            val chosen = favorites.filter { it.shortcut }.take(MAX)
             ShortcutManagerCompat.setDynamicShortcuts(
                 context,
                 chosen.mapIndexed { rank, entry -> shortcut(context, entry, rank) },

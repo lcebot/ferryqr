@@ -43,6 +43,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.IconButton
@@ -87,20 +88,30 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.window.PopupProperties
 import io.github.lcebot.ferryqr.R
+import io.github.lcebot.ferryqr.AppSettings
+import io.github.lcebot.ferryqr.LongCodeEnlarge
+import io.github.lcebot.ferryqr.generate.AutoFormat
+import io.github.lcebot.ferryqr.generate.CodeProblem
 import io.github.lcebot.ferryqr.dispatch.Target
 import io.github.lcebot.ferryqr.content.Classifier
 import io.github.lcebot.ferryqr.dispatch.Targets
 import io.github.lcebot.ferryqr.generate.CodeGenerator
 import io.github.lcebot.ferryqr.generate.CodeType
 import io.github.lcebot.ferryqr.generate.Generated
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/** The saved choice that lets the content decide the format. */
+private const val AUTO = "auto"
 
 /** Longer text is regenerated only after typing pauses, so each keystroke stays responsive. */
 private const val LARGE_TEXT = 800
@@ -136,7 +147,19 @@ fun GeneratorScreen(onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val windowInfo = LocalWindowInfo.current
     var text by rememberSaveable { mutableStateOf("") }
-    var type by rememberSaveable { mutableStateOf(CodeType.QR) }
+    // The format is chosen from the content unless one is picked; the last pick is kept only when
+    // the settings ask for it, as the page keeps nothing else between visits.
+    val keepFormat = remember { AppSettings.rememberFormat(context) }
+    var choice by rememberSaveable { mutableStateOf(if (keepFormat) AppSettings.lastFormat(context) ?: AUTO else AUTO) }
+    val chosen = remember(choice) { CodeType.entries.firstOrNull { it.name == choice } }
+    val automatic = remember(text) { AutoFormat.pick(text) }
+    val type = chosen ?: automatic
+    fun choose(next: String) {
+        choice = next
+        if (keepFormat) AppSettings.setLastFormat(context, next)
+    }
+    var picking by remember { mutableStateOf(false) }
+    val enlarge = remember { AppSettings.longCodeEnlarge(context) }
     var prefilled by rememberSaveable { mutableStateOf(false) }
     var result by remember { mutableStateOf<Generated?>(null) }
     // Every installed app the text could go to, in the order the toolbar shows them: an app that
@@ -165,14 +188,21 @@ fun GeneratorScreen(onBack: () -> Unit) {
     }
 
     val code = (result as? Generated.Code)?.bitmap
-    val tooLong = result as? Generated.TooLong
+    val unfit = result as? Generated.Unfit
     val typeLabel = stringResource(type.label)
     val separator = stringResource(R.string.list_separator)
-    val alternativeLabels = tooLong?.alternatives?.map { stringResource(it.label) }.orEmpty()
-    val error = when {
-        tooLong == null -> null
-        alternativeLabels.isEmpty() -> stringResource(R.string.generate_too_long_all)
-        else -> stringResource(R.string.generate_too_long, typeLabel, alternativeLabels.joinToString(separator))
+    val alternatives = unfit?.alternatives?.map { stringResource(it.label) }.orEmpty().joinToString(separator)
+    val error = unfit?.let {
+        when (val problem = it.problem) {
+            CodeProblem.TooLong ->
+                if (alternatives.isEmpty()) stringResource(R.string.generate_too_long_all)
+                else stringResource(R.string.generate_too_long, typeLabel, alternatives)
+            else -> {
+                val reason = problemText(problem)
+                if (alternatives.isEmpty()) stringResource(R.string.generate_unfit_all, typeLabel, reason)
+                else stringResource(R.string.generate_unfit, typeLabel, reason, alternatives)
+            }
+        }
     }
     val trailingIcon: (@Composable () -> Unit)? = if (text.isNotEmpty()) {
         {
@@ -184,6 +214,19 @@ fun GeneratorScreen(onBack: () -> Unit) {
         null
     }
 
+
+    if (picking) {
+        FormatPickerSheet(
+            text = text,
+            selected = chosen,
+            original = null,
+            onPick = { picked ->
+                choose(picked.name)
+                picking = false
+            },
+            onDismiss = { picking = false },
+        )
+    }
 
     Scaffold(
         // The scaffold lifts the snackbar only above the system bars, and the keyboard would cover it.
@@ -231,25 +274,56 @@ fun GeneratorScreen(onBack: () -> Unit) {
                 modifier = Modifier.fillMaxSize().imePadding(),
                 verticalArrangement = Arrangement.spacedBy(GAP),
             ) {
+                // The automatic choice leads and names the format it uses; the common formats follow, with
+                // one picked from the rest beside them while it is in use, and the rest one tap away.
                 Row(
                     modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    CodeType.entries.forEach { option ->
+                    Labeled(R.string.format_auto_desc) {
                         FilterChip(
-                            selected = option == type,
-                            onClick = { haptics.step(); type = option },
+                            selected = chosen == null,
+                            onClick = { haptics.step(); choose(AUTO) },
+                            label = { Text(stringResource(R.string.format_auto, stringResource(automatic.label))) },
+                            leadingIcon = {
+                                Icon(painterResource(R.drawable.ic_lightbulb), contentDescription = null, modifier = Modifier.size(FilterChipDefaults.IconSize))
+                            },
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                        )
+                    }
+                    val offered = CodeType.COMMON + listOfNotNull(chosen?.takeIf { it !in CodeType.COMMON })
+                    offered.forEach { option ->
+                        FilterChip(
+                            selected = option == chosen,
+                            onClick = { haptics.step(); choose(option.name) },
                             label = { Text(stringResource(option.label)) },
                         )
                     }
+                    FilterChip(
+                        selected = false,
+                        onClick = { haptics.tap(); picking = true },
+                        label = { Text(stringResource(R.string.format_more)) },
+                        trailingIcon = {
+                            Icon(painterResource(R.drawable.ic_expand), contentDescription = null, modifier = Modifier.size(FilterChipDefaults.IconSize))
+                        },
+                    )
                 }
 
                 Box(
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                     contentAlignment = Alignment.Center,
                 ) {
-                    if (code != null && type == CodeType.PDF417) {
+                    if (code != null && type.long && enlarge == LongCodeEnlarge.TILT) {
                         TiltedCode(code, Modifier.fillMaxSize())
+                    } else if (code != null && type.long) {
+                        // Drawn again at the preview's own shape, so its bars fill it without a scaled picture.
+                        BoxWithConstraints(Modifier.fillMaxSize()) {
+                            val ratio = ((maxHeight / maxWidth) * 20).roundToInt() / 20f
+                            val tall = remember(text, type, ratio) {
+                                (CodeGenerator.generate(text, type, ratio) as? Generated.Code)?.bitmap
+                            } ?: code
+                            PlainCode(tall, Modifier.fillMaxSize(), stretch = true, filterQuality = FilterQuality.None)
+                        }
                     } else {
                         CodePreview(code, Modifier.aspectRatio(1f, matchHeightConstraintsFirst = true))
                     }

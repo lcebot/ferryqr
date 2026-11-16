@@ -38,6 +38,7 @@
     <string name="kind_contact">联系人</string>
     <string name="kind_event">日程</string>
     <string name="kind_esim">eSIM 激活码</string>
+    <string name="kind_boarding_pass">登机牌</string>
     <string name="kind_fido">通行密钥</string>
 
     <string name="warn_http">链接未加密（HTTP）</string>
@@ -46,6 +47,8 @@
     <string name="scheme_unhandled">没有支持打开此链接的应用。</string>
     <string name="esim_unhandled">激活码未被任何 eSIM 管理软件接受。请复制后在 SIM 卡设置中添加 eSIM。</string>
     <string name="fido_unhandled">无通行密钥管理软件，或管理软件未接受此通行密钥。</string>
+    <string name="use_passkey">使用通行密钥</string>
+    <string name="passkey_expired">%1$s生成的通行密钥请求可能已失效。请在另一台设备上重新发起跨设备身份验证。</string>
     <string name="dpp_unsupported">无法启动 Wi-Fi Easy Connect，设备可能不支持。</string>
     <string name="wifi_connect_unsupported">此加密方式无法自动添加，请复制密码后在 Wi-Fi 设置中连接。</string>
     <string name="wifi_password_invalid">密码无效，无法自动连接</string>
@@ -76,6 +79,7 @@
     <string name="add_contact">添加到通讯录</string>
     <string name="add_event">添加到日历</string>
     <string name="open_sim_settings">SIM 卡设置</string>
+    <string name="add_esim">添加 eSIM</string>
     <string name="no_app">没有应用可以处理</string>
 
     <string name="wifi_security_open">开放网络</string>
@@ -126,6 +130,18 @@
     <string name="title_maoyan">猫眼</string>
     <string name="title_xiaomi_login">小米账号登录</string>
     <string name="title_mi_home_device">米家设备</string>
+    <string name="title_boarding_pass">登机牌 %1$s</string>
+    <string name="boarding_leg">第 %1$d 程</string>
+    <string name="boarding_passenger">旅客</string>
+    <string name="boarding_seat">座位</string>
+    <string name="boarding_class">舱位</string>
+    <string name="boarding_sequence">值机序号</string>
+    <string name="boarding_booking_reference">订座编码</string>
+    <string name="boarding_frequent_flyer">常旅客卡号</string>
+    <string name="boarding_bag_tag">行李牌号</string>
+    <string name="boarding_incomplete">部分信息无法识别，完整内容见原文。</string>
+    <string name="boarding_privacy">订座编码和姓名可用于查询和更改行程，分享前请注意。</string>
+    <string name="card_raw">原文</string>
     <string name="app_not_installed">未安装</string>
     <string name="module_active">模块已生效</string>
     <string name="module_inactive">未在 LSPosed 中启用 FerryQR</string>
@@ -138,6 +154,17 @@
     <string name="method_camera_desc">把二维码显示给应用的相机重新扫描。只依赖 Android 的相机接口，可作为备选。</string>
     <string name="method_didi_reason">仅支持相机画面。滴滴每次更新都会重新混淆扫码相关的代码，无法直接传递。</string>
     <string name="method_meituan_reason">仅支持直接传递。美团的扫码界面能稳定接收直接传递的内容，无需经过相机。</string>
+    <string name="settings_display_title">显示</string>
+    <string name="settings_long_codes">条形码放大方式</string>
+    <string name="settings_long_codes_desc">适用于条形码、PDF417 等长条形的码制。</string>
+    <string name="enlarge_tilt">倾斜</string>
+    <string name="enlarge_tilt_desc">利用屏幕纵向空间，沿屏幕对角线显示。</string>
+    <string name="enlarge_stretch">拉高</string>
+    <string name="enlarge_stretch_desc">保持水平并向上拉伸条形码。</string>
+    <string name="settings_full_brightness">放大时强制最高亮度</string>
+    <string name="settings_full_brightness_desc">放大二维码时将屏幕调到最亮，缩小后恢复。</string>
+    <string name="settings_remember_format">记住上次使用的码制</string>
+    <string name="settings_remember_format_desc">生成二维码时使用上次选择的码制。关闭时自动选择。</string>
     <string name="history_title">历史记录</string>
     <plurals name="history_count">
         <item quantity="other">%1$d 条记录</item>
@@ -163,6 +190,12 @@
         <item quantity="other">展开其余 %1$d 条</item>
     </plurals>
     <string name="favorites_show_less">收起</string>
+    <string name="favorites_reorder">排序</string>
+    <string name="favorites_reorder_done">完成</string>
+    <string name="favorite_move_up">上移</string>
+    <string name="favorite_move_down">下移</string>
+    <string name="favorite_move_top">移到最前</string>
+    <string name="favorite_drag">拖动以排序</string>
     <string name="shortcut_add">添加到快捷方式</string>
     <string name="shortcut_remove">从快捷方式中移除</string>
     <string name="shortcut_full">最多 %1$d 个</string>
@@ -171,6 +204,10 @@
     <string name="code_tap_shrink">点击缩小</string>
     <string name="code_enlarge">放大</string>
     <string name="code_shrink">缩小</string>
+    <string name="code_tap_enlarge_switch">点击放大，长按切换码制</string>
+    <string name="code_tap_shrink_switch">点击缩小，长按切换码制</string>
+    <string name="code_tap_close">点击关闭</string>
+    <string name="code_change_format">切换码制</string>
 
     <string name="action_generate">生成二维码</string>
     <string name="generate_title">生成二维码</string>
@@ -188,6 +225,38 @@
     <string name="code_share_failed">无法分享图片</string>
     <string name="generate_too_long">内容超出%1$s的容量，可改用%2$s。</string>
     <string name="generate_too_long_all">内容超出所有码制的容量</string>
+    <string name="generate_unfit">%1$s：%2$s，可改用%3$s。</string>
+    <string name="generate_unfit_all">%1$s：%2$s</string>
+    <string name="format_auto">自动：%1$s</string>
+    <string name="format_auto_desc">根据内容自动选择码制</string>
+    <string name="format_more">更多码制</string>
+    <string name="format_pick_title">选择码制</string>
+    <string name="format_original">原码制</string>
+    <string name="format_group_matrix">二维码</string>
+    <string name="format_group_product">商品条码</string>
+    <string name="format_group_linear">条形码</string>
+    <string name="format_note_qr">通用</string>
+    <string name="format_note_data_matrix">常见于工业标签</string>
+    <string name="format_note_aztec">常见于车票</string>
+    <string name="format_note_pdf417">常见于证件和登机牌</string>
+    <string name="format_note_ean_13">12 或 13 位数字，用于商品</string>
+    <string name="format_note_ean_8">7 或 8 位数字，用于小包装商品</string>
+    <string name="format_note_upc_a">11 或 12 位数字，用于北美商品</string>
+    <string name="format_note_upc_e">UPC-A 的压缩形式</string>
+    <string name="format_note_code_128">字母、数字和符号，常见于物流</string>
+    <string name="format_note_code_39">大写字母和数字</string>
+    <string name="format_note_code_93">Code 39 的紧凑形式</string>
+    <string name="format_note_codabar">数字，常见于图书馆</string>
+    <string name="format_note_itf">偶数位数字，常见于外包装箱</string>
+    <string name="format_too_long">内容过长</string>
+    <string name="format_digits_only">仅限数字</string>
+    <string name="format_needs_12_13">需要 12 或 13 位数字</string>
+    <string name="format_needs_7_8">需要 7 或 8 位数字</string>
+    <string name="format_needs_11_12">需要 11 或 12 位数字</string>
+    <string name="format_needs_even">需要偶数位数字</string>
+    <string name="format_characters">含有此码制不支持的字符</string>
+    <string name="format_rules">内容不符合此码制的规则</string>
+    <string name="format_check_digit">校验位应为 %1$s</string>
     <string name="generate_clip_label">二维码</string>
     <string name="type_qr">QR 码</string>
 

@@ -21,6 +21,8 @@ object Classifier {
     /** [format] is the symbology the content came from, which settles it for mini program codes. */
     fun classify(raw: String, format: String = ""): Payload {
         if (format == MINI_PROGRAM_FORMAT) return MiniProgramPayload(raw)
+        // Read before trimming: a boarding pass is fixed width, and its last field may be spaces.
+        BoardingPassParser.parse(raw)?.let { return BoardingPassPayload(raw, it) }
         val text = raw.trim()
         fun has(prefix: String) = text.startsWith(prefix, ignoreCase = true)
         return when {

@@ -3,6 +3,9 @@
 package io.github.lcebot.ferryqr.ui
 
 import androidx.annotation.StringRes
+import androidx.compose.material3.Switch
+import io.github.lcebot.ferryqr.AppSettings
+import io.github.lcebot.ferryqr.LongCodeEnlarge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -132,6 +135,8 @@ fun SettingsScreen(onBack: () -> Unit) {
             itemsIndexed(apps, key = { _, app -> app.pkg }) { index, app ->
                 AppSettingItem(app, segmentShape(index, apps.size))
             }
+            item(key = "display") { DisplaySettings() }
+            item(key = "create") { CreateSettings() }
         }
     }
 }
@@ -267,4 +272,141 @@ private fun MethodButtons(selected: Method, choosable: Boolean, onSelect: (Metho
             }
         }
     }
+}
+
+@Composable
+private fun SectionTitle(@StringRes title: Int) {
+    Text(
+        stringResource(title),
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(start = 4.dp, top = 28.dp, bottom = 14.dp),
+    )
+}
+
+/** How enlarged codes are shown: long codes tilted or stretched, and the screen at full brightness. */
+@Composable
+private fun DisplaySettings() {
+    val context = LocalContext.current
+    val haptics = rememberHaptics()
+    var mode by remember { mutableStateOf(AppSettings.longCodeEnlarge(context)) }
+    var bright by remember { mutableStateOf(AppSettings.fullBrightness(context)) }
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        SectionTitle(R.string.settings_display_title)
+        Surface(shape = segmentShape(0, 2), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Column {
+                    Text(stringResource(R.string.settings_long_codes), style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        stringResource(R.string.settings_long_codes_desc),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth().selectableGroup(),
+                    horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
+                ) {
+                    LongCodeEnlarge.entries.forEachIndexed { index, option ->
+                        ToggleButton(
+                            checked = option == mode,
+                            onCheckedChange = {
+                                if (it) {
+                                    haptics.toggle(option == LongCodeEnlarge.STRETCH)
+                                    mode = option
+                                    AppSettings.setLongCodeEnlarge(context, option)
+                                }
+                            },
+                            shapes = if (index == 0) {
+                                ButtonGroupDefaults.connectedLeadingButtonShapes()
+                            } else {
+                                ButtonGroupDefaults.connectedTrailingButtonShapes()
+                            },
+                            modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
+                        ) {
+                            Text(stringResource(enlargeLabel(option)), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+                Text(
+                    stringResource(enlargeDescription(mode)),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        SwitchItem(
+            title = R.string.settings_full_brightness,
+            description = R.string.settings_full_brightness_desc,
+            checked = bright,
+            shape = segmentShape(1, 2),
+            onChange = { on ->
+                haptics.toggle(on)
+                bright = on
+                AppSettings.setFullBrightness(context, on)
+            },
+        )
+    }
+}
+
+/** Whether the create page starts with the format chosen last time rather than choosing one itself. */
+@Composable
+private fun CreateSettings() {
+    val context = LocalContext.current
+    val haptics = rememberHaptics()
+    var keepFormat by remember { mutableStateOf(AppSettings.rememberFormat(context)) }
+    Column {
+        SectionTitle(R.string.generate_title)
+        SwitchItem(
+            title = R.string.settings_remember_format,
+            description = R.string.settings_remember_format_desc,
+            checked = keepFormat,
+            shape = segmentShape(0, 1),
+            onChange = { on ->
+                haptics.toggle(on)
+                keepFormat = on
+                AppSettings.setRememberFormat(context, on)
+            },
+        )
+    }
+}
+
+/** A setting that is on or off; the whole item toggles it, the way the system's own settings do. */
+@Composable
+private fun SwitchItem(@StringRes title: Int, @StringRes description: Int, checked: Boolean, shape: Shape, onChange: (Boolean) -> Unit) {
+    Surface(
+        checked = checked,
+        onCheckedChange = onChange,
+        shape = shape,
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        modifier = Modifier.fillMaxWidth().semantics { role = Role.Switch },
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(stringResource(title), style = MaterialTheme.typography.titleMedium)
+                Text(
+                    stringResource(description),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = checked, onCheckedChange = null)
+        }
+    }
+}
+
+@StringRes
+private fun enlargeLabel(mode: LongCodeEnlarge): Int = when (mode) {
+    LongCodeEnlarge.TILT -> R.string.enlarge_tilt
+    LongCodeEnlarge.STRETCH -> R.string.enlarge_stretch
+}
+
+@StringRes
+private fun enlargeDescription(mode: LongCodeEnlarge): Int = when (mode) {
+    LongCodeEnlarge.TILT -> R.string.enlarge_tilt_desc
+    LongCodeEnlarge.STRETCH -> R.string.enlarge_stretch_desc
 }

@@ -1,3 +1,5 @@
+// ModalBottomSheet and rememberBottomSheetState are experimental Material 3 APIs; combinedClickable
+// is stable and needs no opt-in.
 @file:OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 
 package io.github.lcebot.ferryqr.ui
@@ -5,13 +7,30 @@ package io.github.lcebot.ferryqr.ui
 import android.graphics.Bitmap
 import android.widget.Toast
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.text.font.FontFamily
+import io.github.lcebot.ferryqr.AppSettings
+import io.github.lcebot.ferryqr.LongCodeEnlarge
+import io.github.lcebot.ferryqr.dispatch.CardSection
+import io.github.lcebot.ferryqr.generate.CodeGenerator
+import io.github.lcebot.ferryqr.generate.CodeRules
+import kotlin.math.roundToInt
+import io.github.lcebot.ferryqr.generate.CodeType
+import io.github.lcebot.ferryqr.scan.MINI_PROGRAM_FORMAT
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -87,9 +106,22 @@ fun ResultSheet(card: ResultCard, onDismiss: () -> Unit, onAction: (CardAction) 
     }
 }
 
-/** The body of a result card, shared by the scanner's sheet and the image sheet. */
+/**
+ * The body of a result card, shared by the scanner's sheet and the image sheet. A code drawn again
+ * in history can be drawn in another format for the reader at hand, for as long as the card is open;
+ * the entry keeps the format it was read in.
+ */
 @Composable
 fun ResultCardContent(card: ResultCard, onAction: (CardAction) -> Unit, modifier: Modifier = Modifier) {
+    val original = remember(card.format) { CodeType.ofReaderName(card.format) }
+    var shown by remember(card) { mutableStateOf<CodeType?>(null) }
+    var picking by remember { mutableStateOf(false) }
+    // A mini program code means something only as one; its content drawn in another format would not.
+    val switchable = card.exportable && card.raw.isNotEmpty() && card.format.isNotEmpty() && card.format != MINI_PROGRAM_FORMAT
+    val image = shown?.let { type -> remember(card.raw, type) { CodeGenerator.draw(card.raw, type) } } ?: card.image
+    // What the code is drawn as: the picked format, else the original when the content fits it, as
+    // history redraws it, else the QR code it falls back to.
+    val displayed = shown ?: original?.takeIf { CodeRules.problem(card.raw, it) == null } ?: CodeType.QR
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -108,22 +140,38 @@ fun ResultCardContent(card: ResultCard, onAction: (CardAction) -> Unit, modifier
                 FavoriteToggle(card.raw, card.format, Modifier.offset(x = 12.dp))
             }
         }
-        card.image?.let { bitmap ->
-            CodeImage(bitmap, tilt = card.format == PDF417_FORMAT, modifier = Modifier.align(Alignment.CenterHorizontally))
+        image?.let { bitmap ->
+            CodeImage(
+                bitmap = bitmap,
+                long = displayed.long && bitmap.width > bitmap.height,
+                drawTall = if (switchable) {
+                    { ratio -> CodeGenerator.draw(card.raw, displayed, ratio) }
+                } else {
+                    null
+                },
+                onChangeFormat = if (switchable) {
+                    { picking = true }
+                } else {
+                    null
+                },
+                modifier = Modifier.align(Alignment.CenterHorizontally),
+            )
             // In history the original is out of sight, so the drawing can be kept or passed on.
             if (card.exportable) {
                 val context = LocalContext.current
                 CodeToolbar(bitmap, onMessage = { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() })
             }
         }
-        SelectionContainer {
-            Text(
-                card.headline,
-                style = if (card.headline.length > 60) MaterialTheme.typography.titleMedium
-                else MaterialTheme.typography.headlineSmall,
-                maxLines = 8,
-                overflow = TextOverflow.Ellipsis,
-            )
+        if (card.headline.isNotEmpty()) {
+            SelectionContainer {
+                Text(
+                    card.headline,
+                    style = if (card.headline.length > 60) MaterialTheme.typography.titleMedium
+                    else MaterialTheme.typography.headlineSmall,
+                    maxLines = 8,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
         card.body?.let { body ->
             SelectionContainer {
@@ -134,6 +182,7 @@ fun ResultCardContent(card: ResultCard, onAction: (CardAction) -> Unit, modifier
                 )
             }
         }
+        card.sections.forEach { CardSectionView(it) }
         card.notes.forEach { note ->
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
@@ -151,6 +200,69 @@ fun ResultCardContent(card: ResultCard, onAction: (CardAction) -> Unit, modifier
             }
         }
         CardActions(card.actions, onAction, Modifier.padding(top = 4.dp))
+    }
+    if (picking) {
+        FormatPickerSheet(
+            text = card.raw,
+            selected = displayed,
+            original = original,
+            onPick = { type ->
+                shown = type.takeUnless { it == original }
+                picking = false
+            },
+            onDismiss = { picking = false },
+        )
+    }
+}
+
+@Composable
+private fun CardSectionView(section: CardSection) {
+    val colors = MaterialTheme.colorScheme
+    when (section) {
+        is CardSection.Route -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            section.label?.let { Text(it, style = MaterialTheme.typography.labelLarge, color = colors.primary) }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text(section.from, style = MaterialTheme.typography.displaySmall)
+                Icon(
+                    painterResource(R.drawable.ic_flight),
+                    contentDescription = null,
+                    tint = colors.onSurfaceVariant,
+                    // The glyph points up; along the route it points from the first airport to the second.
+                    modifier = Modifier.size(28.dp).rotate(90f),
+                )
+                Text(section.to, style = MaterialTheme.typography.displaySmall)
+            }
+            if (section.caption.isNotEmpty()) {
+                Text(section.caption, style = MaterialTheme.typography.titleMedium, color = colors.onSurfaceVariant)
+            }
+        }
+        is CardSection.Fields -> Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            section.rows.chunked(2).forEach { line ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    line.forEach { (label, value) ->
+                        Column(Modifier.weight(1f)) {
+                            Text(label, style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant)
+                            SelectionContainer { Text(value, style = MaterialTheme.typography.bodyLarge) }
+                        }
+                    }
+                    if (line.size == 1) Spacer(Modifier.weight(1f))
+                }
+            }
+        }
+        is CardSection.Raw -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(stringResource(R.string.card_raw), style = MaterialTheme.typography.labelLarge, color = colors.onSurfaceVariant)
+            SelectionContainer {
+                Text(
+                    section.text,
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(colors.surfaceContainerHighest)
+                        .padding(12.dp),
+                )
+            }
+        }
     }
 }
 
@@ -286,72 +398,130 @@ private fun ActionIcon(action: CardAction, size: Dp) {
 /** The code's height while small; a wide linear code grows sideways from it. */
 private val CODE_HEIGHT = 160.dp
 
-/** zxing-cpp's name for PDF417, the one format that is enlarged by turning it. */
-private const val PDF417_FORMAT = "PDF_417"
-
 /** The white margin [TiltedCode] keeps around the code, so the small card shows it at full width. */
 private val TILTED_FRAME = 16.dp
 
+/** Room the sheet needs besides an enlarged code: its handle above, and the hint and spacing below. */
+private val ENLARGE_RESERVE = 112.dp
+
+/** Enlarging in the card that would make each module less than this much larger opens the full-window view instead. */
+private const val OVERLAY_GAIN = 1.3f
+
 /**
- * The code on white, since readers expect dark modules on light. A tap grows it to the sheet's full
- * width so another phone can scan it from a distance, and a second tap returns it. A PDF417 with
- * [tilt] grows into a square instead and turns as it grows, the same way the create page shows it.
+ * The code on white, since readers expect dark modules on light. A tap grows it as large as the
+ * sheet allows, so another phone can scan it from a distance, and a second tap returns it. The room
+ * is measured from the window as it is, so a turned phone or a resized window never lets the code
+ * outgrow the screen. A [long] code, a barcode or a PDF417, is tilted along the diagonal or
+ * stretched taller, as the settings choose, and a tilted one stays level when the area is wide
+ * anyway. Where the sheet has too little room to make the code clearly larger, as in a wide window,
+ * the tap shows it over the whole window instead. [onChangeFormat], when given, is a long press.
+ * [drawTall] draws the code again as tall as a stretched code has to be for every unit of width,
+ * so it grows taller bars rather than a scaled picture; without it the picture is scaled.
  */
 @Composable
-private fun CodeImage(bitmap: Bitmap, tilt: Boolean, modifier: Modifier = Modifier) {
+private fun CodeImage(
+    bitmap: Bitmap,
+    long: Boolean,
+    onChangeFormat: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+    drawTall: ((Float) -> Bitmap?)? = null,
+) {
+    val context = LocalContext.current
     val haptics = rememberHaptics()
+    val density = LocalDensity.current
+    val mode = remember { AppSettings.longCodeEnlarge(context) }
+    val brighten = remember { AppSettings.fullBrightness(context) }
     val image = remember(bitmap) { bitmap.asImageBitmap() }
     val aspect = bitmap.width.toFloat() / bitmap.height
     var enlarged by rememberSaveable { mutableStateOf(false) }
+    var overlay by rememberSaveable { mutableStateOf(false) }
+    var bounds by remember { mutableStateOf<Rect?>(null) }
+    val windowHeight = with(density) { LocalWindowInfo.current.containerSize.height.toDp() }
+    val bars = with(density) { (WindowInsets.systemBars.getTop(this) + WindowInsets.systemBars.getBottom(this)).toDp() }
     BoxWithConstraints(modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+        val tilted = long && mode == LongCodeEnlarge.TILT
+        val stretched = long && mode == LongCodeEnlarge.STRETCH
         val small = minOf(CODE_HEIGHT * maxOf(aspect, 1f), maxWidth)
-        val tilted = tilt && aspect > 1f
+        val room = maxOf(windowHeight - bars - ENLARGE_RESERVE, small / aspect)
+        val bigWidth = if (long) maxWidth else minOf(maxWidth, room * aspect)
+        val bigHeight = when {
+            tilted -> room
+            stretched -> minOf(room, maxWidth)
+            else -> bigWidth / aspect
+        }
+        // How much larger the code would grow: its modules, or for a stretched barcode already as wide
+        // as the card, its bars' height, which is what it gains.
+        val gain = when {
+            tilted -> {
+                val margin = TILTED_MARGIN.value
+                val angle = bestTilt(bigWidth.value, bigHeight.value, aspect, margin)
+                tiltFit(bigWidth.value, bigHeight.value, aspect, margin, angle) / (small / aspect).value
+            }
+            stretched -> maxOf(bigWidth / small, bigHeight / (small / aspect))
+            else -> bigWidth / small
+        }
+        val useOverlay = gain < OVERLAY_GAIN
+        // Rounded so a slightly different window does not draw the code again.
+        val tallRatio = (bigHeight / bigWidth * 20).roundToInt() / 20f
+        val tall = if (stretched && enlarged && drawTall != null) remember(tallRatio) { drawTall(tallRatio) } else null
         val spatial = MaterialTheme.motionScheme.defaultSpatialSpec<Dp>()
-        val width by animateDpAsState(if (enlarged) maxWidth else small, spatial, label = "code-width")
+        val width by animateDpAsState(if (enlarged) bigWidth else small, spatial, label = "code-width")
         val height by animateDpAsState(
             targetValue = when {
-                !tilted -> (if (enlarged) maxWidth else small) / aspect
-                enlarged -> maxWidth
-                else -> small / aspect + TILTED_FRAME
+                enlarged -> bigHeight
+                tilted -> small / aspect + TILTED_FRAME
+                else -> small / aspect
             },
             animationSpec = spatial,
             label = "code-height",
         )
         val clickLabel = stringResource(if (enlarged) R.string.code_shrink else R.string.code_enlarge)
-        fun toggle() {
+        val longClickLabel = stringResource(R.string.code_change_format)
+        fun tap() {
             haptics.tap()
-            enlarged = !enlarged
+            if (!enlarged && useOverlay) overlay = true else enlarged = !enlarged
         }
+        val longPress: (() -> Unit)? = onChangeFormat
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            val area = Modifier
+                .size(width, height)
+                .onGloballyPositioned { bounds = it.boundsInWindow() }
             if (tilted) {
                 // The card turns inside its area, so a ripple on that area would not match its outline.
                 TiltedCode(
                     bitmap,
-                    Modifier
-                        .size(width, height)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClickLabel = clickLabel,
-                            onClick = ::toggle,
-                        ),
+                    area.combinedClickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClickLabel = clickLabel,
+                        onLongClickLabel = if (longPress != null) longClickLabel else null,
+                        onLongClick = longPress,
+                        onClick = ::tap,
+                    ),
                 )
             } else {
                 Box(
-                    modifier = Modifier
-                        .size(width, height)
+                    modifier = area
                         .clip(RoundedCornerShape(20.dp))
                         .background(Color.White)
-                        .clickable(onClickLabel = clickLabel, onClick = ::toggle),
+                        .combinedClickable(
+                            onClickLabel = clickLabel,
+                            onLongClickLabel = if (longPress != null) longClickLabel else null,
+                            onLongClick = longPress,
+                            onClick = ::tap,
+                        ),
                     contentAlignment = Alignment.Center,
                 ) {
+                    val shown = remember(tall) { tall?.asImageBitmap() } ?: image
                     Image(
-                        bitmap = image,
+                        bitmap = shown,
                         contentDescription = null,
-                        contentScale = ContentScale.Fit,
+                        // Drawn at its new height, the stretched code fills the area exactly once it is there,
+                        // and its bars only grow or shrink in height on the way.
+                        contentScale = if (stretched) ContentScale.FillBounds else ContentScale.Fit,
                         filterQuality = FilterQuality.Medium,
                         modifier = Modifier.fillMaxSize(),
                     )
@@ -363,12 +533,20 @@ private fun CodeImage(bitmap: Bitmap, tilt: Boolean, modifier: Modifier = Modifi
                 transitionSpec = { fadeIn(fade) togetherWith fadeOut(fade) },
                 label = "code-hint",
             ) { big ->
+                val hint = when {
+                    big && longPress != null -> R.string.code_tap_shrink_switch
+                    big -> R.string.code_tap_shrink
+                    longPress != null -> R.string.code_tap_enlarge_switch
+                    else -> R.string.code_tap_enlarge
+                }
                 Text(
-                    stringResource(if (big) R.string.code_tap_shrink else R.string.code_tap_enlarge),
+                    stringResource(hint),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
     }
+    if (brighten && enlarged) FullBrightness()
+    if (overlay) CodeOverlay(bitmap, long, mode, brighten, bounds, onDismiss = { overlay = false }, drawTall = drawTall)
 }

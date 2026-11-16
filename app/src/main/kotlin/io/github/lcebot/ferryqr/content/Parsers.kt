@@ -3,9 +3,12 @@ package io.github.lcebot.ferryqr.content
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
+import java.time.Year
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
+import java.time.temporal.ChronoUnit
+import kotlin.math.abs
 
 internal object WifiParser {
     fun parse(text: String): WifiPayload? {
@@ -161,6 +164,236 @@ internal object EventParser {
             }
         } catch (e: DateTimeParseException) {
             null
+        }
+    }
+}
+
+/**
+ * Reads IATA's Bar Coded Boarding Pass (Resolution 792), the content of every airline boarding pass
+ * whatever its symbology. Its first 60 characters have fixed fields: a format code M, the number of
+ * flights, the passenger's name and an e-ticket mark, then the first flight's booking reference,
+ * airports, carrier, flight number, day, class, seat, sequence number and status, and the length
+ * of the optional data that follows. Each further flight repeats the flight fields.
+ */
+internal object BoardingPassParser {
+
+    private val MANDATORY = Regex("^M[1-4].{20}[E ].{7}[A-Z]{3}[A-Z]{3}.{3}[0-9 ]{4}[A-Z ][0-9]{3}[A-Z].{4}.{5}.[0-9A-Fa-f]{2}")
+
+    private const val HEADER = 23
+    private const val LEG = 37
+
+    /** Whether [text] begins the way every boarding pass does. */
+    fun looksLike(text: String): Boolean = MANDATORY.containsMatchIn(text)
+
+    fun parse(raw: String): BoardingPass? {
+        if (!looksLike(raw)) return null
+        val count = raw[1] - '0'
+        val passenger = raw.substring(2, 22).trim()
+        val legs = mutableListOf<FlightLeg>()
+        var frequentFlyer: String? = null
+        var bagTag: String? = null
+        var complete = true
+        var position = HEADER
+        for (index in 0 until count) {
+            if (raw.length < position + LEG) {
+                complete = false
+                break
+            }
+            val leg = raw.substring(position, position + LEG)
+            legs += FlightLeg(
+                bookingReference = leg.substring(0, 7).trim(),
+                from = leg.substring(7, 10).trim(),
+                to = leg.substring(10, 13).trim(),
+                carrier = leg.substring(13, 16).trim(),
+                flightNumber = leg.substring(16, 21).trim(),
+                dayOfYear = leg.substring(21, 24).trim(),
+                compartment = leg.substring(24, 25).trim(),
+                seat = leg.substring(25, 29).trim(),
+                sequence = leg.substring(29, 34).trim(),
+            )
+            position += LEG
+            val size = leg.substring(35, 37).toIntOrNull(16)
+            if (size == null || raw.length < position + size) {
+                complete = false
+                break
+            }
+            val optional = readOptional(raw.substring(position, position + size), first = index == 0)
+            position += size
+            if (optional == null) {
+                complete = false
+                break
+            }
+            frequentFlyer = frequentFlyer ?: optional.frequentFlyer
+            bagTag = bagTag ?: optional.bagTag
+        }
+        return BoardingPass(passenger, legs, frequentFlyer, bagTag, complete)
+    }
+
+    private class Optional(val frequentFlyer: String?, val bagTag: String?)
+
+    /**
+     * The optional data of one flight; null when its lengths do not add up. The first flight's data
+     * may begin with a version mark and the items that occur once per pass, among them the bag tag;
+     * every flight's data may then hold the items repeated per flight, among them the frequent flyer
+     * number. Data past those items is each airline's own and is left alone.
+     */
+    private fun readOptional(data: String, first: Boolean): Optional? {
+        var position = 0
+        var bagTag: String? = null
+        if (first && data.startsWith('>')) {
+            val uniqueSize = data.slice(2, 4)?.toIntOrNull(16) ?: return null
+            val unique = data.slice(4, 4 + uniqueSize) ?: return null
+            bagTag = unique.slice(11, 24)?.trim()?.takeIf { tag -> tag.any { it != '0' } }
+            position = 4 + uniqueSize
+        }
+        if (data.length < position + 2) return Optional(null, bagTag)
+        // Airline data that does not start with a length is not the repeated items, and is left alone.
+        val repeatedSize = data.slice(position, position + 2)?.toIntOrNull(16) ?: return Optional(null, bagTag)
+        val repeated = data.slice(position + 2, position + 2 + repeatedSize) ?: return null
+        val airline = repeated.slice(18, 21)?.trim().orEmpty()
+        val number = repeated.slice(21, 37)?.trim().orEmpty()
+        val frequentFlyer = if (number.isEmpty()) null else listOf(airline, number).filter { it.isNotEmpty() }.joinToString(" ")
+        return Optional(frequentFlyer, bagTag)
+    }
+
+    /**
+     * The date of a flight given as [dayOfYear], in whichever of the year before, the year of and the
+     * year after [scanned] puts it closest to the scan, so a pass scanned at the turn of the year
+     * still lands on the right one. Each year counts its own leap day. Null for a day no year has.
+     */
+    fun flightDate(dayOfYear: Int, scanned: LocalDate): LocalDate? =
+        (scanned.year - 1..scanned.year + 1)
+            .filter { dayOfYear in 1..Year.of(it).length() }
+            .map { LocalDate.ofYearDay(it, dayOfYear) }
+            .minByOrNull { abs(ChronoUnit.DAYS.between(scanned, it)) }
+
+    /** [start] to [end] of this text, or null when the text is shorter. */
+    private fun String.slice(start: Int, end: Int): String? = if (end <= length && start <= end) substring(start, end) else null
+}
+
+/**
+ * Reads the QR code a computer shows for cross-device authentication with a passkey, as CTAP 2.2
+ * defines it: FIDO:/ followed by digits that encode a CBOR map. Every 7 bytes are written as 17
+ * digits of their little-endian value, and a shorter last group takes as few digits as its bytes
+ * need. Key 3 of the map is when the code was made, in seconds since 1970, which browsers include.
+ */
+internal object PasskeyQr {
+
+    private const val PREFIX = "FIDO:/"
+    private const val CHUNK_BYTES = 7
+    private const val CHUNK_DIGITS = 17
+
+    /** Digits that a final group of 1 to 6 bytes takes. */
+    private val PARTIAL_DIGITS = intArrayOf(0, 3, 5, 8, 10, 13, 15)
+
+    private const val KEY_CREATED = 3L
+
+    /** When the code was made, in seconds since 1970, or null when the code does not say. */
+    fun createdAt(raw: String): Long? {
+        if (!raw.startsWith(PREFIX, ignoreCase = true)) return null
+        val bytes = bytesOf(raw.substring(PREFIX.length)) ?: return null
+        return try {
+            Cbor(bytes).uintInMap(KEY_CREATED)
+        } catch (e: IndexOutOfBoundsException) {
+            null
+        } catch (e: IllegalStateException) {
+            null
+        }
+    }
+
+    private fun bytesOf(digits: String): ByteArray? {
+        if (digits.isEmpty() || digits.any { it !in '0'..'9' }) return null
+        val out = ArrayList<Byte>()
+        var index = 0
+        while (index < digits.length) {
+            val remaining = digits.length - index
+            val (take, bytes) = if (remaining >= CHUNK_DIGITS) {
+                CHUNK_DIGITS to CHUNK_BYTES
+            } else {
+                val partial = PARTIAL_DIGITS.indexOf(remaining)
+                if (partial <= 0) return null
+                remaining to partial
+            }
+            var value = digits.substring(index, index + take).toLong()
+            repeat(bytes) {
+                out += (value and 0xFF).toByte()
+                value = value ushr 8
+            }
+            if (value != 0L) return null
+            index += take
+        }
+        return out.toByteArray()
+    }
+
+    /** Just enough CBOR to find an unsigned value under an unsigned key of the top map. */
+    private class Cbor(private val data: ByteArray) {
+        private var position = 0
+
+        fun uintInMap(key: Long): Long? {
+            val (major, pairs) = head()
+            check(major == MAP)
+            var found: Long? = null
+            repeat(pairs.toInt()) {
+                val (keyMajor, keyValue) = head()
+                if (keyMajor == UINT && keyValue == key) {
+                    val (valueMajor, value) = head()
+                    if (valueMajor == UINT) found = value else skipBody(valueMajor, value)
+                } else {
+                    skipBody(keyMajor, keyValue)
+                    skip()
+                }
+            }
+            return found
+        }
+
+        private fun next(): Int = data[position++].toInt() and 0xFF
+
+        /** The major type of the next item and its argument: a value, a length or a count. */
+        private fun head(): Pair<Int, Long> {
+            val initial = next()
+            val major = initial ushr 5
+            val info = initial and 0x1F
+            val argument = when {
+                info < 24 -> info.toLong()
+                info == 24 -> next().toLong()
+                info == 25 -> (next().toLong() shl 8) or next().toLong()
+                info == 26 -> (0 until 4).fold(0L) { acc, _ -> (acc shl 8) or next().toLong() }
+                info == 27 -> (0 until 8).fold(0L) { acc, _ -> (acc shl 8) or next().toLong() }
+                else -> error("indefinite lengths are not used here")
+            }
+            return major to argument
+        }
+
+        private fun skip() {
+            val (major, argument) = head()
+            skipBody(major, argument)
+        }
+
+        private fun skipBody(major: Int, argument: Long) {
+            when (major) {
+                UINT, NEGATIVE, SIMPLE -> Unit
+                BYTES, TEXT -> {
+                    check(argument in 0..(data.size - position).toLong())
+                    position += argument.toInt()
+                }
+                ARRAY -> repeat(argument.toInt()) { skip() }
+                MAP -> repeat(argument.toInt()) {
+                    skip()
+                    skip()
+                }
+                TAG -> skip()
+            }
+        }
+
+        companion object {
+            const val UINT = 0
+            const val NEGATIVE = 1
+            const val BYTES = 2
+            const val TEXT = 3
+            const val ARRAY = 4
+            const val MAP = 5
+            const val TAG = 6
+            const val SIMPLE = 7
         }
     }
 }
