@@ -220,7 +220,7 @@ fun CodeOverlay(
                 val height = minOf(maxHeight, maxWidth)
                 // Rounded so a slightly different window does not draw the code again.
                 val ratio = ((height / maxWidth) * 20).roundToInt() / 20f
-                val tall = remember(ratio) { drawTall?.invoke(ratio) } ?: code
+                val tall = remember(code, ratio) { drawTall?.invoke(ratio) } ?: code
                 PlainCode(tall, codeModifier.size(maxWidth, height), stretch = true)
             }
             Text(

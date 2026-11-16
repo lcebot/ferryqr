@@ -457,7 +457,8 @@ private fun CodeImage(
         }
         // Rounded so a slightly different window does not draw the code again.
         val tallRatio = (bigHeight / bigWidth * 20).roundToInt() / 20f
-        val tall = if (stretched && enlarged && drawTall != null) remember(tallRatio) { drawTall(tallRatio) } else null
+        // Keyed on the drawing too, which changes with the format, so a switch shows at once.
+        val tall = if (stretched && enlarged && drawTall != null) remember(bitmap, tallRatio) { drawTall(tallRatio) } else null
         val spatial = MaterialTheme.motionScheme.defaultSpatialSpec<Dp>()
         val width by animateDpAsState(if (enlarged) bigWidth else small, spatial, label = "code-width")
         val height by animateDpAsState(
