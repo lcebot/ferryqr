@@ -52,7 +52,6 @@ import androidx.compose.ui.util.lerp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
-import io.github.lcebot.ferryqr.LongCodeEnlarge
 import io.github.lcebot.ferryqr.R
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.roundToInt
@@ -113,17 +112,15 @@ private fun KeepScreenOn() {
 }
 
 /**
- * A code shown over the whole window on white, for when the card has too little room to make it
- * any larger, as in a wide window. It grows out of the card's own code at [source], in window
+ * A long code, a barcode or a PDF417, shown level over the whole window on white, one of the ways
+ * the settings offer to enlarge it. It grows out of the card's own code at [source], in window
  * coordinates, and returns into it when closed by a tap or a back gesture, which shrinks it as it
- * goes. A [long] code is tilted or stretched as [mode] says; tilting keeps it level when the window
- * is wide enough anyway. [drawTall], when given, draws a stretched code again at its new height.
+ * goes. [drawTall], when given, draws the code again as tall as the window lets it be, so its bars
+ * or rows grow rather than a scaled picture.
  */
 @Composable
 fun CodeOverlay(
     code: Bitmap,
-    long: Boolean,
-    mode: LongCodeEnlarge,
     brighten: Boolean,
     source: Rect?,
     onDismiss: () -> Unit,
@@ -185,7 +182,6 @@ fun CodeOverlay(
                     .padding(OVERLAY_MARGIN),
                 contentAlignment = Alignment.Center,
             ) {
-                val ratio = code.width.toFloat() / code.height
                 val codeModifier = Modifier
                     .onGloballyPositioned { target = it.boundsInWindow() }
                     .graphicsLayer {
@@ -199,19 +195,12 @@ fun CodeOverlay(
                         translationX = lerp(from.center.x - to.center.x, 0f, p)
                         translationY = lerp(from.center.y - to.center.y, 0f, p)
                     }
-                when {
-                    long && mode == LongCodeEnlarge.TILT -> TiltedCode(code, codeModifier.size(maxWidth, maxHeight))
-                    long -> {
-                        val height = minOf(maxHeight, maxWidth)
-                        val ratio = ((height / maxWidth) * 20).roundToInt() / 20f
-                        val tall = remember(ratio) { drawTall?.invoke(ratio) } ?: code
-                        PlainCode(tall, codeModifier.size(maxWidth, height), stretch = true)
-                    }
-                    else -> {
-                        val side = minOf(maxWidth, maxHeight * ratio)
-                        PlainCode(code, codeModifier.size(side, side / ratio), stretch = false)
-                    }
-                }
+                // Bars taller than the code is wide add nothing a reader needs.
+                val height = minOf(maxHeight, maxWidth)
+                // Rounded so a slightly different window does not draw the code again.
+                val ratio = ((height / maxWidth) * 20).roundToInt() / 20f
+                val tall = remember(ratio) { drawTall?.invoke(ratio) } ?: code
+                PlainCode(tall, codeModifier.size(maxWidth, height), stretch = true)
             }
             Text(
                 stringResource(R.string.code_tap_close),

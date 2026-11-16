@@ -1,4 +1,4 @@
-// ModalBottomSheet and rememberBottomSheetState are experimental Material 3 APIs.
+// rememberBottomSheetState is an experimental Material 3 API.
 @file:OptIn(ExperimentalMaterial3Api::class)
 
 package io.github.lcebot.ferryqr.ui
@@ -24,7 +24,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.SheetValue
@@ -91,13 +90,13 @@ fun FormatPickerSheet(
         }
     }
     val sheet = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded))
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
+    ModalSheet(onDismissRequest = onDismiss, sheetState = sheet) {
         Text(
             stringResource(R.string.format_pick_title),
             style = MaterialTheme.typography.titleLarge,
             modifier = Modifier.padding(horizontal = 24.dp),
         )
-        val shown = options ?: return@ModalBottomSheet
+        val shown = options ?: return@ModalSheet
         LazyVerticalGrid(
             columns = GridCells.Fixed(2),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),

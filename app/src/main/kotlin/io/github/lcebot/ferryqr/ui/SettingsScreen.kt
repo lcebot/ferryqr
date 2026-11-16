@@ -312,15 +312,15 @@ private fun DisplaySettings() {
                             checked = option == mode,
                             onCheckedChange = {
                                 if (it) {
-                                    haptics.toggle(option == LongCodeEnlarge.STRETCH)
+                                    haptics.step()
                                     mode = option
                                     AppSettings.setLongCodeEnlarge(context, option)
                                 }
                             },
-                            shapes = if (index == 0) {
-                                ButtonGroupDefaults.connectedLeadingButtonShapes()
-                            } else {
-                                ButtonGroupDefaults.connectedTrailingButtonShapes()
+                            shapes = when (index) {
+                                0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
+                                LongCodeEnlarge.entries.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
+                                else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
                             },
                             modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
                         ) {
@@ -403,10 +403,12 @@ private fun SwitchItem(@StringRes title: Int, @StringRes description: Int, check
 private fun enlargeLabel(mode: LongCodeEnlarge): Int = when (mode) {
     LongCodeEnlarge.TILT -> R.string.enlarge_tilt
     LongCodeEnlarge.STRETCH -> R.string.enlarge_stretch
+    LongCodeEnlarge.FULL_SCREEN -> R.string.enlarge_full_screen
 }
 
 @StringRes
 private fun enlargeDescription(mode: LongCodeEnlarge): Int = when (mode) {
     LongCodeEnlarge.TILT -> R.string.enlarge_tilt_desc
     LongCodeEnlarge.STRETCH -> R.string.enlarge_stretch_desc
+    LongCodeEnlarge.FULL_SCREEN -> R.string.enlarge_full_screen_desc
 }

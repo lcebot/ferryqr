@@ -29,7 +29,7 @@ import kotlin.math.min
 import kotlin.math.sin
 
 /** White margin around a tilted code, matching the quiet zone readers expect. */
-internal val TILTED_MARGIN = 8.dp
+private val TILTED_MARGIN = 8.dp
 private const val MAX_TILT = 75
 private const val TILT_GAIN = 1.02f
 
@@ -37,7 +37,7 @@ private const val TILT_GAIN = 1.02f
  * The largest height a code [ratio] times as wide as it is tall can have when its card, [margin]
  * included, is turned by [degrees] inside [width] by [height]. Any unit, as long as all agree.
  */
-internal fun tiltFit(width: Float, height: Float, ratio: Float, margin: Float, degrees: Float): Float {
+private fun tiltFit(width: Float, height: Float, ratio: Float, margin: Float, degrees: Float): Float {
     val radians = Math.toRadians(degrees.toDouble())
     val c = cos(radians).toFloat()
     val s = sin(radians).toFloat()
@@ -50,7 +50,7 @@ internal fun tiltFit(width: Float, height: Float, ratio: Float, margin: Float, d
  * The angle at which such a code is largest, preferring a flatter angle unless tilting further makes
  * it clearly larger, so a wide area keeps the code level.
  */
-internal fun bestTilt(width: Float, height: Float, ratio: Float, margin: Float): Float {
+private fun bestTilt(width: Float, height: Float, ratio: Float, margin: Float): Float {
     var target = 0f
     var best = tiltFit(width, height, ratio, margin, 0f)
     for (degrees in 1..MAX_TILT) {

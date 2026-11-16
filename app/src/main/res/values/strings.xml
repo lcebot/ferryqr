@@ -164,6 +164,8 @@
     <string name="enlarge_tilt_desc">Uses the screen’s height by showing the code along its diagonal.</string>
     <string name="enlarge_stretch">Stretch</string>
     <string name="enlarge_stretch_desc">Keeps the code level and stretches it taller.</string>
+    <string name="enlarge_full_screen">Full screen</string>
+    <string name="enlarge_full_screen_desc">Covers the whole window, keeping the code level and stretching it taller.</string>
     <string name="settings_full_brightness">Full brightness when enlarged</string>
     <string name="settings_full_brightness_desc">Turns the screen to full brightness while a code is enlarged, and restores it after.</string>
     <string name="settings_remember_format">Remember the last format</string>

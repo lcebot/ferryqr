@@ -57,6 +57,10 @@ android {
         }
     }
 
+    // Unit tests exist only for this build type. Testing the release type lets CI build the APK from
+    // the classes the tests compiled.
+    testBuildType = "release"
+
     buildTypes {
         release {
             if (keystoreAlias != null) signingConfig = signingConfigs.getByName("release")

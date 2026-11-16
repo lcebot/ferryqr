@@ -440,10 +440,11 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
     // History stays open after a handoff, so returning to the app lands back on the list.
     fun onResult(result: ActionResult) {
         when (result) {
-            ActionResult.Handoff, ActionResult.Done -> {
+            ActionResult.Handoff -> {
                 haptics.tap()
                 showing = null
             }
+            ActionResult.Done -> haptics.tap()
             ActionResult.Copied -> {
                 haptics.confirm()
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {

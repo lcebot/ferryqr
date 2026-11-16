@@ -1,5 +1,5 @@
-// ModalBottomSheet and rememberBottomSheetState are experimental Material 3 APIs; combinedClickable
-// is stable and needs no opt-in.
+// rememberBottomSheetState is an experimental Material 3 API; combinedClickable is stable and needs
+// no opt-in.
 @file:OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 
 package io.github.lcebot.ferryqr.ui
@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
@@ -57,7 +58,6 @@ import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberBottomSheetState
@@ -94,7 +94,7 @@ fun ResultSheet(card: ResultCard, onDismiss: () -> Unit, onAction: (CardAction) 
         initialValue = SheetValue.Hidden,
         enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded),
     )
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = state) {
+    ModalSheet(onDismissRequest = onDismiss, sheetState = state) {
         ResultCardContent(
             card = card,
             onAction = onAction,
@@ -404,17 +404,21 @@ private val TILTED_FRAME = 16.dp
 /** Room the sheet needs besides an enlarged code: its handle above, and the hint and spacing below. */
 private val ENLARGE_RESERVE = 112.dp
 
-/** Enlarging in the card that would make each module less than this much larger opens the full-window view instead. */
-private const val OVERLAY_GAIN = 1.3f
+/**
+ * Where the code is on screen, read only when the full-window view opens, so following the sheet
+ * as it moves recomposes nothing.
+ */
+private class Place {
+    var coordinates: LayoutCoordinates? = null
+}
 
 /**
  * The code on white, since readers expect dark modules on light. A tap grows it as large as the
  * sheet allows, so another phone can scan it from a distance, and a second tap returns it. The room
  * is measured from the window as it is, so a turned phone or a resized window never lets the code
- * outgrow the screen. A [long] code, a barcode or a PDF417, is tilted along the diagonal or
- * stretched taller, as the settings choose, and a tilted one stays level when the area is wide
- * anyway. Where the sheet has too little room to make the code clearly larger, as in a wide window,
- * the tap shows it over the whole window instead. [onChangeFormat], when given, is a long press.
+ * outgrow the screen. A [long] code, a barcode or a PDF417, is tilted along the diagonal,
+ * stretched taller, or shown level over the whole window, as the settings choose, and a tilted one
+ * stays level when the area is wide anyway. [onChangeFormat], when given, is a long press.
  * [drawTall] draws the code again as tall as a stretched code has to be for every unit of width,
  * so it grows taller bars rather than a scaled picture; without it the picture is scaled.
  */
@@ -435,12 +439,14 @@ private fun CodeImage(
     val aspect = bitmap.width.toFloat() / bitmap.height
     var enlarged by rememberSaveable { mutableStateOf(false) }
     var overlay by rememberSaveable { mutableStateOf(false) }
-    var bounds by remember { mutableStateOf<Rect?>(null) }
+    var source by remember { mutableStateOf<Rect?>(null) }
+    val place = remember { Place() }
     val windowHeight = with(density) { LocalWindowInfo.current.containerSize.height.toDp() }
     val bars = with(density) { (WindowInsets.systemBars.getTop(this) + WindowInsets.systemBars.getBottom(this)).toDp() }
     BoxWithConstraints(modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
         val tilted = long && mode == LongCodeEnlarge.TILT
         val stretched = long && mode == LongCodeEnlarge.STRETCH
+        val fullScreen = long && mode == LongCodeEnlarge.FULL_SCREEN
         val small = minOf(CODE_HEIGHT * maxOf(aspect, 1f), maxWidth)
         val room = maxOf(windowHeight - bars - ENLARGE_RESERVE, small / aspect)
         val bigWidth = if (long) maxWidth else minOf(maxWidth, room * aspect)
@@ -449,18 +455,6 @@ private fun CodeImage(
             stretched -> minOf(room, maxWidth)
             else -> bigWidth / aspect
         }
-        // How much larger the code would grow: its modules, or for a stretched barcode already as wide
-        // as the card, its bars' height, which is what it gains.
-        val gain = when {
-            tilted -> {
-                val margin = TILTED_MARGIN.value
-                val angle = bestTilt(bigWidth.value, bigHeight.value, aspect, margin)
-                tiltFit(bigWidth.value, bigHeight.value, aspect, margin, angle) / (small / aspect).value
-            }
-            stretched -> maxOf(bigWidth / small, bigHeight / (small / aspect))
-            else -> bigWidth / small
-        }
-        val useOverlay = gain < OVERLAY_GAIN
         // Rounded so a slightly different window does not draw the code again.
         val tallRatio = (bigHeight / bigWidth * 20).roundToInt() / 20f
         val tall = if (stretched && enlarged && drawTall != null) remember(tallRatio) { drawTall(tallRatio) } else null
@@ -479,7 +473,12 @@ private fun CodeImage(
         val longClickLabel = stringResource(R.string.code_change_format)
         fun tap() {
             haptics.tap()
-            if (!enlarged && useOverlay) overlay = true else enlarged = !enlarged
+            if (fullScreen) {
+                source = place.coordinates?.takeIf { it.isAttached }?.boundsInWindow()
+                overlay = true
+            } else {
+                enlarged = !enlarged
+            }
         }
         val longPress: (() -> Unit)? = onChangeFormat
         Column(
@@ -488,7 +487,7 @@ private fun CodeImage(
         ) {
             val area = Modifier
                 .size(width, height)
-                .onGloballyPositioned { bounds = it.boundsInWindow() }
+                .onGloballyPositioned { place.coordinates = it }
             if (tilted) {
                 // The card turns inside its area, so a ripple on that area would not match its outline.
                 TiltedCode(
@@ -548,5 +547,5 @@ private fun CodeImage(
         }
     }
     if (brighten && enlarged) FullBrightness()
-    if (overlay) CodeOverlay(bitmap, long, mode, brighten, bounds, onDismiss = { overlay = false }, drawTall = drawTall)
+    if (overlay) CodeOverlay(bitmap, brighten, source, onDismiss = { overlay = false }, drawTall = drawTall)
 }

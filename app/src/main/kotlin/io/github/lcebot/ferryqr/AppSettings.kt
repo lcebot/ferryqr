@@ -4,7 +4,7 @@ import android.content.Context
 import androidx.core.content.edit
 
 /** How long codes, barcodes and PDF417, grow when enlarged. */
-enum class LongCodeEnlarge { TILT, STRETCH }
+enum class LongCodeEnlarge { TILT, STRETCH, FULL_SCREEN }
 
 /** The user's choices from the settings page, read where they apply. */
 object AppSettings {

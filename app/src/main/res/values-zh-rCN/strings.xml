@@ -161,6 +161,8 @@
     <string name="enlarge_tilt_desc">利用屏幕纵向空间，沿屏幕对角线显示。</string>
     <string name="enlarge_stretch">拉高</string>
     <string name="enlarge_stretch_desc">保持水平并向上拉伸条形码。</string>
+    <string name="enlarge_full_screen">全屏</string>
+    <string name="enlarge_full_screen_desc">覆盖整个窗口，保持水平并向上拉伸条形码。</string>
     <string name="settings_full_brightness">放大时强制最高亮度</string>
     <string name="settings_full_brightness_desc">放大二维码时将屏幕调到最亮，缩小后恢复。</string>
     <string name="settings_remember_format">记住上次使用的码制</string>

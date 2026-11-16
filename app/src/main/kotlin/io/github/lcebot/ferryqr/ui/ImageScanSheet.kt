@@ -42,7 +42,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -122,7 +121,7 @@ fun ImageScanSheet(vm: ImageScanViewModel, onClose: () -> Unit) {
     }
 
     val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
-    ModalBottomSheet(onDismissRequest = onClose, sheetState = sheetState) {
+    ModalSheet(onDismissRequest = onClose, sheetState = sheetState) {
         AnimatedContent(
             targetState = result,
             contentKey = { read ->
