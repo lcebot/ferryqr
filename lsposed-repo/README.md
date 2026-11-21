@@ -28,7 +28,7 @@ Some codes lead to a feature or page inside an app only when that app's own scan
 
 ## Privacy
 
-FerryQR asks only for the camera and has no internet access. A code's content is passed only to the app it is opened in. History stays on the phone, and the create page reads the clipboard only once, as it opens. Without camera access, images can still be scanned.
+FerryQR asks only for the camera and has no internet access. A code's content is passed only to the app it is opened in. History stays on the phone, and whether content that may hold sensitive information is kept in history can be chosen item by item in the settings. The create page reads the clipboard only once, as it opens. Without camera access, images can still be scanned.
 
 ## License
 
