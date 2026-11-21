@@ -41,6 +41,7 @@
     <string name="kind_event">Event</string>
     <string name="kind_esim">eSIM activation code</string>
     <string name="kind_boarding_pass">Boarding pass</string>
+    <string name="kind_otp">Two-factor key</string>
     <string name="kind_fido">Passkey</string>
     <string name="kind_dpp" translatable="false">Wi-Fi Easy Connect</string>
 
@@ -107,6 +108,7 @@
     <string name="settings_title">Settings</string>
     <string name="settings_open_in_title">Opening in other apps</string>
     <string name="settings_open_in_intro">With FerryQR enabled for an app in LSPosed, the codes only that app opens properly can be scanned with FerryQR too. Alipay takes scan results from other apps through its official entry, so it always works, module or not.</string>
+    <string name="settings_open_in_summary">Module status and ferry methods</string>
     <string name="settings_methods_intro">Choose how codes are “ferried” to each app:</string>
     <string name="app_wechat">WeChat</string>
     <string name="app_didi">DiDi</string>
@@ -144,6 +146,23 @@
     <string name="boarding_bag_tag">Bag tag number</string>
     <string name="boarding_incomplete">Some details could not be read. The raw content below has everything.</string>
     <string name="boarding_privacy">The booking reference and name can be used to look up and change the trip. Take care before sharing.</string>
+    <string name="title_otp">%1$s: %2$s</string>
+    <string name="otp_unhandled">No authenticator app is installed, or none accepted this key.</string>
+    <string name="otp_add">Add to authenticator</string>
+    <string name="otp_copy_secret">Copy key</string>
+    <string name="otp_copy_account">Copy account</string>
+    <string name="otp_issuer">Service</string>
+    <string name="otp_account">Account</string>
+    <string name="otp_type">Type</string>
+    <string name="otp_period">Period</string>
+    <plurals name="otp_seconds">
+        <item quantity="one">%d second</item>
+        <item quantity="other">%d seconds</item>
+    </plurals>
+    <string name="otp_counter">Counter</string>
+    <string name="otp_digits">Digits</string>
+    <string name="otp_algorithm">Algorithm</string>
+    <string name="otp_privacy">The key can be used to generate verification codes. Take care before sharing.</string>
     <string name="card_raw">Raw content</string>
     <string name="app_not_installed">Not installed</string>
     <string name="module_active">Module active</string>
@@ -170,6 +189,8 @@
     <string name="settings_full_brightness_desc">Turns the screen to full brightness while a code is enlarged, and restores it after.</string>
     <string name="settings_remember_format">Remember the last format</string>
     <string name="settings_remember_format_desc">The create page starts with the format chosen last time. When off, it picks one automatically.</string>
+    <string name="settings_keep_intro">Content that may be sensitive is kept in history after a scan only where switched on.</string>
+    <string name="keep_wifi_password">Wi-Fi password</string>
     <string name="history_title">History</string>
     <plurals name="history_count">
         <item quantity="one">%1$d entry</item>

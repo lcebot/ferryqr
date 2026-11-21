@@ -36,6 +36,8 @@ object Classifier {
             has("BEGIN:VEVENT") || has("BEGIN:VCALENDAR") ->
                 EventParser.parse(text)?.let { EventPayload(text, it) } ?: TextPayload(text)
             has("MATMSG:") -> mailto(text)
+            // Read before the whitespace check: labels are often written with their spaces unescaped.
+            has("otpauth://") -> OtpParser.parse(text)?.let { OtpPayload(text, it) } ?: uriLike(text)
             has("SMSTO:") -> smsto(text, text.substringAfter(':'))
             SMS_COLON.matches(text) -> smsto(text, text.substringAfter(':'))
             WHITESPACE.containsMatchIn(text) -> TextPayload(text)

@@ -2,6 +2,9 @@ package io.github.lcebot.ferryqr.history
 
 import android.content.Context
 import android.util.AtomicFile
+import io.github.lcebot.ferryqr.AppSettings
+import io.github.lcebot.ferryqr.content.Classifier
+import io.github.lcebot.ferryqr.content.sensitiveKind
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -72,7 +75,17 @@ class HistoryStore private constructor(private val context: Context) {
         }
     }
 
-    fun add(text: String, format: String) = update { entries ->
+    /**
+     * Records a scan. Sensitive content is left out where the settings say so; an entry it already
+     * has stays as it was, and favoriting such content still keeps it, as the user asked for that.
+     */
+    fun add(text: String, format: String) {
+        val kind = Classifier.classify(text, format).sensitiveKind
+        if (kind != null && !AppSettings.keeps(context, kind)) return
+        addEntry(text, format)
+    }
+
+    private fun addEntry(text: String, format: String) = update { entries ->
         val now = System.currentTimeMillis()
         val entry = entries.find { it.text == text }?.copy(format = format, time = now) ?: HistoryEntry(text, format, now)
         listOf(entry) + entries.filter { it.text != text }

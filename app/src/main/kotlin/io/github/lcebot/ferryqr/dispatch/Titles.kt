@@ -8,6 +8,7 @@ import io.github.lcebot.ferryqr.content.ContactPayload
 import io.github.lcebot.ferryqr.content.EsimPayload
 import io.github.lcebot.ferryqr.content.EventPayload
 import io.github.lcebot.ferryqr.content.MiniProgramPayload
+import io.github.lcebot.ferryqr.content.OtpPayload
 import io.github.lcebot.ferryqr.content.Payload
 import io.github.lcebot.ferryqr.content.SchemePayload
 import io.github.lcebot.ferryqr.content.WebPayload
@@ -43,6 +44,7 @@ internal object Titles {
         is EsimPayload -> esimServer(payload.raw)
         // The payload means something only as WeChat reads it.
         is MiniProgramPayload -> WxText.forWeChat(payload.raw)
+        is OtpPayload -> otpName(context, payload)
         is BoardingPassPayload -> payload.pass.legs.firstOrNull()?.flight?.ifEmpty { null }
             ?.let { context.getString(R.string.title_boarding_pass, it) }
             ?: context.getString(R.string.kind_boarding_pass)
@@ -61,6 +63,16 @@ internal object Titles {
             else -> return null
         }
         return Uri.decode(target).trim().takeIf { it.isNotEmpty() }
+    }
+
+    /** The service and the account a two-factor key is for, as much of them as the link gives. */
+    private fun otpName(context: Context, payload: OtpPayload): String {
+        val issuer = payload.key.issuer
+        val account = payload.key.account
+        return when {
+            issuer != null && account != null -> context.getString(R.string.title_otp, issuer, account)
+            else -> issuer ?: account ?: context.getString(R.string.kind_otp)
+        }
     }
 
     /** The SM-DP+ server an eSIM activation code points to, which names its carrier's provider. */

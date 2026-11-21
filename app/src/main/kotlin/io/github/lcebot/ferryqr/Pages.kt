@@ -1,11 +1,13 @@
 package io.github.lcebot.ferryqr
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.Composable
 import androidx.core.view.WindowCompat
 import io.github.lcebot.ferryqr.history.FavoriteShortcuts
+import io.github.lcebot.ferryqr.ui.FerrySettingsScreen
 import io.github.lcebot.ferryqr.ui.FerryTheme
 import io.github.lcebot.ferryqr.ui.GeneratorScreen
 import io.github.lcebot.ferryqr.ui.HistoryScreen
@@ -58,5 +60,14 @@ class GeneratorActivity : PageActivity() {
 
 class SettingsActivity : PageActivity() {
     @Composable
-    override fun Page() = SettingsScreen(onBack = ::finish)
+    override fun Page() = SettingsScreen(
+        onBack = ::finish,
+        onOpenFerry = { startActivity(Intent(this, FerrySettingsActivity::class.java)) },
+    )
+}
+
+/** How codes reach other apps through the module, a page of its own under the settings. */
+class FerrySettingsActivity : PageActivity() {
+    @Composable
+    override fun Page() = FerrySettingsScreen(onBack = ::finish)
 }

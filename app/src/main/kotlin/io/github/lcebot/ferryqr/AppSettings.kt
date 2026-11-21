@@ -2,6 +2,7 @@ package io.github.lcebot.ferryqr
 
 import android.content.Context
 import androidx.core.content.edit
+import io.github.lcebot.ferryqr.content.SensitiveKind
 
 /** How long codes, barcodes and PDF417, grow when enlarged. */
 enum class LongCodeEnlarge { TILT, STRETCH, FULL_SCREEN }
@@ -27,6 +28,13 @@ object AppSettings {
     fun rememberFormat(context: Context): Boolean = prefs(context).getBoolean(KEY_REMEMBER_FORMAT, false)
 
     fun setRememberFormat(context: Context, on: Boolean) = prefs(context).edit { putBoolean(KEY_REMEMBER_FORMAT, on) }
+
+    /** Whether scans of [kind] go into history. */
+    fun keeps(context: Context, kind: SensitiveKind): Boolean = prefs(context).getBoolean(keepKey(kind), kind.keptByDefault)
+
+    fun setKeeps(context: Context, kind: SensitiveKind, on: Boolean) = prefs(context).edit { putBoolean(keepKey(kind), on) }
+
+    private fun keepKey(kind: SensitiveKind) = "keep_" + kind.name.lowercase()
 
     /** The create page's last choice, a format's name or the automatic choice's key. */
     fun lastFormat(context: Context): String? = prefs(context).getString(KEY_LAST_FORMAT, null)

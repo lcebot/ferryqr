@@ -39,6 +39,7 @@
     <string name="kind_event">日程</string>
     <string name="kind_esim">eSIM 激活码</string>
     <string name="kind_boarding_pass">登机牌</string>
+    <string name="kind_otp">两步验证密钥</string>
     <string name="kind_fido">通行密钥</string>
 
     <string name="warn_http">链接未加密（HTTP）</string>
@@ -104,6 +105,7 @@
     <string name="settings_title">设置</string>
     <string name="settings_open_in_title">在其他应用中打开</string>
     <string name="settings_open_in_intro">在 LSPosed 中为对应应用启用 FerryQR 后，其专用二维码也可以直接用 FerryQR 扫描。支付宝提供接收外部扫描结果的官方接口，无需模块，始终可用。</string>
+    <string name="settings_open_in_summary">模块状态与传递方式</string>
     <string name="settings_methods_intro">可以为每个应用分别选择二维码内容的传递方式：</string>
     <string name="app_wechat">微信</string>
     <string name="app_didi">滴滴</string>
@@ -141,6 +143,22 @@
     <string name="boarding_bag_tag">行李牌号</string>
     <string name="boarding_incomplete">部分信息无法识别，完整内容见原文。</string>
     <string name="boarding_privacy">订座编码和姓名可用于查询和更改行程，分享前请注意。</string>
+    <string name="title_otp">%1$s：%2$s</string>
+    <string name="otp_unhandled">无身份验证器应用，或身份验证器未接受此密钥。</string>
+    <string name="otp_add">添加到身份验证器</string>
+    <string name="otp_copy_secret">复制密钥</string>
+    <string name="otp_copy_account">复制账户名</string>
+    <string name="otp_issuer">服务</string>
+    <string name="otp_account">账户</string>
+    <string name="otp_type">类型</string>
+    <string name="otp_period">刷新周期</string>
+    <plurals name="otp_seconds">
+        <item quantity="other">%d 秒</item>
+    </plurals>
+    <string name="otp_counter">计数器</string>
+    <string name="otp_digits">位数</string>
+    <string name="otp_algorithm">算法</string>
+    <string name="otp_privacy">密钥可用于生成验证码，分享前请注意。</string>
     <string name="card_raw">原文</string>
     <string name="app_not_installed">未安装</string>
     <string name="module_active">模块已生效</string>
@@ -167,6 +185,8 @@
     <string name="settings_full_brightness_desc">放大二维码时将屏幕调到最亮，缩小后恢复。</string>
     <string name="settings_remember_format">记住上次使用的码制</string>
     <string name="settings_remember_format_desc">生成二维码时使用上次选择的码制。关闭时自动选择。</string>
+    <string name="settings_keep_intro">以下内容可能含有敏感信息，仅在开启时于扫描后保存到历史记录。</string>
+    <string name="keep_wifi_password">Wi-Fi 密码</string>
     <string name="history_title">历史记录</string>
     <plurals name="history_count">
         <item quantity="other">%1$d 条记录</item>

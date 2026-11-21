@@ -36,6 +36,53 @@ data class TextPayload(override val raw: String) : Payload
 /** A WeChat mini program code's content, an identifier only WeChat resolves. */
 data class MiniProgramPayload(override val raw: String) : Payload
 
+/** A two-factor authentication key in an `otpauth://` link, which authenticator apps add. */
+data class OtpPayload(override val raw: String, val key: OtpKey) : Payload
+
+/**
+ * What an `otpauth://` link says about a key. [type] is as the link names it, lowercased: `totp`
+ * and `hotp` are standard, and some apps add their own, such as `steam`. [secret] is Base32 in
+ * capitals without padding. Parameters the link leaves out are null, so their defaults stay the
+ * authenticator's to apply.
+ */
+data class OtpKey(
+    val type: String,
+    val issuer: String?,
+    val account: String?,
+    val secret: String,
+    val algorithm: String?,
+    val digits: Int?,
+    val period: Int?,
+    val counter: Long?,
+)
+
+/**
+ * Content that may grant access or identify its holder, each kind kept in history or not as the
+ * settings choose. They are listed by how much the content gives whoever holds it, least first: a
+ * network to join, a trip to look up and change, a phone line to download, a sign-in to an account,
+ * and a lasting second factor for one. What people scan to look at again, such as a boarding pass,
+ * is kept unless the user says otherwise; credentials, which are added once and are risky to keep,
+ * start out left out.
+ */
+enum class SensitiveKind(val keptByDefault: Boolean) {
+    WIFI_PASSWORD(true),
+    BOARDING_PASS(true),
+    ESIM(false),
+    PASSKEY(false),
+    OTP(false),
+}
+
+/** The kind of sensitive content this is, or null for content that is not. */
+val Payload.sensitiveKind: SensitiveKind?
+    get() = when (this) {
+        is WifiPayload -> SensitiveKind.WIFI_PASSWORD.takeIf { password != null }
+        is BoardingPassPayload -> SensitiveKind.BOARDING_PASS
+        is EsimPayload -> SensitiveKind.ESIM
+        is FidoPayload -> SensitiveKind.PASSKEY
+        is OtpPayload -> SensitiveKind.OTP
+        else -> null
+    }
+
 enum class WifiSecurity { OPEN, WEP, WPA, SAE, EAP }
 
 data class Contact(

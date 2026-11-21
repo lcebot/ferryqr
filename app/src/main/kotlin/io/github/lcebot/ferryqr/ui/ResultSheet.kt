@@ -270,14 +270,15 @@ private fun CardSectionView(section: CardSection) {
  * The card's actions under its content. In reading order, so the main way out is met first, the
  * primary action as a filled button, then whatever else opens the content elsewhere, such as the
  * browser or other apps, as tonal buttons that keep their labels, since one app can be offered in
- * more than one way. Round icon buttons for what can be done with the content itself, each named
+ * more than one way. Actions that would look alike as icons keep their labels the same way. Round
+ * icon buttons for what can be done with the content itself, each named
  * in a tooltip and to screen readers, end the same line when it holds them all; otherwise they
  * take a line of their own above it.
  */
 @Composable
 private fun CardActions(actions: List<CardAction>, onAction: (CardAction) -> Unit, modifier: Modifier = Modifier) {
     val primary = actions.firstOrNull() ?: return
-    val (opens, tools) = actions.drop(1).partition { it.opens }
+    val (labeled, tools) = actions.drop(1).partition { it.labeled }
     ActionLines(
         modifier = modifier,
         tools = { tools.forEach { action -> ToolButton(action, onAction) } },
@@ -287,7 +288,7 @@ private fun CardActions(actions: List<CardAction>, onAction: (CardAction) -> Uni
                 Spacer(Modifier.width(ButtonDefaults.IconSpacing))
                 Text(labelOf(primary))
             }
-            opens.forEach { action ->
+            labeled.forEach { action ->
                 FilledTonalButton(onClick = { onAction(action) }, shapes = ButtonDefaults.shapes()) {
                     ActionIcon(action, ButtonDefaults.IconSize)
                     Spacer(Modifier.width(ButtonDefaults.IconSpacing))

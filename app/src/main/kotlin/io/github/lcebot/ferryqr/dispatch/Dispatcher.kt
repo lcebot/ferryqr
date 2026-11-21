@@ -7,6 +7,7 @@ import io.github.lcebot.ferryqr.content.DppPayload
 import io.github.lcebot.ferryqr.content.EsimPayload
 import io.github.lcebot.ferryqr.content.FidoPayload
 import io.github.lcebot.ferryqr.content.MiniProgramPayload
+import io.github.lcebot.ferryqr.content.OtpPayload
 import io.github.lcebot.ferryqr.content.Payload
 import io.github.lcebot.ferryqr.content.SchemePayload
 import io.github.lcebot.ferryqr.content.WebPayload
@@ -31,6 +32,8 @@ object Dispatcher {
         is FidoPayload -> Launch.fido(activity, payload.raw)
         is EsimPayload -> Launch.esim(activity, payload.raw)
         is DppPayload -> Launch.dpp(activity, payload.raw)
+        // Like any app link, it goes to the authenticator that registers the scheme.
+        is OtpPayload -> Launch.scheme(activity, payload.raw, "otpauth")
         is MiniProgramPayload -> MiniCodeArt.draw(payload.raw)?.let { picture ->
             toOwner(activity, Targets.WECHAT, origin) { WeChat.openMiniProgram(it, payload.raw, picture) }
         } == true

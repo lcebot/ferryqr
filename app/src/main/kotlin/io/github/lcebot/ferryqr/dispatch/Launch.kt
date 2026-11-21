@@ -161,8 +161,9 @@ internal object Launch {
         Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text), null),
     )
 
+    /** A [sensitive] text gets no label, since clipboard managers may show the label in full. */
     fun copy(context: Context, text: String, sensitive: Boolean = false) {
-        val clip = ClipData.newPlainText(text.take(40), text)
+        val clip = ClipData.newPlainText(if (sensitive) "" else text.take(40), text)
         if (sensitive && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             clip.description.extras = PersistableBundle().apply {
                 putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)

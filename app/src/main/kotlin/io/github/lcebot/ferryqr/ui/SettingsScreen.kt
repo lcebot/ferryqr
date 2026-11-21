@@ -1,25 +1,24 @@
+// LargeFlexibleTopAppBar and ToggleButton are expressive APIs; the top bar's scroll behavior is an
+// experimental Material 3 API.
 @file:OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 
 package io.github.lcebot.ferryqr.ui
 
 import androidx.annotation.StringRes
-import androidx.compose.material3.Switch
-import io.github.lcebot.ferryqr.AppSettings
-import io.github.lcebot.ferryqr.LongCodeEnlarge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -27,16 +26,14 @@ import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
-import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.ToggleButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,66 +48,40 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import io.github.lcebot.ferryqr.AppSettings
+import io.github.lcebot.ferryqr.LongCodeEnlarge
 import io.github.lcebot.ferryqr.R
-import io.github.lcebot.ferryqr.dispatch.Launch
-import io.github.lcebot.ferryqr.dispatch.Targets
-import io.github.lcebot.ferryqr.openin.OpenInApp
-import io.github.lcebot.ferryqr.openin.OpenInApps
-import io.github.lcebot.ferryqr.openin.ModuleState
-import io.github.lcebot.ferryqr.openin.OpenInModule
-import io.github.lcebot.ferryqr.openin.Strategy
-
-/** How a code reaches an app's scanner, in the terms the settings use. */
-private enum class Method(@StringRes val label: Int, @StringRes val description: Int) {
-    Direct(R.string.method_direct, R.string.method_direct_desc),
-    Camera(R.string.method_camera, R.string.method_camera_desc),
-}
-
-/** One app in the settings. [fixed] is its only method and [reason] says why; both are null where the user chooses. */
-private class AppSetting(val pkg: String, @StringRes val name: Int, val fixed: Method?, @StringRes val reason: Int?)
-
-private val REASONS = mapOf(
-    OpenInApps.DIDI to R.string.method_didi_reason,
-    OpenInApps.MEITUAN to R.string.method_meituan_reason,
-)
-
-/** Only a replaced result has an alternative, the camera; the other ways are the only ones that work. */
-private fun settingOf(app: OpenInApp): AppSetting {
-    val name = Targets.of(app.pkg)?.name ?: error("${app.pkg} has no name")
-    return when (app.strategy) {
-        is Strategy.ReplaceResult -> AppSetting(app.pkg, name, fixed = null, reason = null)
-        Strategy.FeedCamera -> AppSetting(app.pkg, name, Method.Camera, REASONS.getValue(app.pkg))
-        is Strategy.FinishWithResult -> AppSetting(app.pkg, name, Method.Direct, REASONS.getValue(app.pkg))
-    }
-}
+import io.github.lcebot.ferryqr.content.SensitiveKind
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit) {
+fun SettingsScreen(onBack: () -> Unit, onOpenFerry: () -> Unit) {
+    SettingsPage(title = R.string.settings_title, onBack = onBack) {
+        item(key = "ferry") { FerryEntry(onOpenFerry) }
+        item(key = "history") { HistorySettings() }
+        item(key = "display") { DisplaySettings() }
+        item(key = "create") { CreateSettings() }
+    }
+}
+
+/**
+ * A settings page: a large top bar that collapses as the list scrolls, over [content] laid out in
+ * segmented groups.
+ */
+@Composable
+internal fun SettingsPage(@StringRes title: Int, onBack: () -> Unit, content: LazyListScope.() -> Unit) {
     val haptics = rememberHaptics()
-    val apps = remember { OpenInApps.all.map(::settingOf) }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val layoutDirection = LocalLayoutDirection.current
-
-    // Coming back from LSPosed, or from an app that restarted, the framework may say otherwise.
-    val lifecycle = LocalLifecycleOwner.current.lifecycle
-    LaunchedEffect(lifecycle) {
-        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) { OpenInModule.refresh() }
-    }
-
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
             LargeFlexibleTopAppBar(
-                title = { Text(stringResource(R.string.settings_title)) },
+                title = { Text(stringResource(title)) },
                 navigationIcon = {
                     IconButton(onClick = { haptics.tap(); onBack() }) {
                         Icon(painterResource(R.drawable.ic_arrow_back), stringResource(R.string.back))
@@ -124,164 +95,103 @@ fun SettingsScreen(onBack: () -> Unit) {
             contentPadding = PaddingValues(
                 start = padding.calculateStartPadding(layoutDirection) + 16.dp,
                 end = padding.calculateEndPadding(layoutDirection) + 16.dp,
-                top = padding.calculateTopPadding(),
+                top = padding.calculateTopPadding() + 8.dp,
                 bottom = padding.calculateBottomPadding() + 24.dp,
             ),
             verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            item(key = "header") {
-                OpenInHeader()
-            }
-            itemsIndexed(apps, key = { _, app -> app.pkg }) { index, app ->
-                AppSettingItem(app, segmentShape(index, apps.size))
-            }
-            item(key = "display") { DisplaySettings() }
-            item(key = "create") { CreateSettings() }
-        }
+            content = content,
+        )
     }
 }
 
 /**
- * What the module does, then the two methods named once, so each app's buttons need no words of
- * their own unless the app is limited to one method.
+ * The way into the ferry settings, first since handing codes to apps is what FerryQR is for. A
+ * second tap while the page opens does nothing, so it never opens twice.
  */
 @Composable
-private fun OpenInHeader() {
-    Column(
-        modifier = Modifier.padding(start = 4.dp, end = 4.dp, top = 8.dp, bottom = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+private fun FerryEntry(onOpen: () -> Unit) {
+    val haptics = rememberHaptics()
+    var opening by remember { mutableStateOf(false) }
+    LifecycleResumeEffect(Unit) {
+        opening = false
+        onPauseOrDispose {}
+    }
+    Surface(
+        onClick = {
+            if (!opening) {
+                opening = true
+                haptics.tap()
+                onOpen()
+            }
+        },
+        shape = segmentShape(0, 1),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        modifier = Modifier.fillMaxWidth(),
     ) {
-        Text(
-            stringResource(R.string.settings_open_in_title),
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.primary,
-        )
-        Text(
-            stringResource(R.string.settings_open_in_intro),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            stringResource(R.string.settings_methods_intro),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 12.dp),
-        )
-        Method.entries.forEach { method ->
-            Column(Modifier.padding(top = 8.dp)) {
-                Text(stringResource(method.label), style = MaterialTheme.typography.labelLarge)
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.secondaryContainer),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    painterResource(R.drawable.ic_apps),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+            Column(Modifier.weight(1f)) {
+                Text(stringResource(R.string.settings_open_in_title), style = MaterialTheme.typography.titleMedium)
                 Text(
-                    stringResource(method.description),
+                    stringResource(R.string.settings_open_in_summary),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            Icon(
+                painterResource(R.drawable.ic_arrow_forward),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
 
+/** Which kinds of sensitive content are kept in history after a scan, one switch for each. */
 @Composable
-private fun AppSettingItem(app: AppSetting, shape: Shape) {
+private fun HistorySettings() {
     val context = LocalContext.current
     val haptics = rememberHaptics()
-    val name = stringResource(app.name)
-    val installed = remember(app.pkg) { Launch.isInstalled(context, app.pkg) }
-    val state by OpenInModule.state(app.pkg).collectAsStateWithLifecycle()
-    var cameraFeed by remember(app.pkg) { mutableStateOf(OpenInModule.cameraFeed(context, app.pkg)) }
-    val method = app.fixed ?: if (cameraFeed) Method.Camera else Method.Direct
-    Surface(shape = shape, color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.secondaryContainer),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSecondaryContainer) {
-                        AppIcon(app.pkg, R.drawable.ic_apps, Modifier.size(24.dp))
-                    }
-                }
-                Column(Modifier.weight(1f)) {
-                    Text(name, style = MaterialTheme.typography.titleMedium)
-                    val working = installed && (state == ModuleState.Loaded || state == ModuleState.Enabled)
-                    Text(
-                        when {
-                            !installed -> stringResource(R.string.app_not_installed)
-                            else -> when (state) {
-                                ModuleState.Inactive -> stringResource(R.string.module_inactive)
-                                ModuleState.OutOfScope -> stringResource(R.string.module_out_of_scope)
-                                ModuleState.Enabled -> stringResource(R.string.module_enabled, name)
-                                ModuleState.Loaded -> stringResource(R.string.module_active)
-                                ModuleState.Outdated -> stringResource(R.string.module_outdated, name)
-                            }
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (working) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            MethodButtons(
-                selected = method,
-                choosable = app.fixed == null,
-                onSelect = { chosen ->
-                    haptics.toggle(chosen == Method.Camera)
-                    cameraFeed = chosen == Method.Camera
-                    OpenInModule.setCameraFeed(context, app.pkg, cameraFeed)
+    val kinds = SensitiveKind.entries
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        SectionTitle(R.string.history_title)
+        Text(
+            stringResource(R.string.settings_keep_intro),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 4.dp, end = 4.dp, bottom = 12.dp),
+        )
+        kinds.forEachIndexed { index, kind ->
+            var keep by remember(kind) { mutableStateOf(AppSettings.keeps(context, kind)) }
+            SwitchItem(
+                title = keptLabel(kind),
+                checked = keep,
+                shape = segmentShape(index, kinds.size),
+                onChange = { on ->
+                    haptics.toggle(on)
+                    keep = on
+                    AppSettings.setKeeps(context, kind, on)
                 },
             )
-            // Only an app limited to one method says why; the methods themselves are described above.
-            if (app.reason != null) {
-                Text(stringResource(app.reason), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
         }
     }
-}
-
-/**
- * A connected button group of the methods. An app with one method shows it chosen and the other
- * unavailable, so every app reads the same way.
- */
-@Composable
-private fun MethodButtons(selected: Method, choosable: Boolean, onSelect: (Method) -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth().selectableGroup(),
-        horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
-    ) {
-        Method.entries.forEachIndexed { index, method ->
-            val checked = method == selected
-            ToggleButton(
-                checked = checked,
-                onCheckedChange = { if (it) onSelect(method) },
-                enabled = choosable || checked,
-                shapes = if (index == 0) {
-                    ButtonGroupDefaults.connectedLeadingButtonShapes()
-                } else {
-                    ButtonGroupDefaults.connectedTrailingButtonShapes()
-                },
-                modifier = Modifier
-                    .weight(1f)
-                    .semantics {
-                        role = Role.RadioButton
-                        // The chosen method stays drawn as chosen, but cannot be changed.
-                        if (!choosable) disabled()
-                    },
-            ) {
-                Text(stringResource(method.label), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-        }
-    }
-}
-
-@Composable
-private fun SectionTitle(@StringRes title: Int) {
-    Text(
-        stringResource(title),
-        style = MaterialTheme.typography.titleSmall,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(start = 4.dp, top = 28.dp, bottom = 14.dp),
-    )
 }
 
 /** How enlarged codes are shown: long codes tilted or stretched, and the screen at full brightness. */
@@ -371,9 +281,25 @@ private fun CreateSettings() {
     }
 }
 
+@Composable
+private fun SectionTitle(@StringRes title: Int) {
+    Text(
+        stringResource(title),
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(start = 4.dp, top = 28.dp, bottom = 14.dp),
+    )
+}
+
 /** A setting that is on or off; the whole item toggles it, the way the system's own settings do. */
 @Composable
-private fun SwitchItem(@StringRes title: Int, @StringRes description: Int, checked: Boolean, shape: Shape, onChange: (Boolean) -> Unit) {
+private fun SwitchItem(
+    @StringRes title: Int,
+    checked: Boolean,
+    shape: Shape,
+    onChange: (Boolean) -> Unit,
+    @StringRes description: Int? = null,
+) {
     Surface(
         checked = checked,
         onCheckedChange = onChange,
@@ -388,15 +314,26 @@ private fun SwitchItem(@StringRes title: Int, @StringRes description: Int, check
         ) {
             Column(Modifier.weight(1f)) {
                 Text(stringResource(title), style = MaterialTheme.typography.titleMedium)
-                Text(
-                    stringResource(description),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                if (description != null) {
+                    Text(
+                        stringResource(description),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             Switch(checked = checked, onCheckedChange = null)
         }
     }
+}
+
+@StringRes
+private fun keptLabel(kind: SensitiveKind): Int = when (kind) {
+    SensitiveKind.WIFI_PASSWORD -> R.string.keep_wifi_password
+    SensitiveKind.BOARDING_PASS -> R.string.kind_boarding_pass
+    SensitiveKind.ESIM -> R.string.kind_esim
+    SensitiveKind.PASSKEY -> R.string.kind_fido
+    SensitiveKind.OTP -> R.string.kind_otp
 }
 
 @StringRes

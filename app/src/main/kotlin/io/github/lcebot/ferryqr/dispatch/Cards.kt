@@ -17,6 +17,7 @@ import io.github.lcebot.ferryqr.content.FidoPayload
 import io.github.lcebot.ferryqr.content.MiniProgramPayload
 import io.github.lcebot.ferryqr.content.PasskeyQr
 import io.github.lcebot.ferryqr.content.Payload
+import io.github.lcebot.ferryqr.content.OtpPayload
 import io.github.lcebot.ferryqr.content.SchemePayload
 import io.github.lcebot.ferryqr.content.TextPayload
 import io.github.lcebot.ferryqr.content.WebPayload
@@ -57,6 +58,8 @@ enum class ActionResult {
  * [app] is the package the action hands off to; its own icon then replaces [icon]. [appName] is the
  * name formatted into [label], for the labels that name the app. [opens] marks an action that opens
  * the content elsewhere, as every app action does and the browser too, rather than acting on it.
+ * [labeled] keeps the label on the button rather than showing only a round icon: every action that
+ * opens the content keeps it, and so do actions that would look alike as icons.
  */
 data class CardAction(
     @param:StringRes val label: Int,
@@ -64,6 +67,7 @@ data class CardAction(
     val app: String? = null,
     @param:StringRes val appName: Int? = null,
     val opens: Boolean = app != null,
+    val labeled: Boolean = opens,
     val run: (Activity) -> ActionResult,
 )
 
@@ -106,6 +110,11 @@ sealed interface CardSection {
  */
 private const val PASSKEY_EXPIRY_MS = 5 * 60 * 1000L
 
+/** What the key URI format takes a link to mean when it leaves these out. */
+private const val OTP_PERIOD = 30
+private const val OTP_DIGITS = 6
+private const val OTP_ALGORITHM = "SHA1"
+
 data class Kind(@param:StringRes val label: Int, @param:DrawableRes val icon: Int)
 
 object Cards {
@@ -122,6 +131,7 @@ object Cards {
         is TextPayload -> Kind(R.string.kind_text, R.drawable.ic_notes)
         is MiniProgramPayload -> Kind(R.string.kind_mini_program, R.drawable.ic_qr_code_scanner)
         is BoardingPassPayload -> Kind(R.string.kind_boarding_pass, R.drawable.ic_flight)
+        is OtpPayload -> Kind(R.string.kind_otp, R.drawable.ic_password)
     }
 
     /**
@@ -183,6 +193,7 @@ object Cards {
         is SchemePayload -> scheme(activity, payload, origin)
         is FidoPayload -> passkey(activity, payload, origin, scannedAt)
         is BoardingPassPayload -> boardingPass(activity, payload, scannedAt)
+        is OtpPayload -> otp(activity, payload, origin)
         // Only a code from the camera has already been offered to the system by the time its card
         // shows, so only then does the card say it was not taken; from elsewhere it offers to try.
         is EsimPayload -> ResultCard(
@@ -350,6 +361,56 @@ object Cards {
             payload.raw, R.string.kind_boarding_pass, R.drawable.ic_flight, "", null, notes,
             listOf(copy(payload.raw), share(payload.raw)),
             sections = sections,
+        )
+    }
+
+    /**
+     * A two-factor key, from a camera scan only when no authenticator took it. The key's details come
+     * first and the secret stays hidden, since a glance over a shoulder is enough to copy it. Copying
+     * the secret or the account serves authenticators that add keys by hand. The link itself can be
+     * copied and shared like any other, with a note on what it gives away.
+     */
+    private fun otp(activity: Activity, payload: OtpPayload, origin: Origin): ResultCard {
+        val key = payload.key
+        val rows = buildList {
+            key.issuer?.let { add(activity.getString(R.string.otp_issuer) to it) }
+            key.account?.let { add(activity.getString(R.string.otp_account) to it) }
+            add(activity.getString(R.string.otp_type) to key.type.uppercase())
+            if (key.type != "hotp") {
+                val seconds = key.period ?: OTP_PERIOD
+                add(activity.getString(R.string.otp_period) to activity.resources.getQuantityString(R.plurals.otp_seconds, seconds, seconds))
+            }
+            key.counter?.let { add(activity.getString(R.string.otp_counter) to it.toString()) }
+            key.digits?.takeIf { it != OTP_DIGITS }?.let { add(activity.getString(R.string.otp_digits) to it.toString()) }
+            key.algorithm?.takeIf { it != OTP_ALGORITHM }?.let { add(activity.getString(R.string.otp_algorithm) to it) }
+        }
+        val notes = listOfNotNull(
+            activity.getString(R.string.otp_unhandled).takeIf { origin == Origin.CAMERA },
+            activity.getString(R.string.otp_privacy),
+        )
+        val actions = listOfNotNull(
+            CardAction(R.string.otp_add, R.drawable.ic_password, opens = true) {
+                if (Launch.scheme(it, payload.raw, "otpauth")) ActionResult.Handoff else ActionResult.Unavailable
+            },
+            CardAction(R.string.otp_copy_secret, R.drawable.ic_content_copy, labeled = true) {
+                Launch.copy(it, key.secret, sensitive = true)
+                ActionResult.Copied
+            },
+            key.account?.let { account ->
+                CardAction(R.string.otp_copy_account, R.drawable.ic_content_copy, labeled = true) {
+                    Launch.copy(it, account)
+                    ActionResult.Copied
+                }
+            },
+            CardAction(R.string.copy, R.drawable.ic_content_copy) {
+                Launch.copy(it, payload.raw, sensitive = true)
+                ActionResult.Copied
+            },
+            share(payload.raw),
+        )
+        return ResultCard(
+            payload.raw, R.string.kind_otp, R.drawable.ic_password, "", null, notes, actions,
+            sections = listOf(CardSection.Fields(rows)),
         )
     }
 
