@@ -9,6 +9,7 @@ import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSuggestion
@@ -40,6 +41,22 @@ internal object Launch {
     private fun browsable(uri: Uri) = Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE)
 
     fun browser(activity: Activity, url: String) = start(activity, browsable(Uri.parse(url)))
+
+    /**
+     * Whether any app opens [uri] as a link. Only schemes the manifest queries for are visible, so
+     * this answers for those alone.
+     */
+    fun canOpen(context: Context, uri: String): Boolean {
+        val intent = browsable(Uri.parse(uri))
+        val packages = context.packageManager
+        val found = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            packages.queryIntentActivities(intent, PackageManager.ResolveInfoFlags.of(0))
+        } else {
+            @Suppress("DEPRECATION")
+            packages.queryIntentActivities(intent, 0)
+        }
+        return found.isNotEmpty()
+    }
 
     /** Succeeds only when an app other than a browser claims the link, such as a verified App Link. */
     fun nonBrowser(activity: Activity, url: String) =

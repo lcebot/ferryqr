@@ -193,7 +193,7 @@ object Cards {
         is SchemePayload -> scheme(activity, payload, origin)
         is FidoPayload -> passkey(activity, payload, origin, scannedAt)
         is BoardingPassPayload -> boardingPass(activity, payload, scannedAt)
-        is OtpPayload -> otp(activity, payload, origin)
+        is OtpPayload -> otp(activity, payload)
         // Only a code from the camera has already been offered to the system by the time its card
         // shows, so only then does the card say it was not taken; from elsewhere it offers to try.
         is EsimPayload -> ResultCard(
@@ -311,7 +311,8 @@ object Cards {
             ).takeIf { expired },
         )
         val actions = if (expired) listOf(copy(payload.raw), use) else listOf(use, copy(payload.raw))
-        return ResultCard(payload.raw, R.string.kind_fido, R.drawable.ic_key, payload.raw, null, notes, actions)
+        val title = Titles.of(activity, payload) ?: payload.raw
+        return ResultCard(payload.raw, R.string.kind_fido, R.drawable.ic_key, title, payload.raw, notes, actions)
     }
 
     /**
@@ -366,12 +367,14 @@ object Cards {
 
     /**
      * A two-factor key, from a camera scan only when no authenticator took it. The key's details come
-     * first and the secret stays hidden, since a glance over a shoulder is enough to copy it. Copying
-     * the secret or the account serves authenticators that add keys by hand. The link itself can be
-     * copied and shared like any other, with a note on what it gives away.
+     * first and the secret stays hidden, since a glance over a shoulder is enough to copy it. With no
+     * authenticator installed, the card says so and leads with copying the secret, for one that adds
+     * keys by hand; otherwise adding the key leads. The link itself can be copied and shared like
+     * any other, with a note on what it gives away.
      */
-    private fun otp(activity: Activity, payload: OtpPayload, origin: Origin): ResultCard {
+    private fun otp(activity: Activity, payload: OtpPayload): ResultCard {
         val key = payload.key
+        val addable = Launch.canOpen(activity, payload.raw)
         val rows = buildList {
             key.issuer?.let { add(activity.getString(R.string.otp_issuer) to it) }
             key.account?.let { add(activity.getString(R.string.otp_account) to it) }
@@ -385,13 +388,13 @@ object Cards {
             key.algorithm?.takeIf { it != OTP_ALGORITHM }?.let { add(activity.getString(R.string.otp_algorithm) to it) }
         }
         val notes = listOfNotNull(
-            activity.getString(R.string.otp_unhandled).takeIf { origin == Origin.CAMERA },
+            activity.getString(R.string.otp_unhandled).takeUnless { addable },
             activity.getString(R.string.otp_privacy),
         )
         val actions = listOfNotNull(
             CardAction(R.string.otp_add, R.drawable.ic_password, opens = true) {
                 if (Launch.scheme(it, payload.raw, "otpauth")) ActionResult.Handoff else ActionResult.Unavailable
-            },
+            }.takeIf { addable },
             CardAction(R.string.otp_copy_secret, R.drawable.ic_content_copy, labeled = true) {
                 Launch.copy(it, key.secret, sensitive = true)
                 ActionResult.Copied

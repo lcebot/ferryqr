@@ -7,8 +7,11 @@ import io.github.lcebot.ferryqr.content.BoardingPassPayload
 import io.github.lcebot.ferryqr.content.ContactPayload
 import io.github.lcebot.ferryqr.content.EsimPayload
 import io.github.lcebot.ferryqr.content.EventPayload
+import io.github.lcebot.ferryqr.content.FidoPayload
 import io.github.lcebot.ferryqr.content.MiniProgramPayload
 import io.github.lcebot.ferryqr.content.OtpPayload
+import io.github.lcebot.ferryqr.content.PasskeyOperation
+import io.github.lcebot.ferryqr.content.PasskeyQr
 import io.github.lcebot.ferryqr.content.Payload
 import io.github.lcebot.ferryqr.content.SchemePayload
 import io.github.lcebot.ferryqr.content.WebPayload
@@ -31,7 +34,8 @@ internal object Titles {
 
     /**
      * The name [payload] carries, or null when it carries none and is best shown as it is: a link
-     * FerryQR does not know, plain text, a passkey or a Wi-Fi Easy Connect code.
+     * FerryQR does not know, plain text or a Wi-Fi Easy Connect code. A passkey request is named for
+     * what it asks, since its content is only digits.
      */
     fun of(context: Context, payload: Payload): String? = when (payload) {
         is WebPayload -> link(context, payload.url)
@@ -45,6 +49,15 @@ internal object Titles {
         // The payload means something only as WeChat reads it.
         is MiniProgramPayload -> WxText.forWeChat(payload.raw)
         is OtpPayload -> otpName(context, payload)
+        is FidoPayload -> context.getString(
+            when (PasskeyQr.operation(payload.raw)) {
+                PasskeyOperation.SIGN_IN -> R.string.title_passkey_sign_in
+                PasskeyOperation.CREATE -> R.string.title_passkey_create
+                PasskeyOperation.PRESENT_CREDENTIAL -> R.string.title_credential_present
+                PasskeyOperation.ADD_CREDENTIAL -> R.string.title_credential_add
+                null -> R.string.title_passkey_request
+            },
+        )
         is BoardingPassPayload -> payload.pass.legs.firstOrNull()?.flight?.ifEmpty { null }
             ?.let { context.getString(R.string.title_boarding_pass, it) }
             ?: context.getString(R.string.kind_boarding_pass)

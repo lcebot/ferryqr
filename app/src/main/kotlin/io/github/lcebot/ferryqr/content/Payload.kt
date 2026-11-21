@@ -12,6 +12,12 @@ data class SchemePayload(override val raw: String, val uri: String, val scheme: 
 
 data class FidoPayload(override val raw: String) : Payload
 
+/**
+ * What a passkey request asks the phone to do, when its code says: sign in or create a passkey, or
+ * present or add a digital credential, such as an identity document, through the same connection.
+ */
+enum class PasskeyOperation { SIGN_IN, CREATE, PRESENT_CREDENTIAL, ADD_CREDENTIAL }
+
 /** An airline boarding pass, in IATA's format, read into [pass]. */
 data class BoardingPassPayload(override val raw: String, val pass: BoardingPass) : Payload
 

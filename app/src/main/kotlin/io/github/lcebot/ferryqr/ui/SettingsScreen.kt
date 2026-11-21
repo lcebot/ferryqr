@@ -171,7 +171,8 @@ private fun HistorySettings() {
     val haptics = rememberHaptics()
     val kinds = SensitiveKind.entries
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        SectionTitle(R.string.history_title)
+        // Named for what the switches do, so on reads as kept.
+        SectionTitle(R.string.settings_keep_title)
         Text(
             stringResource(R.string.settings_keep_intro),
             style = MaterialTheme.typography.bodyMedium,

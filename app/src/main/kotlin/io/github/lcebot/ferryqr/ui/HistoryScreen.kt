@@ -74,6 +74,7 @@ import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialShapes
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Scaffold
@@ -107,6 +108,7 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -121,6 +123,7 @@ import io.github.lcebot.ferryqr.generate.CodeGenerator
 import io.github.lcebot.ferryqr.history.FavoriteShortcuts
 import io.github.lcebot.ferryqr.history.HistoryEntry
 import io.github.lcebot.ferryqr.history.HistoryStore
+import java.text.BreakIterator
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -771,7 +774,15 @@ private fun EntryItem(
             contentColor = MaterialTheme.colorScheme.onSurface,
         ),
     ) {
-        Text(entry.label ?: shown, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        val headline = entry.label ?: shown
+        val anywhere = remember(headline) { breakAnywhere(headline) }
+        Text(
+            anywhere ?: headline,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            // Greedy, so the first line fills before the second starts.
+            style = if (anywhere != null) LocalTextStyle.current.copy(lineBreak = LineBreak.Simple) else LocalTextStyle.current,
+        )
     }
 }
 
@@ -972,6 +983,32 @@ private fun EmptyHistory(modifier: Modifier) {
         )
     }
 }
+
+/**
+ * [text] with a break allowed between any two characters, or null when it breaks well as it is. Text
+ * without spaces, such as a link, a key or an account name, can otherwise break only at the few
+ * places a line breaker finds in it, as after a colon or a slash, which leaves a short piece alone on
+ * the first line and pushes the rest to the second, where it is cut off. Text with spaces breaks
+ * between its words, and Chinese text between any two characters already, keeping its rules for
+ * punctuation, so both are left alone.
+ */
+private fun breakAnywhere(text: String): String? {
+    if (text.any { it.isWhitespace() }) return null
+    if (text.codePoints().anyMatch { Character.UnicodeScript.of(it) == Character.UnicodeScript.HAN }) return null
+    val characters = BreakIterator.getCharacterInstance().apply { setText(text) }
+    return buildString {
+        var start = characters.first()
+        var end = characters.next()
+        while (end != BreakIterator.DONE) {
+            if (start > 0) append(ZERO_WIDTH_SPACE)
+            append(text, start, end)
+            start = end
+            end = characters.next()
+        }
+    }
+}
+
+private const val ZERO_WIDTH_SPACE = '\u200B'
 
 /**
  * Expressive grouped list: large corners outside a group, small ones between its rows. The corners

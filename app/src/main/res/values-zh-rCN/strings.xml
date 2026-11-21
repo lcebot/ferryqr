@@ -144,7 +144,12 @@
     <string name="boarding_incomplete">部分信息无法识别，完整内容见原文。</string>
     <string name="boarding_privacy">订座编码和姓名可用于查询和更改行程，分享前请注意。</string>
     <string name="title_otp">%1$s：%2$s</string>
-    <string name="otp_unhandled">无身份验证器应用，或身份验证器未接受此密钥。</string>
+    <string name="title_passkey_sign_in">通行密钥登录</string>
+    <string name="title_passkey_create">创建通行密钥</string>
+    <string name="title_passkey_request">通行密钥请求</string>
+    <string name="title_credential_present">出示数字凭证</string>
+    <string name="title_credential_add">添加数字凭证</string>
+    <string name="otp_unhandled">未安装可通过链接添加密钥的身份验证器应用。请复制密钥，在身份验证器中手动添加。</string>
     <string name="otp_add">添加到身份验证器</string>
     <string name="otp_copy_secret">复制密钥</string>
     <string name="otp_copy_account">复制账户名</string>
@@ -185,7 +190,8 @@
     <string name="settings_full_brightness_desc">放大二维码时将屏幕调到最亮，缩小后恢复。</string>
     <string name="settings_remember_format">记住上次使用的码制</string>
     <string name="settings_remember_format_desc">生成二维码时使用上次选择的码制。关闭时自动选择。</string>
-    <string name="settings_keep_intro">以下内容可能含有敏感信息，仅在开启时于扫描后保存到历史记录。</string>
+    <string name="settings_keep_title">保存到历史记录</string>
+    <string name="settings_keep_intro">以下内容可能含有敏感信息。开启的项目会在扫描后保存到历史记录。</string>
     <string name="keep_wifi_password">Wi-Fi 密码</string>
     <string name="history_title">历史记录</string>
     <plurals name="history_count">

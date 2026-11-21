@@ -147,7 +147,12 @@
     <string name="boarding_incomplete">Some details could not be read. The raw content below has everything.</string>
     <string name="boarding_privacy">The booking reference and name can be used to look up and change the trip. Take care before sharing.</string>
     <string name="title_otp">%1$s: %2$s</string>
-    <string name="otp_unhandled">No authenticator app is installed, or none accepted this key.</string>
+    <string name="title_passkey_sign_in">Passkey sign-in</string>
+    <string name="title_passkey_create">Passkey creation</string>
+    <string name="title_passkey_request">Passkey request</string>
+    <string name="title_credential_present">Digital credential presentation</string>
+    <string name="title_credential_add">Digital credential issuance</string>
+    <string name="otp_unhandled">No authenticator app that adds keys from links is installed. Copy the key and add it in an authenticator by hand.</string>
     <string name="otp_add">Add to authenticator</string>
     <string name="otp_copy_secret">Copy key</string>
     <string name="otp_copy_account">Copy account</string>
@@ -189,7 +194,8 @@
     <string name="settings_full_brightness_desc">Turns the screen to full brightness while a code is enlarged, and restores it after.</string>
     <string name="settings_remember_format">Remember the last format</string>
     <string name="settings_remember_format_desc">The create page starts with the format chosen last time. When off, it picks one automatically.</string>
-    <string name="settings_keep_intro">Content that may be sensitive is kept in history after a scan only where switched on.</string>
+    <string name="settings_keep_title">Keep in history</string>
+    <string name="settings_keep_intro">These may hold sensitive information. Those switched on are kept in history after a scan.</string>
     <string name="keep_wifi_password">Wi-Fi password</string>
     <string name="history_title">History</string>
     <plurals name="history_count">

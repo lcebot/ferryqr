@@ -288,13 +288,30 @@ internal object PasskeyQr {
     private val PARTIAL_DIGITS = intArrayOf(0, 3, 5, 8, 10, 13, 15)
 
     private const val KEY_CREATED = 3L
+    private const val KEY_OPERATION = 5L
 
     /** When the code was made, in seconds since 1970, or null when the code does not say. */
-    fun createdAt(raw: String): Long? {
+    fun createdAt(raw: String): Long? = valueOf(raw, KEY_CREATED) as? Long
+
+    /**
+     * What the other device asks for, from the hint CTAP 2.2 codes carry: `ga` to sign in with a
+     * passkey, `mc` to create one, and `dcp` and `dci` to present or add a digital credential. Null
+     * when the code gives no hint, as older codes do, or one FerryQR does not know, which the
+     * specification has authenticators take as signing in but a name should not presume.
+     */
+    fun operation(raw: String): PasskeyOperation? = when (valueOf(raw, KEY_OPERATION)) {
+        "ga" -> PasskeyOperation.SIGN_IN
+        "mc" -> PasskeyOperation.CREATE
+        "dcp" -> PasskeyOperation.PRESENT_CREDENTIAL
+        "dci" -> PasskeyOperation.ADD_CREDENTIAL
+        else -> null
+    }
+
+    private fun valueOf(raw: String, key: Long): Any? {
         if (!raw.startsWith(PREFIX, ignoreCase = true)) return null
         val bytes = bytesOf(raw.substring(PREFIX.length)) ?: return null
         return try {
-            Cbor(bytes).uintInMap(KEY_CREATED)
+            Cbor(bytes).valueInMap(key)
         } catch (e: IndexOutOfBoundsException) {
             null
         } catch (e: IllegalStateException) {
@@ -326,19 +343,27 @@ internal object PasskeyQr {
         return out.toByteArray()
     }
 
-    /** Just enough CBOR to find an unsigned value under an unsigned key of the top map. */
+    /**
+     * Just enough CBOR to find a value under an unsigned key of the top map: an unsigned number as
+     * a Long, a string as a String, anything else as null. Byte strings count as strings too: the
+     * specification's own example writes the hint as one, where Chromium writes text.
+     */
     private class Cbor(private val data: ByteArray) {
         private var position = 0
 
-        fun uintInMap(key: Long): Long? {
+        fun valueInMap(key: Long): Any? {
             val (major, pairs) = head()
             check(major == MAP)
-            var found: Long? = null
+            var found: Any? = null
             repeat(pairs.toInt()) {
                 val (keyMajor, keyValue) = head()
                 if (keyMajor == UINT && keyValue == key) {
                     val (valueMajor, value) = head()
-                    if (valueMajor == UINT) found = value else skipBody(valueMajor, value)
+                    found = when (valueMajor) {
+                        UINT -> value
+                        TEXT, BYTES -> text(value)
+                        else -> null.also { skipBody(valueMajor, value) }
+                    }
                 } else {
                     skipBody(keyMajor, keyValue)
                     skip()
@@ -348,6 +373,13 @@ internal object PasskeyQr {
         }
 
         private fun next(): Int = data[position++].toInt() and 0xFF
+
+        private fun text(length: Long): String {
+            check(length in 0..(data.size - position).toLong())
+            val start = position
+            position += length.toInt()
+            return String(data, start, length.toInt(), Charsets.UTF_8)
+        }
 
         /** The major type of the next item and its argument: a value, a length or a count. */
         private fun head(): Pair<Int, Long> {

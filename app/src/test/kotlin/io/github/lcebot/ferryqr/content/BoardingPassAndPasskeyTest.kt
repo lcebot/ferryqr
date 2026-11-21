@@ -69,6 +69,20 @@ class BoardingPassAndPasskeyTest {
         assertEquals(1_700_000_000L, PasskeyQr.createdAt("FIDO:/073216565403977300015815525"))
     }
 
+    /**
+     * The codes hold the CBOR maps {3: 1700000000, 5: "ga"}, the same with "mc", with "dcp", with "mc"
+     * as a byte string as the specification's example writes it, and the time alone.
+     */
+    @Test
+    fun readsWhatAPasskeyCodeAsksFor() {
+        assertEquals(PasskeyOperation.SIGN_IN, PasskeyQr.operation("FIDO:/002653404807832661634165253"))
+        assertEquals(PasskeyOperation.CREATE, PasskeyQr.operation("FIDO:/002653404807832661668112901"))
+        assertEquals(PasskeyOperation.PRESENT_CREDENTIAL, PasskeyQr.operation("FIDO:/002653404807832660482703852293"))
+        assertEquals(PasskeyOperation.CREATE, PasskeyQr.operation("FIDO:/002653404807832661668104709"))
+        assertEquals(1_700_000_000L, PasskeyQr.createdAt("FIDO:/002653404807832661634165253"))
+        assertNull(PasskeyQr.operation("FIDO:/00265340480783265"))
+    }
+
     @Test
     fun passkeyCodesWithoutATimeOrWithBadDigitsHaveNone() {
         assertNull(PasskeyQr.createdAt("FIDO:/0418346304929"))
