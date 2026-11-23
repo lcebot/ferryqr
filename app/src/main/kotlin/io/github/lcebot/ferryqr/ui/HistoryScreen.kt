@@ -183,11 +183,12 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
         order.addAll(0, current.filter { it !in order })
     }
     // The favorite being dragged, and while [settling] the one gliding into its place after the
-    // finger lifted, which stays lifted until it lands.
+    // finger lifted. It sets its dragged look down as the finger lifts and stays above its
+    // neighbours only until it lands, on the quick spatial motion, so letting go answers at once.
     var dragging by remember { mutableStateOf<String?>(null) }
     var dragOffset by remember { mutableFloatStateOf(0f) }
     var settling by remember { mutableStateOf<Job?>(null) }
-    val settleSpec = MaterialTheme.motionScheme.defaultSpatialSpec<Float>()
+    val settleSpec = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
     val listState = rememberLazyListState()
     val recent = remember(entries) { entries.filterNot { it.favorite } }
     val shortcutsFull = favorites.count { it.shortcut } >= FavoriteShortcuts.MAX
@@ -293,6 +294,7 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
             }
             fun startDrag(text: String) {
                 settling?.cancel()
+                settling = null
                 // Caught again on its way into place, the row goes on from where it is.
                 if (dragging != text) dragOffset = 0f
                 dragging = text
@@ -381,7 +383,7 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
                             ReorderRow(
                                 entry = entry,
                                 shape = segmentShape(index, shownFavorites.size),
-                                lifted = dragged,
+                                lifted = dragged && settling == null,
                                 onDragStart = { startDrag(entry.text) },
                                 onDrag = { amount ->
                                     dragOffset += amount
@@ -524,7 +526,7 @@ private fun FavoritesHeader(
     modifier: Modifier = Modifier,
 ) {
     Row(
-        modifier = modifier.fillMaxWidth().padding(start = 8.dp, top = 12.dp, bottom = 4.dp),
+        modifier = modifier.fillMaxWidth().padding(start = LIST_TEXT_INSET, top = 12.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -654,7 +656,7 @@ private fun DayHeader(day: LocalDate, sample: Long, modifier: Modifier = Modifie
         label,
         style = MaterialTheme.typography.titleSmall,
         color = MaterialTheme.colorScheme.primary,
-        modifier = modifier.padding(start = 8.dp, top = 20.dp, bottom = 8.dp),
+        modifier = modifier.padding(start = LIST_TEXT_INSET, end = LIST_TEXT_INSET, top = SECTION_TOP, bottom = SECTION_GAP),
     )
 }
 

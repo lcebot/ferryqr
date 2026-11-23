@@ -9,6 +9,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.calculateEndPadding
@@ -33,6 +34,7 @@ import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.ToggleButton
+import androidx.compose.material3.ToggleButtonDefaults
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -146,15 +148,8 @@ private fun HistorySettings() {
     val context = LocalContext.current
     val haptics = rememberHaptics()
     val kinds = SensitiveKind.entries
-    Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
-        // Named for what the switches do, so on reads as kept.
-        SectionTitle(R.string.settings_keep_title)
-        Text(
-            stringResource(R.string.settings_keep_intro),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 4.dp, end = 4.dp, bottom = 12.dp),
-        )
+    // Named for what the switches do, so on reads as kept.
+    SettingsSection(R.string.settings_keep_title, intro = R.string.settings_keep_intro) {
         kinds.forEachIndexed { index, kind ->
             var keep by remember(kind) { mutableStateOf(AppSettings.keeps(context, kind)) }
             SwitchItem(
@@ -178,8 +173,7 @@ private fun DisplaySettings() {
     val haptics = rememberHaptics()
     var mode by remember { mutableStateOf(AppSettings.longCodeEnlarge(context)) }
     var bright by remember { mutableStateOf(AppSettings.fullBrightness(context)) }
-    Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
-        SectionTitle(R.string.settings_display_title)
+    SettingsSection(R.string.settings_display_title) {
         SegmentedListItem(
             shapes = ListItemDefaults.shapes(shape = segmentShape(0, 2)),
             colors = settingColors(),
@@ -193,6 +187,7 @@ private fun DisplaySettings() {
                         LongCodeEnlarge.entries.forEachIndexed { index, option ->
                             ToggleButton(
                                 checked = option == mode,
+                                colors = settingToggleColors(),
                                 onCheckedChange = {
                                     if (it) {
                                         haptics.step()
@@ -237,8 +232,7 @@ private fun CreateSettings() {
     val context = LocalContext.current
     val haptics = rememberHaptics()
     var keepFormat by remember { mutableStateOf(AppSettings.rememberFormat(context)) }
-    Column {
-        SectionTitle(R.string.generate_title)
+    SettingsSection(R.string.generate_title) {
         SwitchItem(
             title = R.string.settings_remember_format,
             description = R.string.settings_remember_format_desc,
@@ -253,13 +247,34 @@ private fun CreateSettings() {
     }
 }
 
+/**
+ * A group of settings under its header, with an optional [intro] between them. Header and note line
+ * up with the text inside the rows.
+ */
 @Composable
-private fun SectionTitle(@StringRes title: Int) {
+private fun SettingsSection(@StringRes title: Int, @StringRes intro: Int? = null, rows: @Composable ColumnScope.() -> Unit) {
+    Column {
+        SectionHeader(stringResource(title))
+        if (intro != null) {
+            Text(
+                stringResource(intro),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = LIST_TEXT_INSET, end = LIST_TEXT_INSET, bottom = SECTION_GAP),
+            )
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap), content = rows)
+    }
+}
+
+/** A section's header, in the primary colour above its rows, as settings and history show them. */
+@Composable
+internal fun SectionHeader(text: String, modifier: Modifier = Modifier) {
     Text(
-        stringResource(title),
+        text,
         style = MaterialTheme.typography.titleSmall,
         color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(start = 4.dp, top = 28.dp, bottom = 14.dp),
+        modifier = modifier.padding(start = LIST_TEXT_INSET, end = LIST_TEXT_INSET, top = SECTION_TOP, bottom = SECTION_GAP),
     )
 }
 
@@ -278,6 +293,9 @@ private fun SwitchItem(
         onClick = { onChange(!checked) },
         shapes = ListItemDefaults.shapes(shape = shape),
         colors = settingColors(),
+        // Deliberately centred, against the list's rule that top-aligns the switch of a row three
+        // lines tall: there it floats at the top of the row, away from the text it belongs to.
+        verticalAlignment = Alignment.CenterVertically,
         trailingContent = { Switch(checked = checked, onCheckedChange = null) },
         supportingContent = description?.let { { Text(stringResource(it)) } },
         modifier = Modifier.semantics {
@@ -293,8 +311,24 @@ private fun SwitchItem(
 @Composable
 internal fun settingColors() = ListItemDefaults.segmentedColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
 
-/** Space between a setting's description and its controls, and between controls. */
+/*
+ * One set of spaces for the grouped lists of settings and history, on the 4dp grid; rows keep the
+ * list item's own padding. Text outside the rows, headers and notes, starts where text inside them
+ * does, at the list item's 16dp inset. A section starts 24dp below the one before, and its header
+ * and note keep 12dp from what follows, the same as a note from its controls and controls from
+ * each other.
+ */
+internal val LIST_TEXT_INSET = 16.dp
+internal val SECTION_TOP = 24.dp
+internal val SECTION_GAP = 12.dp
 internal val SETTING_CONTROL_GAP = 12.dp
+
+/**
+ * Unchecked toggle buttons one container role above the row they sit in. Their own default is the
+ * surface container, made for a surface background; on a row already that colour they would vanish.
+ */
+@Composable
+internal fun settingToggleColors() = ToggleButtonDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerHighest)
 
 /** A setting's icon, on a round secondary container. */
 @Composable

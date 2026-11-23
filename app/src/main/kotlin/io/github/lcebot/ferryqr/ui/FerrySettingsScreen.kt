@@ -1,4 +1,4 @@
-// No opt-in: ToggleButton, the connected button shapes and SegmentedListItem are stable APIs.
+// No opt-in: ToggleButton, the connected button shapes and ListItem are stable APIs.
 package io.github.lcebot.ferryqr.ui
 
 import androidx.annotation.StringRes
@@ -6,7 +6,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -14,9 +17,10 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ButtonGroupDefaults
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SegmentedListItem
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.ToggleButton
 import androidx.compose.runtime.Composable
@@ -31,6 +35,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.disabled
@@ -104,8 +109,8 @@ fun FerrySettingsScreen(onBack: () -> Unit) {
 @Composable
 private fun OpenInHeader() {
     Column(
-        modifier = Modifier.padding(start = 4.dp, end = 4.dp, bottom = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier.padding(start = LIST_TEXT_INSET, end = LIST_TEXT_INSET, bottom = SECTION_GAP),
+        verticalArrangement = Arrangement.spacedBy(SECTION_GAP),
     ) {
         Text(
             stringResource(R.string.settings_open_in_intro),
@@ -116,10 +121,9 @@ private fun OpenInHeader() {
             stringResource(R.string.settings_methods_intro),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 12.dp),
         )
         Method.entries.forEach { method ->
-            Column(Modifier.padding(top = 8.dp)) {
+            Column {
                 Text(stringResource(method.label), style = MaterialTheme.typography.labelLarge)
                 Text(
                     stringResource(method.description),
@@ -141,26 +145,50 @@ private fun AppSettingItem(app: AppSetting, shape: Shape) {
     var cameraFeed by remember(app.pkg) { mutableStateOf(OpenInModule.cameraFeed(context, app.pkg)) }
     val method = app.fixed ?: if (cameraFeed) Method.Camera else Method.Direct
     val working = installed && (state == ModuleState.Loaded || state == ModuleState.Enabled)
-    SegmentedListItem(
-        shapes = ListItemDefaults.shapes(shape = shape),
-        colors = settingColors(),
-        leadingContent = { SettingIcon { AppIcon(app.pkg, R.drawable.ic_apps, Modifier.size(24.dp)) } },
-        supportingContent = {
-            Column(verticalArrangement = Arrangement.spacedBy(SETTING_CONTROL_GAP)) {
-                Text(
-                    when {
-                        !installed -> stringResource(R.string.app_not_installed)
-                        else -> when (state) {
-                            ModuleState.Inactive -> stringResource(R.string.module_inactive)
-                            ModuleState.OutOfScope -> stringResource(R.string.module_out_of_scope)
-                            ModuleState.Enabled -> stringResource(R.string.module_enabled, name)
-                            ModuleState.Loaded -> stringResource(R.string.module_active)
-                            ModuleState.Outdated -> stringResource(R.string.module_outdated, name)
-                        }
-                    },
-                    // Working stands out in the primary colour; anything else reads as a note.
-                    color = if (working) MaterialTheme.colorScheme.primary else Color.Unspecified,
-                )
+    val rowPadding = ListItemDefaults.ContentPadding
+    val layoutDirection = LocalLayoutDirection.current
+    // The app is a list item, and its buttons span the whole row under it; in the item's supporting
+    // content they would start under the app's name instead.
+    Surface(shape = shape, color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
+        Column {
+            ListItem(
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                // The controls below continue the row, so the item leaves its bottom padding to them.
+                contentPadding = PaddingValues(
+                    start = rowPadding.calculateStartPadding(layoutDirection),
+                    end = rowPadding.calculateEndPadding(layoutDirection),
+                    top = rowPadding.calculateTopPadding(),
+                ),
+                leadingContent = { SettingIcon { AppIcon(app.pkg, R.drawable.ic_apps, Modifier.size(24.dp)) } },
+                supportingContent = {
+                    Text(
+                        when {
+                            !installed -> stringResource(R.string.app_not_installed)
+                            else -> when (state) {
+                                ModuleState.Inactive -> stringResource(R.string.module_inactive)
+                                ModuleState.OutOfScope -> stringResource(R.string.module_out_of_scope)
+                                ModuleState.Enabled -> stringResource(R.string.module_enabled, name)
+                                ModuleState.Loaded -> stringResource(R.string.module_active)
+                                ModuleState.Outdated -> stringResource(R.string.module_outdated, name)
+                            }
+                        },
+                        // Working stands out in the primary colour; anything else reads as a note.
+                        color = if (working) MaterialTheme.colorScheme.primary else Color.Unspecified,
+                    )
+                },
+            ) {
+                Text(name)
+            }
+            Column(
+                // Level with the list item's own edges, and its padding below.
+                modifier = Modifier.padding(
+                    start = rowPadding.calculateStartPadding(layoutDirection),
+                    end = rowPadding.calculateEndPadding(layoutDirection),
+                    top = SETTING_CONTROL_GAP,
+                    bottom = rowPadding.calculateBottomPadding(),
+                ),
+                verticalArrangement = Arrangement.spacedBy(SETTING_CONTROL_GAP),
+            ) {
                 MethodButtons(
                     selected = method,
                     choosable = app.fixed == null,
@@ -171,11 +199,15 @@ private fun AppSettingItem(app: AppSetting, shape: Shape) {
                     },
                 )
                 // Only an app limited to one method says why; the methods themselves are described above.
-                if (app.reason != null) Text(stringResource(app.reason))
+                if (app.reason != null) {
+                    Text(
+                        stringResource(app.reason),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
-        },
-    ) {
-        Text(name)
+        }
     }
 }
 
@@ -194,6 +226,7 @@ private fun MethodButtons(selected: Method, choosable: Boolean, onSelect: (Metho
             ToggleButton(
                 checked = checked,
                 onCheckedChange = { if (it) onSelect(method) },
+                colors = settingToggleColors(),
                 enabled = choosable || checked,
                 shapes = if (index == 0) {
                     ButtonGroupDefaults.connectedLeadingButtonShapes()
