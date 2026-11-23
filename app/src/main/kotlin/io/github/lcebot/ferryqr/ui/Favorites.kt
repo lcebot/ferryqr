@@ -8,8 +8,9 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -24,10 +25,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -39,7 +37,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
-import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.history.HistoryStore
@@ -106,13 +103,11 @@ fun FavoriteIcon(favorite: Boolean, contentDescription: String?, modifier: Modif
 @Composable
 fun RenameDialog(current: String, onDismiss: () -> Unit, onRename: (String) -> Unit) {
     val haptics = rememberHaptics()
-    var value by rememberSaveable(stateSaver = TextFieldValue.Saver) {
-        mutableStateOf(TextFieldValue(current, TextRange(0, current.length)))
-    }
+    val name = rememberTextFieldState(current, initialSelection = TextRange(0, current.length))
     val focus = remember { FocusRequester() }
     fun confirm() {
         haptics.confirm()
-        onRename(value.text)
+        onRename(name.text.toString())
     }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -126,15 +121,14 @@ fun RenameDialog(current: String, onDismiss: () -> Unit, onRename: (String) -> U
                 focus.requestFocus()
             }
             OutlinedTextField(
-                value = value,
-                onValueChange = { value = it },
+                state = name,
                 label = { Text(stringResource(R.string.rename_label)) },
-                singleLine = true,
+                lineLimits = TextFieldLineLimits.SingleLine,
                 keyboardOptions = KeyboardOptions(
                     capitalization = KeyboardCapitalization.Sentences,
                     imeAction = ImeAction.Done,
                 ),
-                keyboardActions = KeyboardActions(onDone = { confirm() }),
+                onKeyboardAction = { confirm() },
                 modifier = Modifier.fillMaxWidth().focusRequester(focus),
             )
         },

@@ -6,50 +6,60 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Bitmap
 import androidx.activity.compose.LocalActivity
-import androidx.compose.foundation.Image
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.consumeWindowInsets
-import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.exclude
-import androidx.compose.foundation.layout.imeAnimationTarget
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.exclude
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imeAnimationTarget
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.clearText
+import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.DropdownMenuGroup
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenuPopup
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ScaffoldDefaults
@@ -69,6 +79,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
@@ -78,31 +89,24 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.material3.DropdownMenuGroup
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.DropdownMenuPopup
-import androidx.compose.material3.MenuDefaults
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.material3.IconButtonDefaults
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.window.PopupProperties
-import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.AppSettings
 import io.github.lcebot.ferryqr.LongCodeEnlarge
-import io.github.lcebot.ferryqr.generate.AutoFormat
-import io.github.lcebot.ferryqr.generate.CodeProblem
-import io.github.lcebot.ferryqr.dispatch.Target
+import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.content.Classifier
+import io.github.lcebot.ferryqr.dispatch.Target
 import io.github.lcebot.ferryqr.dispatch.Targets
+import io.github.lcebot.ferryqr.generate.AutoFormat
 import io.github.lcebot.ferryqr.generate.CodeGenerator
+import io.github.lcebot.ferryqr.generate.CodeProblem
 import io.github.lcebot.ferryqr.generate.CodeType
 import io.github.lcebot.ferryqr.generate.Generated
 import kotlin.math.roundToInt
@@ -148,7 +152,8 @@ fun GeneratorScreen(onBack: () -> Unit) {
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val windowInfo = LocalWindowInfo.current
-    var text by rememberSaveable { mutableStateOf("") }
+    val field = rememberTextFieldState()
+    val text = field.text.toString()
     // The format is chosen from the content unless one is picked; the last pick is kept only when
     // the settings ask for it, as the page keeps nothing else between visits.
     val keepFormat = remember { AppSettings.rememberFormat(context) }
@@ -177,7 +182,8 @@ fun GeneratorScreen(onBack: () -> Unit) {
         snapshotFlow { windowInfo.isWindowFocused }.first { it }
         prefilled = true
         val clip = readClipboardText(context)
-        if (!clip.isNullOrEmpty() && text.isEmpty()) text = clip
+        // Read from the field itself: by now the text this composition saw may be stale.
+        if (!clip.isNullOrEmpty() && field.text.isEmpty()) field.setTextAndPlaceCursorAtEnd(clip)
     }
 
     LaunchedEffect(text, type) {
@@ -208,7 +214,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
     }
     val trailingIcon: (@Composable () -> Unit)? = if (text.isNotEmpty()) {
         {
-            IconButton(onClick = { haptics.tap(); text = "" }) {
+            IconButton(onClick = { haptics.tap(); field.clearText() }) {
                 Icon(painterResource(R.drawable.ic_close), stringResource(R.string.generate_clear))
             }
         }
@@ -410,8 +416,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
                 }
 
                 OutlinedTextField(
-                    value = text,
-                    onValueChange = { text = it },
+                    state = field,
                     modifier = Modifier
                         .fillMaxWidth()
                         .animateContentSize(MaterialTheme.motionScheme.defaultSpatialSpec()),
@@ -420,8 +425,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
                     isError = error != null,
                     supportingText = { Text(error.orEmpty()) },
                     trailingIcon = trailingIcon,
-                    minLines = fieldLines,
-                    maxLines = fieldLines,
+                    lineLimits = TextFieldLineLimits.MultiLine(minHeightInLines = fieldLines, maxHeightInLines = fieldLines),
                 )
 
             }
