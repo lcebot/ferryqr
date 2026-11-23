@@ -313,11 +313,13 @@ internal fun settingColors() = ListItemDefaults.segmentedColors(containerColor =
 
 /*
  * One set of spaces for the grouped lists of settings and history, on the 4dp grid. Text outside
- * the rows, headers and notes, shares the left margin of the rows' content, the list item's 16dp
- * inset. A section starts 24dp below the one before, and its header and note keep 12dp from what
- * follows, the same as a note from its controls and controls from each other.
+ * the rows, headers and notes, runs almost as wide as the rows, just 4dp in from their edges, so it
+ * does not sit flush with an edge that rounds away at its corners; indented to the rows' own text
+ * it would read as a narrow column. A section starts 24dp below the one before, and its header and
+ * note keep 12dp from what follows, the same as a note from its controls and controls from each
+ * other.
  */
-internal val LIST_TEXT_INSET = 16.dp
+internal val LIST_TEXT_INSET = 4.dp
 internal val SECTION_TOP = 24.dp
 internal val SECTION_GAP = 12.dp
 internal val SETTING_CONTROL_GAP = 12.dp
