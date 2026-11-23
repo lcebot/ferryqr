@@ -132,6 +132,7 @@ private fun FerryEntry(onOpen: () -> Unit) {
         },
         shapes = ListItemDefaults.shapes(shape = segmentShape(0, 1)),
         colors = settingColors(),
+        contentPadding = SETTING_ROW_PADDING,
         leadingContent = {
             SettingIcon { Icon(painterResource(R.drawable.ic_apps), contentDescription = null, modifier = Modifier.size(24.dp)) }
         },
@@ -177,6 +178,7 @@ private fun DisplaySettings() {
         SegmentedListItem(
             shapes = ListItemDefaults.shapes(shape = segmentShape(0, 2)),
             colors = settingColors(),
+            contentPadding = SETTING_ROW_PADDING,
             supportingContent = {
                 Column(verticalArrangement = Arrangement.spacedBy(SETTING_CONTROL_GAP)) {
                     Text(stringResource(R.string.settings_long_codes_desc))
@@ -257,7 +259,7 @@ private fun SettingsSection(@StringRes title: Int, @StringRes intro: Int? = null
                 stringResource(intro),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = SECTION_GAP),
+                modifier = Modifier.padding(start = LIST_TEXT_INSET, end = LIST_TEXT_INSET, bottom = SECTION_GAP),
             )
         }
         Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap), content = rows)
@@ -271,7 +273,7 @@ internal fun SectionHeader(text: String, modifier: Modifier = Modifier) {
         text,
         style = MaterialTheme.typography.titleSmall,
         color = MaterialTheme.colorScheme.primary,
-        modifier = modifier.padding(top = SECTION_TOP, bottom = SECTION_GAP),
+        modifier = modifier.padding(start = LIST_TEXT_INSET, end = LIST_TEXT_INSET, top = SECTION_TOP, bottom = SECTION_GAP),
     )
 }
 
@@ -290,6 +292,7 @@ private fun SwitchItem(
         onClick = { onChange(!checked) },
         shapes = ListItemDefaults.shapes(shape = shape),
         colors = settingColors(),
+        contentPadding = if (description != null) SETTING_ROW_PADDING else SETTING_LINE_PADDING,
         // Deliberately centred, against the list's rule that top-aligns the switch of a row three
         // lines tall: there it floats at the top of the row, away from the text it belongs to.
         verticalAlignment = Alignment.CenterVertically,
@@ -309,15 +312,24 @@ private fun SwitchItem(
 internal fun settingColors() = ListItemDefaults.segmentedColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
 
 /*
- * One set of spaces for the grouped lists of settings and history, on the 4dp grid; rows keep the
- * list item's own padding. Text outside the rows, headers and notes, stands on the page's keyline,
- * with the top bar's title and the rows' edges. A section starts 24dp below the one before, and its
- * header and note keep 12dp from what follows, the same as a note from its controls and controls
- * from each other.
+ * One set of spaces for the grouped lists of settings and history, on the 4dp grid. Text outside
+ * the rows, headers and notes, shares the left margin of the rows' content, the list item's 16dp
+ * inset. A section starts 24dp below the one before, and its header and note keep 12dp from what
+ * follows, the same as a note from its controls and controls from each other.
  */
+internal val LIST_TEXT_INSET = 16.dp
 internal val SECTION_TOP = 24.dp
 internal val SECTION_GAP = 12.dp
 internal val SETTING_CONTROL_GAP = 12.dp
+
+/**
+ * Setting rows keep their text 16dp from every edge. A row of one line is 56dp tall at least, which
+ * centres its text 16dp from the top and bottom with 12dp of padding; the list tokens' 10dp would
+ * bring the text of taller rows, and of rows holding controls, closer to the edges than that, and
+ * closer than the 12dp between a row's own text and controls.
+ */
+internal val SETTING_ROW_PADDING = PaddingValues(horizontal = 16.dp, vertical = 16.dp)
+internal val SETTING_LINE_PADDING = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
 
 /**
  * Unchecked toggle buttons one container role above the row they sit in. Their own default is the

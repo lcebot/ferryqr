@@ -1,4 +1,4 @@
-// No opt-in: ToggleButton, the connected button shapes and ListItemDefaults are stable APIs.
+// No opt-in: ToggleButton and the connected button shapes are stable APIs.
 package io.github.lcebot.ferryqr.ui
 
 import androidx.annotation.StringRes
@@ -16,7 +16,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ButtonGroupDefaults
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -109,7 +108,7 @@ fun FerrySettingsScreen(onBack: () -> Unit) {
 @Composable
 private fun OpenInHeader() {
     Column(
-        modifier = Modifier.padding(bottom = SECTION_GAP),
+        modifier = Modifier.padding(start = LIST_TEXT_INSET, end = LIST_TEXT_INSET, bottom = SECTION_GAP),
         verticalArrangement = Arrangement.spacedBy(SECTION_GAP),
     ) {
         Text(
@@ -145,9 +144,8 @@ private fun AppSettingItem(app: AppSetting, shape: Shape) {
     var cameraFeed by remember(app.pkg) { mutableStateOf(OpenInModule.cameraFeed(context, app.pkg)) }
     val method = app.fixed ?: if (cameraFeed) Method.Camera else Method.Direct
     val working = installed && (state == ModuleState.Loaded || state == ModuleState.Enabled)
-    val rowPadding = ListItemDefaults.ContentPadding
     val layoutDirection = LocalLayoutDirection.current
-    // Laid out with the list item's own measures rather than as a list item: the buttons span the
+    // Laid out with the setting rows' measures rather than as a list item: the buttons span the
     // whole row under the app, and a list item would either start them under the app's name, in its
     // supporting content, or keep its minimum height above them and leave a gap that grows and
     // shrinks with the status text.
@@ -155,9 +153,9 @@ private fun AppSettingItem(app: AppSetting, shape: Shape) {
         Column {
             Row(
                 modifier = Modifier.padding(
-                    start = rowPadding.calculateStartPadding(layoutDirection),
-                    end = rowPadding.calculateEndPadding(layoutDirection),
-                    top = rowPadding.calculateTopPadding(),
+                    start = SETTING_ROW_PADDING.calculateStartPadding(layoutDirection),
+                    end = SETTING_ROW_PADDING.calculateEndPadding(layoutDirection),
+                    top = SETTING_ROW_PADDING.calculateTopPadding(),
                 ),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(LEADING_TO_TEXT),
@@ -183,12 +181,12 @@ private fun AppSettingItem(app: AppSetting, shape: Shape) {
                 }
             }
             Column(
-                // Level with the list item's own edges, and its padding below.
+                // Level with the row's edges, and its padding below, as every setting row keeps.
                 modifier = Modifier.padding(
-                    start = rowPadding.calculateStartPadding(layoutDirection),
-                    end = rowPadding.calculateEndPadding(layoutDirection),
+                    start = SETTING_ROW_PADDING.calculateStartPadding(layoutDirection),
+                    end = SETTING_ROW_PADDING.calculateEndPadding(layoutDirection),
                     top = SETTING_CONTROL_GAP,
-                    bottom = rowPadding.calculateBottomPadding(),
+                    bottom = SETTING_ROW_PADDING.calculateBottomPadding(),
                 ),
                 verticalArrangement = Arrangement.spacedBy(SETTING_CONTROL_GAP),
             ) {
