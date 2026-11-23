@@ -6,6 +6,9 @@
         android:required="false" />
 
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Asking whether the phone supports Wi-Fi Easy Connect needs it; granted at install, it shows
+         no prompt and reads nothing about the networks. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
     <!-- The apps the optional LSPosed module supports accept its broadcasts only from holders of
          this, so no other app can make them open content it chose. -->
