@@ -8,12 +8,14 @@ import android.graphics.Bitmap
 import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,6 +29,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.exclude
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.ime
@@ -80,14 +83,17 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -104,8 +110,11 @@ import io.github.lcebot.ferryqr.AppSettings
 import io.github.lcebot.ferryqr.LongCodeEnlarge
 import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.content.Classifier
-import io.github.lcebot.ferryqr.dispatch.ActiveFerry
 import io.github.lcebot.ferryqr.dispatch.ActiveFerries
+import io.github.lcebot.ferryqr.dispatch.ActiveFerry
+import io.github.lcebot.ferryqr.dispatch.Ferries
+import io.github.lcebot.ferryqr.dispatch.Ferry
+import io.github.lcebot.ferryqr.dispatch.PassiveFerry
 import io.github.lcebot.ferryqr.generate.AutoFormat
 import io.github.lcebot.ferryqr.generate.CodeGenerator
 import io.github.lcebot.ferryqr.generate.CodeProblem
@@ -202,8 +211,8 @@ fun GeneratorScreen(onBack: () -> Unit) {
     val enlarge = remember { AppSettings.longCodeEnlarge(context) }
     var prefilled by rememberSaveable { mutableStateOf(false) }
     var result by remember { mutableStateOf<Generated?>(null) }
-    // Every installed app the text could go to, in the order the toolbar shows them: an app that
-    // appears for its own code comes first, as it does on result cards.
+    // Every installed app FerryQR reaches its own way, each in a place of its own in the toolbar so
+    // it can fade in and out there: the apps for their own codes first, the general ones last.
     val candidates = remember { ActiveFerries.all.filter { it.installed(context) }.sortedBy { it.general } }
     val appFade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
     val appResize = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
@@ -305,16 +314,75 @@ fun GeneratorScreen(onBack: () -> Unit) {
             val keyboardPx = WindowInsets.imeAnimationTarget.getBottom(density) - navigationBar
             val keyboard = with(density) { keyboardPx.coerceAtLeast(0).toDp() }
             val lineHeight = with(density) { MaterialTheme.typography.bodyLarge.lineHeight.toDp() }
-            val roomBesideCode = maxHeight - keyboard - CHIPS_HEIGHT - TOOLBAR_HEIGHT - GAP * 3 - maxWidth
-            val toolbarRoom = maxWidth
+            // Turned sideways, the screen has too little height for the code above the controls, so the
+            // code takes one half of the width, as tall as the screen lets it be, and the controls the other.
+            val sideBySide = maxWidth > maxHeight
+            val roomForField = if (sideBySide) {
+                maxHeight - keyboard - CHIPS_HEIGHT - TOOLBAR_HEIGHT - GAP * 2
+            } else {
+                maxHeight - keyboard - CHIPS_HEIGHT - TOOLBAR_HEIGHT - GAP * 3 - maxWidth
+            }
+            val toolbarRoom = if (sideBySide) (maxWidth - GAP) / 2 else maxWidth
             val fieldLines = (MAX_FIELD_LINES downTo 1).firstOrNull { lines ->
-                FIELD_ONE_LINE + lineHeight * (lines - 1) + SUPPORTING_HEIGHT <= roomBesideCode
+                FIELD_ONE_LINE + lineHeight * (lines - 1) + SUPPORTING_HEIGHT <= roomForField
             } ?: 1
 
-            Column(
-                modifier = Modifier.fillMaxSize().imePadding(),
-                verticalArrangement = Arrangement.spacedBy(GAP),
-            ) {
+            // What is done with the code sits in one toolbar under it: actions on the code itself,
+            // then the apps that can open the text, with sharing as the main way out. The apps are
+            // the ones result cards offer for the same content, in the same order.
+            val sendApp: (Ferry) -> SendApp = { ferry ->
+                val name = ferry.label(context)
+                // Without the module the app could only open its scanner on nothing, so the
+                // button looks disabled but still explains why when tapped.
+                val looksEnabled = (ferry as? ActiveFerry)?.let { ready[it] } ?: ferry.ready
+                SendApp(context.getString(R.string.open_in_app, name), ferry.pkg, looksEnabled) {
+                    when {
+                        activity == null -> Unit
+                        !looksEnabled -> {
+                            haptics.reject()
+                            scope.launch { snackbar.showLatest(context.getString(R.string.needs_module_in_app, name)) }
+                        }
+                        else -> {
+                            haptics.tap()
+                            if (!ferry.open(activity, text)) scope.launch { snackbar.showLatest(context.getString(R.string.no_app)) }
+                        }
+                    }
+                }
+            }
+            val payload = remember(text) { Classifier.classify(text) }
+            val offered = remember(payload, ready) { Ferries.offered(context, payload).filter { it.installed(context) } }
+            // The app the system opens the text in has a place of its own, between the apps for
+            // their own codes and the general ones, and keeps it while it fades out.
+            val passive = offered.firstOrNull { it is PassiveFerry }
+            var lastPassive by remember { mutableStateOf<Ferry?>(null) }
+            LaunchedEffect(passive) { if (passive != null) lastPassive = passive }
+            // While the whole group of apps fades out, each app inside keeps its place, so the group
+            // shrinks as one instead of its apps shrinking inside it at the same time, two animations
+            // that drift apart and jerk when the group comes back before the second has ended.
+            val lastLayout = remember { arrayOf(SendLayout(emptySet(), emptyList())) }
+            if (offered.isNotEmpty()) lastLayout[0] = sendLayout(offered, toolbarRoom)
+            val layout = lastLayout[0]
+
+            // The code opens over the whole window when tapped, as large as the window lets it be.
+            var enlarged by rememberSaveable { mutableStateOf(false) }
+            var codeBounds by remember { mutableStateOf<Rect?>(null) }
+            val brighten = remember { AppSettings.fullBrightness(context) }
+            if (enlarged && code != null) {
+                CodeOverlay(
+                    code,
+                    brighten,
+                    codeBounds,
+                    onDismiss = { enlarged = false },
+                    drawTall = if (type.long) {
+                        { ratio -> (CodeGenerator.generate(text, type, ratio) as? Generated.Code)?.bitmap }
+                    } else {
+                        null
+                    },
+                    long = type.long,
+                )
+            }
+
+            val chips: @Composable () -> Unit = {
                 // The automatic choice leads and names the format it uses; the common formats follow, with
                 // one picked from the rest beside them while it is in use, and the rest one tap away.
                 Row(
@@ -332,8 +400,8 @@ fun GeneratorScreen(onBack: () -> Unit) {
                             modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                         )
                     }
-                    val offered = CodeType.COMMON + listOfNotNull(chosen?.takeIf { it !in CodeType.COMMON })
-                    offered.forEach { option ->
+                    val formats = CodeType.COMMON + listOfNotNull(chosen?.takeIf { it !in CodeType.COMMON })
+                    formats.forEach { option ->
                         FilterChip(
                             selected = option == chosen,
                             onClick = { haptics.step(); choose(option.name) },
@@ -342,24 +410,42 @@ fun GeneratorScreen(onBack: () -> Unit) {
                     }
                     // It opens the picker rather than being chosen, so it is an assist chip, which
                     // screen readers announce as a button rather than as an unchecked option.
+                    // Its label and icon take the colour of the unselected formats beside it rather than
+                    // an assist chip's own, so the row reads as one set of options.
                     AssistChip(
                         onClick = { haptics.tap(); openPicker() },
                         label = { Text(stringResource(R.string.format_more)) },
+                        colors = AssistChipDefaults.assistChipColors(
+                            labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            trailingIconContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        ),
                         trailingIcon = {
                             Icon(painterResource(R.drawable.ic_expand), contentDescription = null, modifier = Modifier.size(AssistChipDefaults.IconSize))
                         },
                     )
                 }
-
+            }
+            val codeArea: @Composable (Modifier) -> Unit = { modifier ->
                 Box(
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    modifier = modifier.then(
+                        if (code == null) {
+                            Modifier
+                        } else {
+                            Modifier.clickable(onClickLabel = stringResource(R.string.code_enlarge)) {
+                                haptics.tap()
+                                enlarged = true
+                            }
+                        },
+                    ),
                     contentAlignment = Alignment.Center,
                 ) {
+                    // Where the code itself is drawn, which the enlarged code grows out of.
+                    val bounds = Modifier.onGloballyPositioned { codeBounds = it.boundsInWindow() }
                     if (code != null && type.long && enlarge == LongCodeEnlarge.TILT) {
-                        TiltedCode(code, Modifier.fillMaxSize())
+                        TiltedCode(code, bounds.fillMaxSize())
                     } else if (code != null && type.long) {
                         // Drawn again at the preview's own shape, so its bars fill it without a scaled picture.
-                        BoxWithConstraints(Modifier.fillMaxSize()) {
+                        BoxWithConstraints(bounds.fillMaxSize()) {
                             val ratio = ((maxHeight / maxWidth) * 20).roundToInt() / 20f
                             val tall = remember(text, type, ratio) {
                                 (CodeGenerator.generate(text, type, ratio) as? Generated.Code)?.bitmap
@@ -367,39 +453,14 @@ fun GeneratorScreen(onBack: () -> Unit) {
                             PlainCode(tall, Modifier.fillMaxSize(), stretch = true, filterQuality = FilterQuality.None)
                         }
                     } else {
-                        CodePreview(code, Modifier.aspectRatio(1f, matchHeightConstraintsFirst = true))
+                        CodePreview(code, bounds.aspectRatio(1f, matchHeightConstraintsFirst = true))
                     }
                 }
-
-                // What is done with the code sits in one toolbar under it: actions on the code itself,
-                // then the apps that can open the text, with sharing as the main way out. The apps are
-                // the ones result cards offer for the same content.
-                val apps = candidates.associateWith { target ->
-                    val name = target.label(context)
-                    // Without the module the app could only open its scanner on nothing, so the
-                    // button looks disabled but still explains why when tapped.
-                    val looksEnabled = ready.getValue(target)
-                    SendApp(context.getString(R.string.open_in_app, name), target.pkg, looksEnabled) {
-                        when {
-                            activity == null -> Unit
-                            !looksEnabled -> {
-                                haptics.reject()
-                                scope.launch { snackbar.showSnackbar(context.getString(R.string.needs_module_in_app, name)) }
-                            }
-                            else -> {
-                                haptics.tap()
-                                if (!target.open(activity, text)) scope.launch { snackbar.showSnackbar(context.getString(R.string.no_app)) }
-                            }
-                        }
-                    }
-                }
-                val payload = remember(text) { Classifier.classify(text) }
-                val offered = remember(payload, candidates) { ActiveFerries.offeredFor(payload).filter { it in candidates } }
-                val owner = remember(payload, candidates) { ActiveFerries.claimant(payload)?.takeIf { it in candidates } }
-                val layout = sendLayout(offered, owner, toolbarRoom)
+            }
+            val toolbar: @Composable () -> Unit = {
                 CodeToolbar(
                     code = code,
-                    onMessage = { message -> scope.launch { snackbar.showSnackbar(context.getString(message)) } },
+                    onMessage = { message -> scope.launch { snackbar.showLatest(context.getString(message)) } },
                     favorite = {
                         // Kept codes are shown again from history, drawn the same way as here. Unstarred,
                         // the toggle takes the toolbar's own content colour, like save and copy beside it;
@@ -427,27 +488,29 @@ fun GeneratorScreen(onBack: () -> Unit) {
                             // Folding apps away or bringing them back resizes the pill a button at a
                             // time, the same way as when an app appears for the text.
                             AppGroup {
-                                for (target in candidates) {
-                                    AnimatedVisibility(
-                                        visible = target in layout.inline,
-                                        enter = fadeIn(appFade) + expandHorizontally(appResize),
-                                        exit = fadeOut(appFade) + shrinkHorizontally(appResize),
-                                    ) {
-                                        AppButton(apps.getValue(target), enabled = text.isNotEmpty())
-                                    }
+                                val enabled = text.isNotEmpty()
+                                for (ferry in candidates.filterNot { it.general }) {
+                                    AppSlot(ferry in layout.inline, sendApp(ferry), enabled, appFade, appResize)
+                                }
+                                (passive ?: lastPassive)?.let { ferry ->
+                                    AppSlot(ferry in layout.inline, sendApp(ferry), enabled, appFade, appResize)
+                                }
+                                for (ferry in candidates.filter { it.general }) {
+                                    AppSlot(ferry in layout.inline, sendApp(ferry), enabled, appFade, appResize)
                                 }
                                 AnimatedVisibility(
                                     visible = layout.folded.isNotEmpty(),
                                     enter = fadeIn(appFade) + expandHorizontally(appResize),
                                     exit = fadeOut(appFade) + shrinkHorizontally(appResize),
                                 ) {
-                                    SendMenu(layout.folded.map(apps::getValue), enabled = text.isNotEmpty())
+                                    SendMenu(layout.folded.map(sendApp), enabled = enabled)
                                 }
                             }
                         }
                     }
                 }
-
+            }
+            val textField: @Composable () -> Unit = {
                 OutlinedTextField(
                     state = field,
                     modifier = Modifier
@@ -460,7 +523,33 @@ fun GeneratorScreen(onBack: () -> Unit) {
                     trailingIcon = trailingIcon,
                     lineLimits = TextFieldLineLimits.MultiLine(minHeightInLines = fieldLines, maxHeightInLines = fieldLines),
                 )
+            }
 
+            if (sideBySide) {
+                Row(
+                    modifier = Modifier.fillMaxSize().imePadding(),
+                    horizontalArrangement = Arrangement.spacedBy(GAP),
+                ) {
+                    codeArea(Modifier.weight(1f).fillMaxHeight())
+                    Column(
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        verticalArrangement = Arrangement.spacedBy(GAP),
+                    ) {
+                        chips()
+                        toolbar()
+                        textField()
+                    }
+                }
+            } else {
+                Column(
+                    modifier = Modifier.fillMaxSize().imePadding(),
+                    verticalArrangement = Arrangement.spacedBy(GAP),
+                ) {
+                    chips()
+                    codeArea(Modifier.weight(1f).fillMaxWidth())
+                    toolbar()
+                    textField()
+                }
             }
         }
     }
@@ -475,20 +564,39 @@ private class SendApp(
 )
 
 /** The apps shown in the toolbar, and those folded behind its overflow button. */
-private class SendLayout(val inline: Set<ActiveFerry>, val folded: List<ActiveFerry>)
+private class SendLayout(val inline: Set<Ferry>, val folded: List<Ferry>)
 
 /**
- * Which apps fit a toolbar [room] wide. All of them when they fit; otherwise the app the text
- * belongs to stays in view beside the overflow button, which the narrowest phone screen Android
- * allows still holds, and the others fold away.
+ * Which of the [offered] apps fit a toolbar [room] wide. All of them when they fit; otherwise the
+ * first, the one the text goes to best, stays in view beside the overflow button, which the
+ * narrowest phone screen Android allows still holds, and the others fold away.
  */
-private fun sendLayout(offered: List<ActiveFerry>, owner: ActiveFerry?, room: Dp): SendLayout {
+private fun sendLayout(offered: List<Ferry>, room: Dp): SendLayout {
     fun fits(groupButtons: Int) =
         TOOLBAR_PADDING + TOOLBAR_BUTTON * (CODE_ACTIONS + groupButtons) + GROUP_GAP + TOOLBAR_FAB <= room
+    val first = offered.firstOrNull()
     return when {
         fits(offered.size) -> SendLayout(offered.toSet(), emptyList())
-        owner != null && fits(2) -> SendLayout(setOf(owner), offered - owner)
+        first != null && fits(2) -> SendLayout(setOf(first), offered - first)
         else -> SendLayout(emptySet(), offered)
+    }
+}
+
+/** An app's place in the toolbar, where its button fades and resizes in and out as it is offered. */
+@Composable
+private fun RowScope.AppSlot(
+    visible: Boolean,
+    app: SendApp,
+    enabled: Boolean,
+    fade: FiniteAnimationSpec<Float>,
+    resize: FiniteAnimationSpec<IntSize>,
+) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(fade) + expandHorizontally(resize),
+        exit = fadeOut(fade) + shrinkHorizontally(resize),
+    ) {
+        AppButton(app, enabled = enabled)
     }
 }
 

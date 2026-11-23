@@ -80,9 +80,11 @@
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
             android:exported="false"
             android:theme="@style/Theme.FerryQR.Page" />
-        <!-- Compose makes room for the keyboard itself; without adjustResize the system also pans the window. -->
+        <!-- Compose makes room for the keyboard itself; without adjustResize the system also pans the window.
+             An enlarged long code turns the screen sideways, which recreating the activity would undo. -->
         <activity
             android:name=".GeneratorActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
             android:exported="false"
             android:theme="@style/Theme.FerryQR.Page"
             android:windowSoftInputMode="adjustResize" />

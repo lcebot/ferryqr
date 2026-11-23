@@ -479,7 +479,7 @@ object Cards {
             owner?.takeIf { it in ranked }?.let { targetNote(activity, it, origin) }?.let { add(it) }
             owner?.let { missingNote(activity, it) }?.let { add(it) }
         }
-        val general = ActiveFerries.all.filter { ferry -> ferry.general && ranked.none { it.pkg == ferry.pkg } }
+        val general = Ferries.general(payload, ranked)
         val browser = CardAction(R.string.open, R.drawable.ic_open_in_new, opens = true) {
             if (Launch.browser(it, payload.url)) ActionResult.Handoff else ActionResult.Unavailable
         }

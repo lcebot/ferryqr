@@ -120,14 +120,17 @@ private fun KeepScreenOn() {
 }
 
 /**
- * A long code, a barcode or a PDF417, shown level over the whole window on white, one of the ways
- * the settings offer to enlarge it. It grows out of the card's own code at [source], in window
- * coordinates, and returns into it when closed by a tap or a back gesture, which shrinks it as it
- * goes. The screen turns sideways while it shows, where the code is longest, so the activity has
- * to handle rotation itself, as the history does. A screen about to turn fades the code in and out
- * instead, since the card's code is where it was only in the window's earlier shape. [drawTall],
- * when given, draws the code again as tall as the window lets it be, so its bars or rows grow
- * rather than a scaled picture.
+ * A code shown over the whole window on white, as large as the window lets it be. It grows out of
+ * the code at [source], in window coordinates, and returns into it when closed by a tap or a back
+ * gesture, which shrinks it as it goes.
+ *
+ * A [long] code, a barcode or a PDF417, is shown level, one of the ways the settings offer to
+ * enlarge it. The screen turns sideways while it shows, where the code is longest, so the activity
+ * has to handle rotation itself, as the history does. A screen about to turn fades the code in and
+ * out instead, since the card's code is where it was only in the window's earlier shape.
+ * [drawTall], when given, draws a long code again as tall as the window lets it be, so its bars or
+ * rows grow rather than a scaled picture. Any other code keeps its own shape and the screen its
+ * orientation.
  */
 @Composable
 fun CodeOverlay(
@@ -136,6 +139,7 @@ fun CodeOverlay(
     source: Rect?,
     onDismiss: () -> Unit,
     drawTall: ((Float) -> Bitmap?)? = null,
+    long: Boolean = true,
 ) {
     Dialog(
         onDismissRequest = onDismiss,
@@ -157,8 +161,9 @@ fun CodeOverlay(
         if (brighten) FullBrightness()
         KeepScreenOn()
         val configuration = LocalConfiguration.current
-        val turning = remember { configuration.orientation == Configuration.ORIENTATION_PORTRAIT }
+        val turning = remember { long && configuration.orientation == Configuration.ORIENTATION_PORTRAIT }
         DisposableEffect(view) {
+            if (!long) return@DisposableEffect onDispose {}
             val activity = view.context.activity()
             val previous = activity?.requestedOrientation
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
@@ -216,12 +221,20 @@ fun CodeOverlay(
                         translationX = lerp(from.center.x - to.center.x, 0f, p)
                         translationY = lerp(from.center.y - to.center.y, 0f, p)
                     }
-                // Bars taller than the code is wide add nothing a reader needs.
-                val height = minOf(maxHeight, maxWidth)
-                // Rounded so a slightly different window does not draw the code again.
-                val ratio = ((height / maxWidth) * 20).roundToInt() / 20f
-                val tall = remember(code, ratio) { drawTall?.invoke(ratio) } ?: code
-                PlainCode(tall, codeModifier.size(maxWidth, height), stretch = true)
+                if (long) {
+                    // Bars taller than the code is wide add nothing a reader needs.
+                    val height = minOf(maxHeight, maxWidth)
+                    // Rounded so a slightly different window does not draw the code again.
+                    val ratio = ((height / maxWidth) * 20).roundToInt() / 20f
+                    val tall = remember(code, ratio) { drawTall?.invoke(ratio) } ?: code
+                    PlainCode(tall, codeModifier.size(maxWidth, height), stretch = true)
+                } else {
+                    // Sized to the code's own shape, so it grows from and back into the code it came from.
+                    val aspect = code.width.toFloat() / code.height
+                    val width = minOf(maxWidth, maxHeight * aspect)
+                    // One pixel per module, which only stays sharp unsmoothed.
+                    PlainCode(code, codeModifier.size(width, width / aspect), stretch = true, filterQuality = FilterQuality.None)
+                }
             }
             Text(
                 stringResource(R.string.code_tap_close),

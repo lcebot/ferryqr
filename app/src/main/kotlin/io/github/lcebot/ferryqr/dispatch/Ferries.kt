@@ -132,17 +132,6 @@ internal object ActiveFerries {
         is MiniProgramPayload -> WECHAT
         else -> null
     }
-
-    /**
-     * The apps offered for [payload], the one it belongs to first. A web link also goes to the
-     * general apps, which open any link; other content goes only to its own app, since the general
-     * apps would show it as plain text or not at all.
-     */
-    fun offeredFor(payload: Payload): List<ActiveFerry> {
-        val owner = claimant(payload)
-        val general = if (payload is WebPayload) all.filter { it.general && it !== owner } else emptyList()
-        return listOfNotNull(owner) + general
-    }
 }
 
 internal object PassiveFerries {
@@ -186,4 +175,19 @@ internal object Ferries {
             owner?.takeIf { !it.ready && it.pkg != found?.pkg },
         )
     }
+
+    /**
+     * The general apps offered for a web link besides the [ranked] ones, since they open any link.
+     * Other content goes only to its own apps, which the general ones would show as plain text or
+     * not at all.
+     */
+    fun general(payload: Payload, ranked: List<Ferry>): List<ActiveFerry> =
+        if (payload !is WebPayload) {
+            emptyList()
+        } else {
+            ActiveFerries.all.filter { ferry -> ferry.general && ranked.none { it.pkg == ferry.pkg } }
+        }
+
+    /** Every app offered for [payload]: the [rank]ed ones, then the [general] ones. */
+    fun offered(context: Context, payload: Payload): List<Ferry> = rank(context, payload).let { it + general(payload, it) }
 }
