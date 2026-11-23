@@ -107,7 +107,7 @@
     <string name="action_settings">Settings</string>
     <string name="settings_title">Settings</string>
     <string name="settings_ferry_title" translatable="false">Ferrying</string>
-    <string name="settings_open_in_title">Opening in other apps</string>
+    <string name="settings_open_in_title">Opening codes</string>
     <string name="settings_open_in_intro">With FerryQR enabled for an app in LSPosed, the codes only that app opens properly can be scanned with FerryQR too.</string>
     <string name="settings_open_in_summary">Supported apps, module status and ferry methods</string>
     <string name="settings_methods_intro">Choose how codes are “ferried” to each app:</string>

@@ -103,7 +103,7 @@
     <string name="action_history">扫描历史</string>
     <string name="action_settings">设置</string>
     <string name="settings_title">设置</string>
-    <string name="settings_open_in_title">在其他应用中打开</string>
+    <string name="settings_open_in_title">二维码打开方式</string>
     <string name="settings_open_in_intro">在 LSPosed 中为对应应用启用 FerryQR 后，其专用二维码也可以直接用 FerryQR 扫描。</string>
     <string name="settings_open_in_summary">支持的应用、模块状态与传递方式</string>
     <string name="settings_methods_intro">可以为每个应用分别选择二维码内容的传递方式：</string>
