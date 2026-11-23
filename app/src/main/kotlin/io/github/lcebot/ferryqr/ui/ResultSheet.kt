@@ -386,7 +386,7 @@ private val ACTION_ICON_SIZE = 24.dp
 @Composable
 private fun labelOf(action: CardAction): String = when (val app = action.appName) {
     null -> stringResource(action.label)
-    else -> stringResource(action.label, stringResource(app))
+    else -> stringResource(action.label, app)
 }
 
 @Composable

@@ -104,8 +104,8 @@ import io.github.lcebot.ferryqr.AppSettings
 import io.github.lcebot.ferryqr.LongCodeEnlarge
 import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.content.Classifier
-import io.github.lcebot.ferryqr.dispatch.Target
-import io.github.lcebot.ferryqr.dispatch.Targets
+import io.github.lcebot.ferryqr.dispatch.ActiveFerry
+import io.github.lcebot.ferryqr.dispatch.ActiveFerries
 import io.github.lcebot.ferryqr.generate.AutoFormat
 import io.github.lcebot.ferryqr.generate.CodeGenerator
 import io.github.lcebot.ferryqr.generate.CodeProblem
@@ -204,10 +204,10 @@ fun GeneratorScreen(onBack: () -> Unit) {
     var result by remember { mutableStateOf<Generated?>(null) }
     // Every installed app the text could go to, in the order the toolbar shows them: an app that
     // appears for its own code comes first, as it does on result cards.
-    val candidates = remember { Targets.all.filter { it.installed(context) }.sortedBy { it.general } }
+    val candidates = remember { ActiveFerries.all.filter { it.installed(context) }.sortedBy { it.general } }
     val appFade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
     val appResize = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
-    val ready = targetsReady()
+    val ready = ferriesReady()
 
     // Android only lets the focused app read the clipboard, so wait for focus before reading it.
     LaunchedEffect(Unit) {
@@ -375,7 +375,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
                 // then the apps that can open the text, with sharing as the main way out. The apps are
                 // the ones result cards offer for the same content.
                 val apps = candidates.associateWith { target ->
-                    val name = context.getString(target.name)
+                    val name = target.label(context)
                     // Without the module the app could only open its scanner on nothing, so the
                     // button looks disabled but still explains why when tapped.
                     val looksEnabled = ready.getValue(target)
@@ -394,8 +394,8 @@ fun GeneratorScreen(onBack: () -> Unit) {
                     }
                 }
                 val payload = remember(text) { Classifier.classify(text) }
-                val offered = remember(payload, candidates) { Targets.offeredFor(payload).filter { it in candidates } }
-                val owner = remember(payload, candidates) { Targets.claimant(payload)?.takeIf { it in candidates } }
+                val offered = remember(payload, candidates) { ActiveFerries.offeredFor(payload).filter { it in candidates } }
+                val owner = remember(payload, candidates) { ActiveFerries.claimant(payload)?.takeIf { it in candidates } }
                 val layout = sendLayout(offered, owner, toolbarRoom)
                 CodeToolbar(
                     code = code,
@@ -475,14 +475,14 @@ private class SendApp(
 )
 
 /** The apps shown in the toolbar, and those folded behind its overflow button. */
-private class SendLayout(val inline: Set<Target>, val folded: List<Target>)
+private class SendLayout(val inline: Set<ActiveFerry>, val folded: List<ActiveFerry>)
 
 /**
  * Which apps fit a toolbar [room] wide. All of them when they fit; otherwise the app the text
  * belongs to stays in view beside the overflow button, which the narrowest phone screen Android
  * allows still holds, and the others fold away.
  */
-private fun sendLayout(offered: List<Target>, owner: Target?, room: Dp): SendLayout {
+private fun sendLayout(offered: List<ActiveFerry>, owner: ActiveFerry?, room: Dp): SendLayout {
     fun fits(groupButtons: Int) =
         TOOLBAR_PADDING + TOOLBAR_BUTTON * (CODE_ACTIONS + groupButtons) + GROUP_GAP + TOOLBAR_FAB <= room
     return when {

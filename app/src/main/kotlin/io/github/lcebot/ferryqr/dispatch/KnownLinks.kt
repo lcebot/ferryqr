@@ -73,10 +73,10 @@ internal enum class KnownLink(
     MEITUAN_OTHER("https?://(?:[^/?#@]+\\.)?(?:meituan\\.com|meituan\\.net|mobike\\.com)(?:[:/?#].*)?", OpenInApps.MEITUAN, R.string.app_meituan),
 
     // Xiaomi apps reached through private intents that no generic link resolution can find.
-    XIAOMI_LOGIN("https://[^/]+\\.account\\.xiaomi\\.com/longPolling/login\\?.*", null, R.string.title_xiaomi_login, caseSensitive = true),
+    XIAOMI_LOGIN("https://[^/]+\\.account\\.xiaomi\\.com/longPolling/login\\?.*", Xiaomi.ACCOUNT, R.string.title_xiaomi_login, caseSensitive = true),
     MI_HOME_DEVICE(
         "https://home\\.mi\\.com/do/home\\.html\\?(?:f=xz|f=fnetsuoiea|a=).*",
-        null, R.string.title_mi_home_device, caseSensitive = true,
+        Xiaomi.MI_HOME, R.string.title_mi_home_device, caseSensitive = true,
     ),
     ;
 

@@ -10,7 +10,7 @@ import android.os.SystemClock
 import android.widget.Toast
 import androidx.core.content.edit
 import io.github.lcebot.ferryqr.R
-import io.github.lcebot.ferryqr.dispatch.Targets
+import io.github.lcebot.ferryqr.dispatch.ActiveFerries
 import io.github.lcebot.ferryqr.openin.OpenInProtocol.EXTRA_CAMERA_FEED
 import io.github.lcebot.ferryqr.openin.OpenInProtocol.EXTRA_ID
 import io.github.lcebot.ferryqr.openin.OpenInProtocol.EXTRA_IMAGE
@@ -219,7 +219,7 @@ object OpenInModule {
     }
 
     private fun ferried(app: Context, pkg: String) {
-        val name = Targets.of(pkg)?.name ?: return
+        val name = ActiveFerries.of(pkg)?.name ?: return
         Toast.makeText(app, app.getString(R.string.ferried_to_app, app.getString(name)), Toast.LENGTH_SHORT).show()
     }
 

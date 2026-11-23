@@ -20,24 +20,33 @@ object Dispatcher {
      * when nothing claimed it, in which case the caller shows a result card instead.
      */
     fun autoLaunch(activity: Activity, payload: Payload, origin: Origin): Boolean = when (payload) {
-        is WebPayload -> when (val owner = Targets.claimant(payload)) {
-            null -> Xiaomi.claim(activity, payload.url) || Launch.nonBrowser(activity, payload.url)
-            // An app that is no general scanner may declare App Links for some of its own links,
-            // which reach the right page in it directly, without its scanner.
-            else -> (!owner.general && Launch.nonBrowser(activity, payload.url)) ||
-                toOwner(activity, owner, origin) { owner.open(it, payload.raw) }
+        // A link that several apps besides the browsers open goes to the system, which asks which
+        // to use, unless it belongs to a general app.
+        is WebPayload -> ferry(activity, payload, origin) {
+            ActiveFerries.claimant(payload)?.general != true && Launch.nonBrowser(it, payload.url)
         }
-        is SchemePayload -> Launch.scheme(activity, payload.uri, payload.scheme) ||
-            Targets.claimant(payload)?.let { owner -> toOwner(activity, owner, origin) { owner.open(it, payload.raw) } } == true
+        // The system also takes an app link that several apps open, or an intent URI's fallback page.
+        is SchemePayload -> ferry(activity, payload, origin) { Launch.scheme(it, payload.uri, payload.scheme) }
         is FidoPayload -> Launch.fido(activity, payload.raw)
         is EsimPayload -> Launch.esim(activity, payload.raw)
         is DppPayload -> Launch.dpp(activity, payload.raw)
         // Like any app link, it goes to the authenticator that registers the scheme.
         is OtpPayload -> Launch.scheme(activity, payload.raw, "otpauth")
         is MiniProgramPayload -> MiniCodeArt.draw(payload.raw)?.let { picture ->
-            toOwner(activity, Targets.WECHAT, origin) { WeChat.openMiniProgram(it, payload.raw, picture) }
+            toOwner(activity, ActiveFerries.WECHAT, origin) { WeChat.openMiniProgram(it, payload.raw, picture) }
         } == true
         else -> false
+    }
+
+    /**
+     * Hands [payload] to the first of its apps, in the order [Ferries.rank] gives, that opens it.
+     * Only then does [system] get it, for the cases no one app stands for, and last an app that
+     * would only open its scanner, which [toOwner] limits to a code the camera still sees.
+     */
+    private fun ferry(activity: Activity, payload: Payload, origin: Origin, system: (Activity) -> Boolean): Boolean {
+        val ranked = Ferries.rank(activity, payload)
+        return ranked.any { it.ready && it.open(activity, payload.raw) } || system(activity) ||
+            ranked.any { ferry -> !ferry.ready && toOwner(activity, ferry, origin) { ferry.open(it, payload.raw) } }
     }
 
     /**
@@ -48,7 +57,7 @@ object Dispatcher {
      * for, since the scanner alone would not say why it is there. A handoff through the module
      * announces itself once the app takes it.
      */
-    private fun toOwner(activity: Activity, owner: Target, origin: Origin, open: (Activity) -> Boolean): Boolean {
+    private fun toOwner(activity: Activity, owner: Ferry, origin: Origin, open: (Activity) -> Boolean): Boolean {
         if (owner.ready) return open(activity)
         if (origin != Origin.CAMERA || !open(activity)) return false
         val app = activity.applicationContext

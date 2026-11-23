@@ -10,6 +10,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.pm.ResolveInfo
 import android.net.Uri
 import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSuggestion
@@ -40,52 +41,113 @@ internal object Launch {
 
     private fun browsable(uri: Uri) = Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE)
 
-    fun browser(activity: Activity, url: String) = start(activity, browsable(Uri.parse(url)))
+    /** A link no app claims for itself, so only browsers open it; the .invalid domain never exists. */
+    private val ANY_WEB_LINK = Uri.parse("https://example.invalid/")
+
+    private fun query(context: Context, intent: Intent, flags: Int): List<ResolveInfo> {
+        val packages = context.packageManager
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            packages.queryIntentActivities(intent, PackageManager.ResolveInfoFlags.of(flags.toLong()))
+        } else {
+            @Suppress("DEPRECATION")
+            packages.queryIntentActivities(intent, flags)
+        }
+    }
+
+    private fun resolve(context: Context, intent: Intent, flags: Int): ResolveInfo? {
+        val packages = context.packageManager
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            packages.resolveActivity(intent, PackageManager.ResolveInfoFlags.of(flags.toLong()))
+        } else {
+            @Suppress("DEPRECATION")
+            packages.resolveActivity(intent, flags)
+        }
+    }
+
+    /** The apps that open any web link, which is what makes an app a browser. */
+    private fun browsers(context: Context): Set<String> =
+        query(context, browsable(ANY_WEB_LINK), PackageManager.MATCH_DEFAULT_ONLY).mapTo(HashSet()) { it.activityInfo.packageName }
+
+    /**
+     * The default browser, or the only one. Without either, the system asks which app to use, and
+     * a link with a verified App Link goes to its app instead.
+     */
+    private fun browserPackage(context: Context): String? {
+        val browsers = browsers(context)
+        val default = resolve(context, browsable(ANY_WEB_LINK), PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName
+        return default?.takeIf { it in browsers } ?: browsers.singleOrNull()
+    }
+
+    /** Opens [url] in a browser, even when an app holds a verified App Link for it. */
+    fun browser(activity: Activity, url: String): Boolean {
+        val intent = browsable(Uri.parse(url))
+        browserPackage(activity)?.let { intent.setPackage(it) }
+        return start(activity, intent)
+    }
 
     /**
      * Whether any app opens [uri] as a link. Only schemes the manifest queries for are visible, so
      * this answers for those alone.
      */
-    fun canOpen(context: Context, uri: String): Boolean {
-        val intent = browsable(Uri.parse(uri))
-        val packages = context.packageManager
-        val found = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            packages.queryIntentActivities(intent, PackageManager.ResolveInfoFlags.of(0))
-        } else {
-            @Suppress("DEPRECATION")
-            packages.queryIntentActivities(intent, 0)
-        }
-        return found.isNotEmpty()
+    fun canOpen(context: Context, uri: String): Boolean = query(context, browsable(Uri.parse(uri)), 0).isNotEmpty()
+
+    /** Whether any app opens the app link [uri], the way [scheme] would open it. */
+    fun opens(context: Context, uri: String, scheme: String): Boolean =
+        schemeIntent(uri, scheme)?.let { query(context, it, PackageManager.MATCH_DEFAULT_ONLY).isNotEmpty() } == true
+
+    /** [uri] opened as a link, the way a browser hands it on. */
+    fun linkIntent(uri: String): Intent = browsable(Uri.parse(uri))
+
+    /**
+     * The app other than a browser that the system opens [intent] in without asking, such as one
+     * with a verified App Link for a web link, which is where [nonBrowser] goes too. Null when it
+     * goes to a browser, or when the system would ask, since no one app is chosen then. The
+     * manifest queries for every app with links, which is what lets the app be seen here.
+     */
+    fun handler(context: Context, intent: Intent): String? {
+        val chosen = resolve(context, intent, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo ?: return null
+        // The system's chooser resolves too, but is not among the activities that match the link.
+        val matches = query(context, intent, PackageManager.MATCH_DEFAULT_ONLY)
+            .any { it.activityInfo.packageName == chosen.packageName && it.activityInfo.name == chosen.name }
+        val pkg = chosen.packageName
+        return pkg.takeIf { matches && it != context.packageName && it !in browsers(context) }
     }
 
     /** Succeeds only when an app other than a browser claims the link, such as a verified App Link. */
     fun nonBrowser(activity: Activity, url: String) =
         start(activity, browsable(Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_REQUIRE_NON_BROWSER))
 
-    fun scheme(activity: Activity, uri: String, scheme: String): Boolean =
-        if (scheme == "intent") intentUri(activity, uri) else start(activity, browsable(Uri.parse(uri)))
+    /**
+     * Opens an app link through whatever app registers it, or for an `intent:` URI that nothing
+     * opens, the web page it names as a fallback.
+     */
+    fun scheme(activity: Activity, uri: String, scheme: String): Boolean {
+        val intent = schemeIntent(uri, scheme) ?: return false
+        if (start(activity, intent)) return true
+        if (scheme != "intent") return false
+        val fallbackUri = intent.getStringExtra("browser_fallback_url")?.let(Uri::parse)
+            ?.takeIf { it.scheme.equals("https", true) || it.scheme.equals("http", true) }
+            ?: return false
+        return start(activity, browsable(fallbackUri))
+    }
 
     /**
-     * Follows the browser rules for `intent:` URIs from untrusted pages: no explicit component or
-     * selector, no permission grants, and only activities that declare themselves browsable.
+     * The intent an app link stands for. An `intent:` URI follows the browser rules for untrusted
+     * pages: no explicit component or selector, no permission grants, and only activities that
+     * declare themselves browsable. Null for one that cannot be read or names a blocked scheme.
      */
-    private fun intentUri(activity: Activity, uri: String): Boolean {
+    fun schemeIntent(uri: String, scheme: String): Intent? {
+        if (scheme != "intent") return browsable(Uri.parse(uri))
         val intent = try {
             Intent.parseUri(uri, Intent.URI_INTENT_SCHEME)
         } catch (e: URISyntaxException) {
-            return false
+            return null
         }
-        val fallback = intent.getStringExtra("browser_fallback_url")
         intent.component = null
         intent.selector = null
         intent.flags = 0
         intent.addCategory(Intent.CATEGORY_BROWSABLE)
-        if (intent.data?.scheme?.lowercase() in Classifier.BLOCKED_SCHEMES) return false
-        if (start(activity, intent)) return true
-        val fallbackUri = fallback?.let(Uri::parse)
-            ?.takeIf { it.scheme.equals("https", true) || it.scheme.equals("http", true) }
-            ?: return false
-        return start(activity, browsable(fallbackUri))
+        return intent.takeUnless { it.data?.scheme?.lowercase() in Classifier.BLOCKED_SCHEMES }
     }
 
     /** QR codes write the scheme as `FIDO`, while intent filters match schemes case-sensitively. */
@@ -194,5 +256,13 @@ internal object Launch {
         true
     } catch (e: Exception) {
         false
+    }
+
+    /** What the installed app [packageName] calls itself, in the phone's language. */
+    fun appLabel(context: Context, packageName: String): String? = try {
+        val packages = context.packageManager
+        packages.getApplicationLabel(packages.getApplicationInfo(packageName, 0)).toString()
+    } catch (e: PackageManager.NameNotFoundException) {
+        null
     }
 }

@@ -5,6 +5,8 @@ import android.content.ComponentName
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
+import io.github.lcebot.ferryqr.content.Classifier
+import io.github.lcebot.ferryqr.content.WebPayload
 import io.github.lcebot.ferryqr.openin.OpenInApps
 import io.github.lcebot.ferryqr.openin.OpenInModule
 import io.github.lcebot.wxcode.WxText
@@ -81,28 +83,31 @@ internal object Meituan {
     fun openScanner(activity: Activity, text: String) = openScannerWithModule(activity, PACKAGE, SCANNER, text)
 }
 
-/** Xiaomi apps reached through private intents that no generic link resolution can find, for the links [KnownLink] lists. */
+/**
+ * Xiaomi apps reached through private intents that no generic link resolution can find, for the
+ * links [KnownLink] lists. Each takes the link as printed, which it opens as the URL it stands for.
+ */
 internal object Xiaomi {
-    fun claim(activity: Activity, url: String): Boolean = when (KnownLink.of(url)) {
-        KnownLink.XIAOMI_LOGIN -> Launch.start(
-            activity,
-            Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                .setClassName("com.xiaomi.account", "com.xiaomi.account.ui.AccountWebActivity"),
-        )
-        KnownLink.MI_HOME_DEVICE -> Launch.start(activity, miHome(url))
-        else -> false
-    }
+    const val ACCOUNT = "com.xiaomi.account"
+    const val MI_HOME = "com.xiaomi.smarthome"
+
+    private fun url(text: String) = (Classifier.classify(text) as? WebPayload)?.url ?: text
+
+    fun signIn(activity: Activity, text: String): Boolean = Launch.start(
+        activity,
+        Intent(Intent.ACTION_VIEW, Uri.parse(url(text))).setClassName(ACCOUNT, "com.xiaomi.account.ui.AccountWebActivity"),
+    )
 
     /** Mi Home reads the query parameters as extras; '+' and '/' must survive query decoding. */
-    private fun miHome(url: String): Intent {
-        var escaped = url.replace("+", "%2B")
+    fun addDevice(activity: Activity, text: String): Boolean {
+        var escaped = url(text).replace("+", "%2B")
         val queryStart = escaped.indexOf('?')
         if (queryStart >= 0) {
             escaped = escaped.substring(0, queryStart) + escaped.substring(queryStart).replace("/", "%2F")
         }
         val uri = Uri.parse(escaped)
-        val intent = Intent("com.xiaomi.smarthome.mitvconnect").setPackage("com.xiaomi.smarthome")
+        val intent = Intent("com.xiaomi.smarthome.mitvconnect").setPackage(MI_HOME)
         for (name in uri.queryParameterNames) intent.putExtra(name, uri.getQueryParameter(name))
-        return intent
+        return Launch.start(activity, intent)
     }
 }

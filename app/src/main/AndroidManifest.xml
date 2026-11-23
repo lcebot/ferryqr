@@ -20,6 +20,16 @@
         <package android:name="com.sdu.didi.psnger" />
         <package android:name="com.sankuai.meituan" />
         <package android:name="com.eg.android.AlipayGphone" />
+        <package android:name="com.xiaomi.account" />
+        <package android:name="com.xiaomi.smarthome" />
+        <!-- Every app with links of any scheme, the web's included, so a code's card can name the
+             app the system opens it in, and the browsers among them can be told apart. Package
+             visibility takes the wildcards as matching any scheme and host. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="*" android:host="*" />
+        </intent>
         <!-- Whether an authenticator is installed decides what a two-factor key's card offers. -->
         <intent>
             <action android:name="android.intent.action.VIEW" />

@@ -27,34 +27,34 @@ class KnownLinksTest {
             "https://weixin.qq.com/g/abc",
             "https://u.wechat.com/abc",
             "https://example.com/wechat/oauth2/authorize",
-        ).forEach { assertTrue(Targets.WECHAT.claims(it), it) }
+        ).forEach { assertTrue(ActiveFerries.WECHAT.claims(it), it) }
         listOf("https://payapp.wechatpay.cn/other", "https://qr.alipay.com/abc").forEach {
-            assertFalse(Targets.WECHAT.claims(it), it)
+            assertFalse(ActiveFerries.WECHAT.claims(it), it)
         }
     }
 
     @Test
     fun eachAppClaimsItsOwnLinks() {
-        assertEquals(Targets.ALIPAY, Targets.claimant("https://qr.alipay.com/fkx123"))
-        assertEquals(Targets.ALIPAY, Targets.claimant("https://render.alipay.com/p/s/abc"))
-        assertEquals(Targets.DIDI, Targets.claimant("https://z.didi.cn/htw?id=4E3D1B2A&p=2"))
-        assertEquals(Targets.DIDI, Targets.claimant("https://dc.tt/anything"))
-        assertEquals(Targets.MEITUAN, Targets.claimant("https://rms.meituan.com/dc/o/459136/2KKIfCBn7b9"))
-        assertEquals(Targets.MEITUAN, Targets.claimant("https://m.dianping.com/shop/1"))
-        assertEquals(Targets.MEITUAN, Targets.claimant("http://t8.pub/1145141919"))
-        assertNull(Targets.claimant("https://example.com/"))
+        assertEquals(ActiveFerries.ALIPAY, ActiveFerries.claimant("https://qr.alipay.com/fkx123"))
+        assertEquals(ActiveFerries.ALIPAY, ActiveFerries.claimant("https://render.alipay.com/p/s/abc"))
+        assertEquals(ActiveFerries.DIDI, ActiveFerries.claimant("https://z.didi.cn/htw?id=4E3D1B2A&p=2"))
+        assertEquals(ActiveFerries.DIDI, ActiveFerries.claimant("https://dc.tt/anything"))
+        assertEquals(ActiveFerries.MEITUAN, ActiveFerries.claimant("https://rms.meituan.com/dc/o/459136/2KKIfCBn7b9"))
+        assertEquals(ActiveFerries.MEITUAN, ActiveFerries.claimant("https://m.dianping.com/shop/1"))
+        assertEquals(ActiveFerries.MEITUAN, ActiveFerries.claimant("http://t8.pub/1145141919"))
+        assertNull(ActiveFerries.claimant("https://example.com/"))
     }
 
     @Test
     fun meituanKeepsItsBikePrefixesExact() {
-        assertNull(Targets.claimant("HTTP://T8.PUB/1145141919"))
-        assertNull(Targets.claimant("https://meituan.com.example.com/"))
-        assertNull(Targets.claimant("https://user@meituan.com/"))
+        assertNull(ActiveFerries.claimant("HTTP://T8.PUB/1145141919"))
+        assertNull(ActiveFerries.claimant("https://meituan.com.example.com/"))
+        assertNull(ActiveFerries.claimant("https://user@meituan.com/"))
     }
 
     @Test
     fun aWeChatSignInPathWinsOverTheHostItSitsOn() {
-        assertEquals(Targets.WECHAT, Targets.claimant("https://i.meituan.com/wechat/oauth2/callback"))
+        assertEquals(ActiveFerries.WECHAT, ActiveFerries.claimant("https://i.meituan.com/wechat/oauth2/callback"))
     }
 
     @Test
@@ -72,9 +72,15 @@ class KnownLinksTest {
     @Test
     fun namesWithoutAnOwnerStayUnclaimed() {
         assertEquals(KnownLink.BLUEGOGO_BIKE, KnownLink.of("https://www.bluegogo.com/qrcode.html?no=123456"))
-        assertNull(Targets.claimant("https://www.bluegogo.com/qrcode.html?no=123456"))
+        assertNull(ActiveFerries.claimant("https://www.bluegogo.com/qrcode.html?no=123456"))
+    }
+
+    @Test
+    fun xiaomiLinksBelongToTheirApps() {
         assertEquals(KnownLink.MI_HOME_DEVICE, KnownLink.of("https://home.mi.com/do/home.html?f=xz&model=a"))
+        assertEquals(ActiveFerries.MI_HOME, ActiveFerries.claimant("https://home.mi.com/do/home.html?f=xz&model=a"))
         assertEquals(KnownLink.XIAOMI_LOGIN, KnownLink.of("https://c3.account.xiaomi.com/longPolling/login?ticket=1"))
+        assertEquals(ActiveFerries.XIAOMI_ACCOUNT, ActiveFerries.claimant("https://c3.account.xiaomi.com/longPolling/login?ticket=1"))
         assertNull(KnownLink.of("https://home.mi.com/do/home.html?f=other"))
     }
 }

@@ -1,6 +1,7 @@
 package io.github.lcebot.ferryqr.openin
 
-import io.github.lcebot.ferryqr.dispatch.Targets
+import io.github.lcebot.ferryqr.dispatch.ActiveFerries
+import io.github.lcebot.ferryqr.dispatch.Route
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -33,8 +34,19 @@ class OpenInAppsTest {
     }
 
     @Test
+    fun manifestQueriesEveryFerry() {
+        val manifest = File("src/main/AndroidManifest.xml").readText()
+        for (ferry in ActiveFerries.all) assertTrue("<package android:name=\"${ferry.pkg}\" />" in manifest, "${ferry.pkg} is not queried")
+    }
+
+    @Test
+    fun everyModuleFerryIsAnApp() {
+        for (ferry in ActiveFerries.all.filter { it.route == Route.MODULE }) assertTrue(ferry.pkg in packages, "${ferry.pkg} has no strategy")
+    }
+
+    @Test
     fun everyAppCanBeOffered() {
-        for (pkg in packages) assertTrue(Targets.of(pkg)?.viaModule == true, "$pkg is not offered through the module")
+        for (pkg in packages) assertTrue(ActiveFerries.of(pkg)?.route == Route.MODULE, "$pkg is not offered through the module")
     }
 
     @Test

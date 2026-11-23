@@ -3,8 +3,8 @@ package io.github.lcebot.ferryqr.ui
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
-import io.github.lcebot.ferryqr.dispatch.Target
-import io.github.lcebot.ferryqr.dispatch.Targets
+import io.github.lcebot.ferryqr.dispatch.ActiveFerry
+import io.github.lcebot.ferryqr.dispatch.ActiveFerries
 import io.github.lcebot.ferryqr.openin.OpenInModule
 
 /**
@@ -14,7 +14,7 @@ import io.github.lcebot.ferryqr.openin.OpenInModule
  * since the scope may have changed in LSPosed since FerryQR last asked.
  */
 @Composable
-internal fun targetsReady(): Map<Target, Boolean> {
+internal fun ferriesReady(): Map<ActiveFerry, Boolean> {
     LaunchedEffect(Unit) { OpenInModule.refresh() }
-    return Targets.all.associateWith { it.readyFlow.collectAsState().value }
+    return ActiveFerries.all.associateWith { it.readyFlow.collectAsState().value }
 }

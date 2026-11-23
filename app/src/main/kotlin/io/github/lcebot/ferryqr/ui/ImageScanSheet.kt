@@ -223,7 +223,7 @@ private fun Found(read: StillResult.Read, onHandoff: () -> Unit) {
     val haptics = rememberHaptics()
     var selected by rememberSaveable { mutableIntStateOf(0) }
     val detection = read.detections[selected.coerceIn(read.detections.indices)]
-    val ready = targetsReady()
+    val ready = ferriesReady()
     val card = remember(detection, ready) {
         // A mini program code that could not be read has no content to route; WeChat gets its picture.
         val crop = if (detection.isLocatedMiniCode) detection.locatedCrop(read.frame) else null
@@ -291,7 +291,7 @@ private fun MiniFound(read: StillResult.Read, onHandoff: () -> Unit) {
     val context = LocalContext.current
     val haptics = rememberHaptics()
     val crop = remember(read) { read.miniCodes.first().crop(read.frame) } ?: return
-    val ready = targetsReady()
+    val ready = ferriesReady()
     val card = remember(crop, ready) { Cards.miniProgram(activity, crop, live = false) }
     ResultCardContent(
         card = card,

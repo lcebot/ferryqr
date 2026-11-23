@@ -2,10 +2,9 @@
 package io.github.lcebot.ferryqr.ui
 
 import androidx.annotation.StringRes
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
@@ -14,7 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -28,7 +26,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -45,9 +42,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.dispatch.Launch
-import io.github.lcebot.ferryqr.dispatch.Targets
+import io.github.lcebot.ferryqr.dispatch.ActiveFerries
+import io.github.lcebot.ferryqr.dispatch.ActiveFerry
+import io.github.lcebot.ferryqr.dispatch.Route
 import io.github.lcebot.ferryqr.openin.ModuleState
-import io.github.lcebot.ferryqr.openin.OpenInApp
 import io.github.lcebot.ferryqr.openin.OpenInApps
 import io.github.lcebot.ferryqr.openin.OpenInModule
 import io.github.lcebot.ferryqr.openin.Strategy
@@ -70,22 +68,24 @@ private val REASONS = mapOf(
 )
 
 /** Only a replaced result has an alternative, the camera; the other ways are the only ones that work. */
-private fun settingOf(app: OpenInApp): AppSetting {
-    val name = Targets.of(app.pkg)?.name ?: error("${app.pkg} has no name")
+private fun settingOf(ferry: ActiveFerry): AppSetting {
+    val app = OpenInApps.all.first { it.pkg == ferry.pkg }
     return when (app.strategy) {
-        is Strategy.ReplaceResult -> AppSetting(app.pkg, name, fixed = null, reason = null)
-        Strategy.FeedCamera -> AppSetting(app.pkg, name, Method.Camera, REASONS.getValue(app.pkg))
-        is Strategy.FinishWithResult -> AppSetting(app.pkg, name, Method.Direct, REASONS.getValue(app.pkg))
+        is Strategy.ReplaceResult -> AppSetting(app.pkg, ferry.name, fixed = null, reason = null)
+        Strategy.FeedCamera -> AppSetting(app.pkg, ferry.name, Method.Camera, REASONS.getValue(app.pkg))
+        is Strategy.FinishWithResult -> AppSetting(app.pkg, ferry.name, Method.Direct, REASONS.getValue(app.pkg))
     }
 }
 
 /**
- * How codes reach other apps through the LSPosed module: what the module does, then each app it
- * works in, with whether it is working there and the method that app takes codes by.
+ * The apps FerryQR hands codes to its own way, in two tabs by how it reaches them: through the
+ * LSPosed module, each with whether the module works there and the method it takes codes by, and
+ * through an entry of the app's own, which needs nothing set.
  */
 @Composable
 fun FerrySettingsScreen(onBack: () -> Unit) {
-    val apps = remember { OpenInApps.all.map(::settingOf) }
+    val modules = remember { ActiveFerries.all.filter { it.route == Route.MODULE }.map(::settingOf) }
+    val entries = remember { ActiveFerries.all.filter { it.route == Route.ENTRY } }
 
     // Coming back from LSPosed, or from an app that restarted, the framework may say otherwise.
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -93,12 +93,34 @@ fun FerrySettingsScreen(onBack: () -> Unit) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) { OpenInModule.refresh() }
     }
 
-    SettingsPage(title = R.string.settings_open_in_title, onBack = onBack) {
-        item(key = "header") { OpenInHeader() }
-        itemsIndexed(apps, key = { _, app -> app.pkg }) { index, app ->
-            AppSettingItem(app, segmentShape(index, apps.size))
+    TabbedSettingsPage(
+        title = R.string.settings_open_in_title,
+        tabs = listOf(R.string.ferry_tab_module, R.string.ferry_tab_entry),
+        onBack = onBack,
+    ) { tab ->
+        if (tab == 0) {
+            item(key = "header") { OpenInHeader() }
+            itemsIndexed(modules, key = { _, app -> app.pkg }) { index, app ->
+                AppSettingItem(app, segmentShape(index, modules.size))
+            }
+        } else {
+            item(key = "header") { Intro(R.string.settings_entries_intro) }
+            itemsIndexed(entries, key = { _, ferry -> ferry.pkg }) { index, ferry ->
+                EntryItem(ferry, segmentShape(index, entries.size))
+            }
         }
     }
+}
+
+/** Text above a tab's apps, on the page's text inset. */
+@Composable
+private fun Intro(@StringRes text: Int) {
+    Text(
+        stringResource(text),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(start = LIST_TEXT_INSET, end = LIST_TEXT_INSET, bottom = SECTION_GAP),
+    )
 }
 
 /**
@@ -134,21 +156,23 @@ private fun OpenInHeader() {
     }
 }
 
+/**
+ * One app, laid out with the setting rows' measures rather than as a list item: [below] spans the
+ * whole row under the app, and a list item would either start it under the app's name, in its
+ * supporting content, or keep its minimum height above it and leave a gap that grows and shrinks
+ * with the status text. A [working] app's [status] stands out in the primary colour; anything else
+ * reads as a note.
+ */
 @Composable
-private fun AppSettingItem(app: AppSetting, shape: Shape) {
-    val context = LocalContext.current
-    val haptics = rememberHaptics()
-    val name = stringResource(app.name)
-    val installed = remember(app.pkg) { Launch.isInstalled(context, app.pkg) }
-    val state by OpenInModule.state(app.pkg).collectAsStateWithLifecycle()
-    var cameraFeed by remember(app.pkg) { mutableStateOf(OpenInModule.cameraFeed(context, app.pkg)) }
-    val method = app.fixed ?: if (cameraFeed) Method.Camera else Method.Direct
-    val working = installed && (state == ModuleState.Loaded || state == ModuleState.Enabled)
+private fun AppRow(
+    pkg: String,
+    name: String,
+    status: String,
+    working: Boolean,
+    shape: Shape,
+    below: @Composable ColumnScope.() -> Unit,
+) {
     val layoutDirection = LocalLayoutDirection.current
-    // Laid out with the setting rows' measures rather than as a list item: the buttons span the
-    // whole row under the app, and a list item would either start them under the app's name, in its
-    // supporting content, or keep its minimum height above them and leave a gap that grows and
-    // shrinks with the status text.
     Surface(shape = shape, color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
         Column {
             Row(
@@ -160,22 +184,12 @@ private fun AppSettingItem(app: AppSetting, shape: Shape) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(LEADING_TO_TEXT),
             ) {
-                SettingIcon { AppIcon(app.pkg, R.drawable.ic_apps, Modifier.size(24.dp)) }
+                SettingIcon { AppIcon(pkg, R.drawable.ic_apps, Modifier.size(24.dp)) }
                 Column(Modifier.weight(1f)) {
                     Text(name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
                     Text(
-                        when {
-                            !installed -> stringResource(R.string.app_not_installed)
-                            else -> when (state) {
-                                ModuleState.Inactive -> stringResource(R.string.module_inactive)
-                                ModuleState.OutOfScope -> stringResource(R.string.module_out_of_scope)
-                                ModuleState.Enabled -> stringResource(R.string.module_enabled, name)
-                                ModuleState.Loaded -> stringResource(R.string.module_active)
-                                ModuleState.Outdated -> stringResource(R.string.module_outdated, name)
-                            }
-                        },
+                        status,
                         style = MaterialTheme.typography.bodyMedium,
-                        // Working stands out in the primary colour; anything else reads as a note.
                         color = if (working) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -189,27 +203,61 @@ private fun AppSettingItem(app: AppSetting, shape: Shape) {
                     bottom = SETTING_ROW_PADDING.calculateBottomPadding(),
                 ),
                 verticalArrangement = Arrangement.spacedBy(SETTING_CONTROL_GAP),
-            ) {
-                MethodButtons(
-                    selected = method,
-                    choosable = app.fixed == null,
-                    onSelect = { chosen ->
-                        haptics.toggle(chosen == Method.Camera)
-                        cameraFeed = chosen == Method.Camera
-                        OpenInModule.setCameraFeed(context, app.pkg, cameraFeed)
-                    },
-                )
-                // Only an app limited to one method says why; the methods themselves are described above.
-                if (app.reason != null) {
-                    Text(
-                        stringResource(app.reason),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
+                content = below,
+            )
         }
     }
+}
+
+@Composable
+private fun AppSettingItem(app: AppSetting, shape: Shape) {
+    val context = LocalContext.current
+    val haptics = rememberHaptics()
+    val name = stringResource(app.name)
+    val installed = remember(app.pkg) { Launch.isInstalled(context, app.pkg) }
+    val state by OpenInModule.state(app.pkg).collectAsStateWithLifecycle()
+    var cameraFeed by remember(app.pkg) { mutableStateOf(OpenInModule.cameraFeed(context, app.pkg)) }
+    val method = app.fixed ?: if (cameraFeed) Method.Camera else Method.Direct
+    val working = installed && (state == ModuleState.Loaded || state == ModuleState.Enabled)
+    val status = when {
+        !installed -> stringResource(R.string.app_not_installed)
+        else -> when (state) {
+            ModuleState.Inactive -> stringResource(R.string.module_inactive)
+            ModuleState.OutOfScope -> stringResource(R.string.module_out_of_scope)
+            ModuleState.Enabled -> stringResource(R.string.module_enabled, name)
+            ModuleState.Loaded -> stringResource(R.string.module_active)
+            ModuleState.Outdated -> stringResource(R.string.module_outdated, name)
+        }
+    }
+    AppRow(app.pkg, name, status, working, shape) {
+        MethodButtons(
+            selected = method,
+            choosable = app.fixed == null,
+            onSelect = { chosen ->
+                haptics.toggle(chosen == Method.Camera)
+                cameraFeed = chosen == Method.Camera
+                OpenInModule.setCameraFeed(context, app.pkg, cameraFeed)
+            },
+        )
+        // Only an app limited to one method says why; the methods themselves are described above.
+        if (app.reason != null) Note(app.reason)
+    }
+}
+
+/** An app reached through an entry of its own: nothing to set, only whether it is there and what it opens. */
+@Composable
+private fun EntryItem(ferry: ActiveFerry, shape: Shape) {
+    val context = LocalContext.current
+    val installed = remember(ferry.pkg) { ferry.installed(context) }
+    val status = stringResource(if (installed) R.string.entry_ready else R.string.app_not_installed)
+    AppRow(ferry.pkg, stringResource(ferry.name), status, installed, shape) {
+        ferry.summary?.let { Note(it) }
+    }
+}
+
+@Composable
+private fun Note(@StringRes text: Int) {
+    Text(stringResource(text), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
 /**

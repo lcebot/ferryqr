@@ -167,7 +167,7 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
     var confirmClear by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf<HistoryEntry?>(null) }
     var showing by remember { mutableStateOf<HistoryEntry?>(null) }
-    val ready = targetsReady()
+    val ready = ferriesReady()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val layoutDirection = LocalLayoutDirection.current
     val favorites = remember(entries) { HistoryStore.favoritesOf(entries) }

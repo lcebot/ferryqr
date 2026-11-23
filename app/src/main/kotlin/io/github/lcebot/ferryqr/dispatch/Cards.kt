@@ -56,8 +56,8 @@ enum class ActionResult {
 
 /**
  * [app] is the package the action hands off to; its own icon then replaces [icon]. [appName] is the
- * name formatted into [label], for the labels that name the app. [opens] marks an action that opens
- * the content elsewhere, as every app action does and the browser too, rather than acting on it.
+ * app's name formatted into [label], for the labels that name the app. [opens] marks an action that
+ * opens the content elsewhere, as every app action does and the browser too, rather than acting on it.
  * [labeled] keeps the label on the button rather than showing only a round icon: every action that
  * opens the content keeps it, and so do actions that would look alike as icons.
  */
@@ -65,7 +65,7 @@ data class CardAction(
     @param:StringRes val label: Int,
     @param:DrawableRes val icon: Int,
     val app: String? = null,
-    @param:StringRes val appName: Int? = null,
+    val appName: String? = null,
     val opens: Boolean = app != null,
     val labeled: Boolean = opens,
     val run: (Activity) -> ActionResult,
@@ -141,7 +141,7 @@ object Cards {
      * WeChat's camera, so the body points to the scanner's own album button instead.
      */
     fun miniProgram(activity: Activity, crop: Bitmap, live: Boolean): ResultCard {
-        val wechat = Targets.WECHAT
+        val wechat = ActiveFerries.WECHAT
         val origin = if (live) Origin.CAMERA else Origin.IMAGE
         val body = when {
             wechat.ready -> R.string.mini_body_module
@@ -193,7 +193,7 @@ object Cards {
         is SchemePayload -> scheme(activity, payload, origin)
         is FidoPayload -> passkey(activity, payload, origin, scannedAt)
         is BoardingPassPayload -> boardingPass(activity, payload, scannedAt)
-        is OtpPayload -> otp(activity, payload)
+        is OtpPayload -> otp(activity, payload, origin)
         // Only a code from the camera has already been offered to the system by the time its card
         // shows, so only then does the card say it was not taken; from elsewhere it offers to try.
         is EsimPayload -> ResultCard(
@@ -233,7 +233,7 @@ object Cards {
      */
     private fun miniProgramCode(activity: Activity, payload: MiniProgramPayload, origin: Origin): ResultCard {
         val image = MiniCodeArt.draw(payload.raw)
-        val wechat = Targets.WECHAT
+        val wechat = ActiveFerries.WECHAT
         val installed = wechat.installed(activity)
         val actions = buildList {
             if (image != null) {
@@ -262,7 +262,7 @@ object Cards {
      */
     private fun targetAction(
         activity: Activity,
-        target: Target,
+        target: Ferry,
         origin: Origin,
         open: (Activity) -> Boolean,
     ): CardAction? {
@@ -273,15 +273,19 @@ object Cards {
             origin == Origin.IMAGE && target.album -> R.string.open_app_scanner
             else -> return null
         }
-        return CardAction(label, R.drawable.ic_open_in_new, target.pkg, target.name) {
+        return CardAction(label, R.drawable.ic_open_in_new, target.pkg, target.label(activity)) {
             if (open(it)) ActionResult.Handoff else ActionResult.Unavailable
         }
     }
 
+    /** The actions that hand [text] to each of [ferries], in their order. */
+    private fun ferryActions(activity: Activity, ferries: List<Ferry>, origin: Origin, text: String): List<CardAction> =
+        ferries.mapNotNull { ferry -> targetAction(activity, ferry, origin) { ferry.open(it, text) } }
+
     /** What the user has to do in an app waiting for the module, beyond what its action says. */
-    private fun targetNote(activity: Activity, target: Target, origin: Origin): String? {
+    private fun targetNote(activity: Activity, target: Ferry, origin: Origin): String? {
         if (target.ready || !target.installed(activity)) return null
-        val name = activity.getString(target.name)
+        val name = target.label(activity)
         return when {
             origin == Origin.CAMERA -> null
             origin == Origin.IMAGE && target.album -> activity.getString(R.string.pick_from_album_in_app, name)
@@ -372,9 +376,11 @@ object Cards {
      * keys by hand; otherwise adding the key leads. The link itself can be copied and shared like
      * any other, with a note on what it gives away.
      */
-    private fun otp(activity: Activity, payload: OtpPayload): ResultCard {
+    private fun otp(activity: Activity, payload: OtpPayload, origin: Origin): ResultCard {
         val key = payload.key
         val addable = Launch.canOpen(activity, payload.raw)
+        // The authenticator the link goes to without asking is named; among several, the system asks.
+        val authenticator = Ferries.rank(activity, payload)
         val rows = buildList {
             key.issuer?.let { add(activity.getString(R.string.otp_issuer) to it) }
             key.account?.let { add(activity.getString(R.string.otp_account) to it) }
@@ -391,10 +397,13 @@ object Cards {
             activity.getString(R.string.otp_unhandled).takeUnless { addable },
             activity.getString(R.string.otp_privacy),
         )
-        val actions = listOfNotNull(
-            CardAction(R.string.otp_add, R.drawable.ic_password, opens = true) {
-                if (Launch.scheme(it, payload.raw, "otpauth")) ActionResult.Handoff else ActionResult.Unavailable
-            }.takeIf { addable },
+        val actions = ferryActions(activity, authenticator, origin, payload.raw).ifEmpty {
+            listOfNotNull(
+                CardAction(R.string.otp_add, R.drawable.ic_password, opens = true) {
+                    if (Launch.scheme(it, payload.raw, "otpauth")) ActionResult.Handoff else ActionResult.Unavailable
+                }.takeIf { addable },
+            )
+        } + listOfNotNull(
             CardAction(R.string.otp_copy_secret, R.drawable.ic_content_copy, labeled = true) {
                 Launch.copy(it, key.secret, sensitive = true)
                 ActionResult.Copied
@@ -425,21 +434,19 @@ object Cards {
     }
 
     /**
-     * An app link nothing opened. The app it belongs to is offered when it has its own way in, and
-     * the general apps are not, since they open web links rather than other apps' schemes.
+     * An app link, offered to its apps as [Ferries.rank] orders them: the app it belongs to when
+     * FerryQR has its own way in, and the app that registers the scheme. The general apps are not
+     * offered, since they open web links rather than other apps' schemes.
      */
     private fun scheme(activity: Activity, payload: SchemePayload, origin: Origin): ResultCard {
-        val owner = Targets.claimant(payload)
+        val owner = ActiveFerries.claimant(payload)
+        val ranked = Ferries.rank(activity, payload)
         val title = Titles.of(activity, payload)
         val notes = listOfNotNull(
-            activity.getString(R.string.scheme_unhandled),
-            owner?.let { targetNote(activity, it, origin) },
+            activity.getString(R.string.scheme_unhandled).takeUnless { Launch.opens(activity, payload.uri, payload.scheme) },
+            owner?.takeIf { it in ranked }?.let { targetNote(activity, it, origin) },
         )
-        val actions = listOfNotNull(
-            owner?.let { o -> targetAction(activity, o, origin) { o.open(it, payload.raw) } },
-            copy(payload.raw),
-            share(payload.raw),
-        )
+        val actions = ferryActions(activity, ranked, origin, payload.raw) + copy(payload.raw) + share(payload.raw)
         return ResultCard(
             payload.raw, R.string.kind_app_link, R.drawable.ic_apps, title ?: payload.raw, payload.raw.takeIf { title != null },
             notes, actions,
@@ -447,33 +454,28 @@ object Cards {
     }
 
     /**
-     * A web link. A code of an app that only its own scanner opens properly leads with that app;
-     * otherwise the browser does, followed by the general apps that open any link.
+     * A web link. The apps it goes to before any browser lead, as [Ferries.rank] orders them,
+     * followed by the browser and then the general apps that open any link.
      */
     private fun web(activity: Activity, payload: WebPayload, origin: Origin): ResultCard {
         val host = payload.host
         // A link printed without its scheme belongs to its app by its URL, and is handed over as printed.
-        val owner = Targets.claimant(payload)
+        val owner = ActiveFerries.claimant(payload)
+        val ranked = Ferries.rank(activity, payload)
         val notes = buildList {
             if (payload.url.startsWith("http:", ignoreCase = true)) add(activity.getString(R.string.warn_http))
             if (host.split('.').any { it.startsWith("xn--") } || host.any { it.code > 127 }) add(activity.getString(R.string.warn_idn))
             if (IP_LITERAL.matches(host)) add(activity.getString(R.string.warn_ip))
-            // Only a code that belongs to an app needs that app; for other links it is one more option.
-            owner?.let { targetNote(activity, it, origin) }?.let { add(it) }
+            // Only a code that belongs to an app needs that app; for other links it is one more
+            // option. Nor does it once the system opens the link in that app directly instead.
+            owner?.takeIf { it in ranked }?.let { targetNote(activity, it, origin) }?.let { add(it) }
         }
-        val offered = Targets.offeredFor(payload).mapNotNull { target ->
-            targetAction(activity, target, origin) { target.open(it, payload.raw) }?.let { target to it }
-        }
+        val general = ActiveFerries.all.filter { ferry -> ferry.general && ranked.none { it.pkg == ferry.pkg } }
         val browser = CardAction(R.string.open, R.drawable.ic_open_in_new, opens = true) {
             if (Launch.browser(it, payload.url)) ActionResult.Handoff else ActionResult.Unavailable
         }
-        val actions = buildList {
-            offered.filter { it.first === owner }.forEach { add(it.second) }
-            add(browser)
-            offered.filter { it.first !== owner }.forEach { add(it.second) }
-            add(copy(payload.raw))
-            add(share(payload.raw))
-        }
+        val actions = ferryActions(activity, ranked, origin, payload.raw) + browser +
+            ferryActions(activity, general, origin, payload.raw) + copy(payload.raw) + share(payload.raw)
         val headline = Titles.link(activity, payload.url) ?: host
         return ResultCard(payload.raw, R.string.kind_link, R.drawable.ic_link, headline, payload.url, notes, actions)
     }
