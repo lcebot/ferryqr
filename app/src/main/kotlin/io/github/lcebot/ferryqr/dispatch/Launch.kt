@@ -191,8 +191,15 @@ internal object Launch {
         start(activity, Intent("android.settings.MANAGE_ALL_SIM_PROFILES_SETTINGS")) ||
             start(activity, Intent(Settings.ACTION_WIRELESS_SETTINGS))
 
-    fun dppSupported(context: Context): Boolean =
+    /**
+     * Whether the phone supports Wi-Fi Easy Connect. Asking needs ACCESS_WIFI_STATE, which some
+     * systems let the user take away; without it, the feature counts as missing.
+     */
+    fun dppSupported(context: Context): Boolean = try {
         context.getSystemService(WifiManager::class.java)?.isEasyConnectSupported == true
+    } catch (e: SecurityException) {
+        false
+    }
 
     fun dpp(activity: Activity, raw: String): Boolean =
         dppSupported(activity) &&
