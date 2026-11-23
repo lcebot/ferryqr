@@ -86,6 +86,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -115,6 +117,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** The saved choice that lets the content decide the format. */
 private const val AUTO = "auto"
@@ -122,6 +125,9 @@ private const val AUTO = "auto"
 /** Longer text is regenerated only after typing pauses, so each keystroke stays responsive. */
 private const val LARGE_TEXT = 800
 private const val LARGE_TEXT_DELAY_MS = 350L
+
+/** How long the format picker waits for the keyboard to start going down before it opens anyway. */
+private const val KEYBOARD_CLOSE_TIMEOUT_MS = 300L
 
 /**
  * The toolbar's fixed parts, from the floating toolbar's own tokens: its padding, one icon button,
@@ -166,6 +172,33 @@ fun GeneratorScreen(onBack: () -> Unit) {
         if (keepFormat) AppSettings.setLastFormat(context, next)
     }
     var picking by remember { mutableStateOf(false) }
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    val imeInsets = WindowInsets.ime
+    val imeTarget = WindowInsets.imeAnimationTarget
+    val pageDensity = LocalDensity.current
+
+    /**
+     * Opens the format picker, with the keyboard sent down first. The picker is a sheet in a window
+     * of its own: opened over the keyboard, it would take focus from the page, and the keyboard would
+     * leave without the page following it, so the code would jump to its new size. Closed from the
+     * page while it still has focus, the keyboard goes down with the page settling as usual, and the
+     * sheet rises as soon as the keyboard is on its way, so both move at once.
+     */
+    fun openPicker() {
+        if (imeInsets.getBottom(pageDensity) == 0) {
+            picking = true
+            return
+        }
+        focusManager.clearFocus()
+        keyboardController?.hide()
+        scope.launch {
+            withTimeoutOrNull(KEYBOARD_CLOSE_TIMEOUT_MS) {
+                snapshotFlow { imeTarget.getBottom(pageDensity) }.first { it == 0 }
+            }
+            picking = true
+        }
+    }
     val enlarge = remember { AppSettings.longCodeEnlarge(context) }
     var prefilled by rememberSaveable { mutableStateOf(false) }
     var result by remember { mutableStateOf<Generated?>(null) }
@@ -310,7 +343,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
                     // It opens the picker rather than being chosen, so it is an assist chip, which
                     // screen readers announce as a button rather than as an unchecked option.
                     AssistChip(
-                        onClick = { haptics.tap(); picking = true },
+                        onClick = { haptics.tap(); openPicker() },
                         label = { Text(stringResource(R.string.format_more)) },
                         trailingIcon = {
                             Icon(painterResource(R.drawable.ic_expand), contentDescription = null, modifier = Modifier.size(AssistChipDefaults.IconSize))
