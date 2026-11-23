@@ -125,7 +125,7 @@ fun FerrySettingsScreen(onBack: () -> Unit) {
             }
         } else {
             item(key = "apps") {
-                SettingsSection(R.string.ferry_group_apps, R.string.settings_entries_intro) {
+                SettingsSection(R.string.ferry_group_apps, R.string.settings_entries_intro, first = true) {
                     entries.forEachIndexed { index, ferry -> EntryItem(ferry, segmentShape(index, entries.size)) }
                 }
             }
@@ -149,9 +149,8 @@ fun FerrySettingsScreen(onBack: () -> Unit) {
  */
 @Composable
 private fun OpenInHeader() {
-    // A header's space above, so the text starts level with the other tab's first header.
     Column(
-        modifier = Modifier.padding(start = LIST_TEXT_INSET, end = LIST_TEXT_INSET, top = SECTION_TOP, bottom = SECTION_GAP),
+        modifier = Modifier.padding(start = LIST_TEXT_INSET, end = LIST_TEXT_INSET, bottom = SECTION_GAP),
         verticalArrangement = Arrangement.spacedBy(SECTION_GAP),
     ) {
         Text(

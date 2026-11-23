@@ -64,6 +64,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import io.github.lcebot.ferryqr.AppSettings
@@ -75,7 +76,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun SettingsScreen(onBack: () -> Unit, onOpenFerry: () -> Unit) {
     SettingsPage(title = R.string.settings_title, onBack = onBack) {
-        item(key = "ferry") { SettingsSection(R.string.settings_ferry_title) { FerryEntry(onOpenFerry) } }
+        item(key = "ferry") { SettingsSection(R.string.settings_ferry_title, first = true) { FerryEntry(onOpenFerry) } }
         item(key = "history") { HistorySettings() }
         item(key = "display") { DisplaySettings() }
         item(key = "create") { CreateSettings() }
@@ -327,9 +328,14 @@ private fun CreateSettings() {
 
 /** A group of settings under its header, with an optional [intro] between them. */
 @Composable
-internal fun SettingsSection(@StringRes title: Int, @StringRes intro: Int? = null, rows: @Composable ColumnScope.() -> Unit) {
+internal fun SettingsSection(
+    @StringRes title: Int,
+    @StringRes intro: Int? = null,
+    first: Boolean = false,
+    rows: @Composable ColumnScope.() -> Unit,
+) {
     Column {
-        SectionHeader(stringResource(title))
+        SectionHeader(stringResource(title), top = if (first) 0.dp else SECTION_TOP)
         if (intro != null) {
             Text(
                 stringResource(intro),
@@ -344,12 +350,12 @@ internal fun SettingsSection(@StringRes title: Int, @StringRes intro: Int? = nul
 
 /** A section's header, in the primary colour above its rows, as settings and history show them. */
 @Composable
-internal fun SectionHeader(text: String, modifier: Modifier = Modifier) {
+internal fun SectionHeader(text: String, modifier: Modifier = Modifier, top: Dp = SECTION_TOP) {
     Text(
         text,
         style = MaterialTheme.typography.titleSmall,
         color = MaterialTheme.colorScheme.primary,
-        modifier = modifier.padding(start = LIST_TEXT_INSET, end = LIST_TEXT_INSET, top = SECTION_TOP, bottom = SECTION_GAP),
+        modifier = modifier.padding(start = LIST_TEXT_INSET, end = LIST_TEXT_INSET, top = top, bottom = SECTION_GAP),
     )
 }
 
@@ -399,8 +405,11 @@ internal val LIST_TEXT_INSET = 4.dp
 internal val SECTION_TOP = 24.dp
 internal val SECTION_GAP = 12.dp
 
-/** The space between the bars and a page's first content, which adds a header's own space above. */
-private val PAGE_TOP = 8.dp
+/**
+ * The space between the bars and a page's first content. The space between sections separates one
+ * from the next, so the first section, with nothing above it, goes without it.
+ */
+private val PAGE_TOP = 16.dp
 
 internal val SETTING_CONTROL_GAP = 12.dp
 
