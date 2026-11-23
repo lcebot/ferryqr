@@ -19,14 +19,13 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.lifecycle.awaitInstance
 import androidx.camera.viewfinder.compose.MutableCoordinateTransformer
 import androidx.compose.animation.core.Animatable
-import androidx.compose.foundation.border
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -37,7 +36,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -203,9 +204,16 @@ private val FOCUS_BOX_SIZE = 72.dp
 /** How much larger the box starts before it closes in on the tapped point. */
 private const val FOCUS_BOX_ENTER_SCALE = 1.4f
 
+private val FOCUS_BOX_STROKE = 2.dp
+private val FOCUS_BOX_CORNER = 4.dp
+
+/** The ticks pointing in from the middle of each side, as in the iOS camera's focus square. */
+private val FOCUS_BOX_TICK = 6.dp
+
 /**
- * The square camera apps draw where a tap set the focus. It closes in on the point as it fades in,
- * and fades out once the camera lets go of that focus, whatever the reason.
+ * The square camera apps draw where a tap set the focus, with a short tick pointing in from the
+ * middle of each side. It closes in on the point as it fades in, and fades out once the camera
+ * lets go of that focus, whatever the reason.
  */
 @Composable
 private fun FocusBox(tap: FocusTap?, held: Boolean) {
@@ -227,7 +235,7 @@ private fun FocusBox(tap: FocusTap?, held: Boolean) {
         if (!held) alpha.animateTo(0f, disappear)
     }
     val at = tap?.at ?: return
-    Box(
+    Canvas(
         Modifier
             .offset {
                 val half = FOCUS_BOX_SIZE.toPx() / 2
@@ -238,7 +246,23 @@ private fun FocusBox(tap: FocusTap?, held: Boolean) {
                 this.alpha = alpha.value
                 scaleX = scale.value
                 scaleY = scale.value
-            }
-            .border(2.dp, color, RoundedCornerShape(4.dp)),
-    )
+            },
+    ) {
+        val stroke = FOCUS_BOX_STROKE.toPx()
+        // The stroke is centred on the outline, so the outline sits half a stroke in from the edge.
+        val inset = stroke / 2
+        drawRoundRect(
+            color,
+            topLeft = Offset(inset, inset),
+            size = size.copy(width = size.width - stroke, height = size.height - stroke),
+            cornerRadius = CornerRadius(FOCUS_BOX_CORNER.toPx()),
+            style = Stroke(stroke),
+        )
+        val tick = FOCUS_BOX_TICK.toPx()
+        val mid = center
+        drawLine(color, Offset(mid.x, inset), Offset(mid.x, inset + tick), stroke)
+        drawLine(color, Offset(mid.x, size.height - inset), Offset(mid.x, size.height - inset - tick), stroke)
+        drawLine(color, Offset(inset, mid.y), Offset(inset + tick, mid.y), stroke)
+        drawLine(color, Offset(size.width - inset, mid.y), Offset(size.width - inset - tick, mid.y), stroke)
+    }
 }
