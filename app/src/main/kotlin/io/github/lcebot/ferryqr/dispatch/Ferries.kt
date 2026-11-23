@@ -54,6 +54,11 @@ internal enum class Route {
  * would show an error or a blank page for anything else. Through the module, an app takes content
  * only once the module runs in it; without it, handing over just opens its scanner. [summary] says
  * which codes an app reached through an entry opens, for the ferry page.
+ *
+ * An [exclusive] app's codes open in that app alone, so a card says when it is not installed. Most
+ * apps' codes are not: DiDi and Meituan, for one, made theirs work in the WeChat and Alipay
+ * scanners too. Xiaomi's sign-in and device codes have no such way, nor do those of any app that
+ * leaves the big scanners out.
  */
 internal class ActiveFerry(
     override val pkg: String,
@@ -62,6 +67,7 @@ internal class ActiveFerry(
     val general: Boolean,
     override val album: Boolean,
     @StringRes val summary: Int? = null,
+    val exclusive: Boolean = false,
     private val handoff: (Activity, String) -> Boolean,
 ) : Ferry {
     /** Whether [text] is one of this app's own codes, which only its scanner opens properly. */
@@ -89,7 +95,8 @@ internal class PassiveFerry(override val pkg: String, private val intent: Intent
 
 internal object ActiveFerries {
     val ALIPAY = ActiveFerry(
-        Alipay.PACKAGE, R.string.app_alipay, Route.ENTRY, general = true, album = false, R.string.entry_alipay, Alipay::handoff,
+        Alipay.PACKAGE, R.string.app_alipay, Route.ENTRY, general = true, album = false,
+        summary = R.string.entry_alipay, handoff = Alipay::handoff,
     )
     val WECHAT = ActiveFerry(WeChat.PACKAGE, R.string.app_wechat, Route.MODULE, general = true, album = true) { activity, text ->
         WeChat.openScanner(activity, text)
@@ -100,11 +107,11 @@ internal object ActiveFerries {
     )
     val XIAOMI_ACCOUNT = ActiveFerry(
         Xiaomi.ACCOUNT, R.string.app_xiaomi_account, Route.ENTRY, general = false, album = false,
-        R.string.entry_xiaomi_account, Xiaomi::signIn,
+        summary = R.string.entry_xiaomi_account, exclusive = true, handoff = Xiaomi::signIn,
     )
     val MI_HOME = ActiveFerry(
         Xiaomi.MI_HOME, R.string.app_mi_home, Route.ENTRY, general = false, album = false,
-        R.string.entry_mi_home, Xiaomi::addDevice,
+        summary = R.string.entry_mi_home, exclusive = true, handoff = Xiaomi::addDevice,
     )
 
     /** The order apps are offered and listed in, after the app whose code the content is. */

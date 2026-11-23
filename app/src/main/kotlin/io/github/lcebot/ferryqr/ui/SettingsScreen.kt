@@ -75,7 +75,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun SettingsScreen(onBack: () -> Unit, onOpenFerry: () -> Unit) {
     SettingsPage(title = R.string.settings_title, onBack = onBack) {
-        item(key = "ferry") { FerryEntry(onOpenFerry) }
+        item(key = "ferry") { SettingsSection(R.string.settings_ferry_title) { FerryEntry(onOpenFerry) } }
         item(key = "history") { HistorySettings() }
         item(key = "display") { DisplaySettings() }
         item(key = "create") { CreateSettings() }
@@ -166,15 +166,19 @@ private fun SettingsScaffold(
     )
 }
 
-/** A page's [content] laid out in segmented groups, clear of the bars by [padding]. */
+/**
+ * A page's [content] laid out in segmented groups, clear of the bars by [padding]. It fills the
+ * page, so a short list starts at the top of a pager's page rather than in its middle.
+ */
 @Composable
 private fun SettingsList(padding: PaddingValues, content: LazyListScope.() -> Unit) {
     val layoutDirection = LocalLayoutDirection.current
     LazyColumn(
+        modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(
             start = padding.calculateStartPadding(layoutDirection) + 16.dp,
             end = padding.calculateEndPadding(layoutDirection) + 16.dp,
-            top = padding.calculateTopPadding() + 8.dp,
+            top = padding.calculateTopPadding() + PAGE_TOP,
             bottom = padding.calculateBottomPadding() + 24.dp,
         ),
         verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap),
@@ -323,7 +327,7 @@ private fun CreateSettings() {
 
 /** A group of settings under its header, with an optional [intro] between them. */
 @Composable
-private fun SettingsSection(@StringRes title: Int, @StringRes intro: Int? = null, rows: @Composable ColumnScope.() -> Unit) {
+internal fun SettingsSection(@StringRes title: Int, @StringRes intro: Int? = null, rows: @Composable ColumnScope.() -> Unit) {
     Column {
         SectionHeader(stringResource(title))
         if (intro != null) {
@@ -394,6 +398,10 @@ internal fun settingColors() = ListItemDefaults.segmentedColors(containerColor =
 internal val LIST_TEXT_INSET = 4.dp
 internal val SECTION_TOP = 24.dp
 internal val SECTION_GAP = 12.dp
+
+/** The space between the bars and a page's first content, which adds a header's own space above. */
+private val PAGE_TOP = 8.dp
+
 internal val SETTING_CONTROL_GAP = 12.dp
 
 /**

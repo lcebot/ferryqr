@@ -282,6 +282,13 @@ object Cards {
     private fun ferryActions(activity: Activity, ferries: List<Ferry>, origin: Origin, text: String): List<CardAction> =
         ferries.mapNotNull { ferry -> targetAction(activity, ferry, origin) { ferry.open(it, text) } }
 
+    /**
+     * That [owner] is needed but missing, for a code only its own app opens. The other ways in stay
+     * on the card, though they can only show such a link as a page.
+     */
+    private fun missingNote(activity: Activity, owner: ActiveFerry): String? =
+        if (owner.exclusive && !owner.installed(activity)) activity.getString(R.string.exclusive_not_installed, owner.label(activity)) else null
+
     /** What the user has to do in an app waiting for the module, beyond what its action says. */
     private fun targetNote(activity: Activity, target: Ferry, origin: Origin): String? {
         if (target.ready || !target.installed(activity)) return null
@@ -445,6 +452,7 @@ object Cards {
         val notes = listOfNotNull(
             activity.getString(R.string.scheme_unhandled).takeUnless { Launch.opens(activity, payload.uri, payload.scheme) },
             owner?.takeIf { it in ranked }?.let { targetNote(activity, it, origin) },
+            owner?.let { missingNote(activity, it) },
         )
         val actions = ferryActions(activity, ranked, origin, payload.raw) + copy(payload.raw) + share(payload.raw)
         return ResultCard(
@@ -469,6 +477,7 @@ object Cards {
             // Only a code that belongs to an app needs that app; for other links it is one more
             // option. Nor does it once the system opens the link in that app directly instead.
             owner?.takeIf { it in ranked }?.let { targetNote(activity, it, origin) }?.let { add(it) }
+            owner?.let { missingNote(activity, it) }?.let { add(it) }
         }
         val general = ActiveFerries.all.filter { ferry -> ferry.general && ranked.none { it.pkg == ferry.pkg } }
         val browser = CardAction(R.string.open, R.drawable.ic_open_in_new, opens = true) {

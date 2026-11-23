@@ -1,6 +1,9 @@
 // No opt-in: ToggleButton and the connected button shapes are stable APIs.
 package io.github.lcebot.ferryqr.ui
 
+import android.content.Context
+import android.icu.text.Collator
+import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -14,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.ButtonGroupDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -27,8 +31,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.disabled
@@ -37,14 +43,20 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import io.github.lcebot.ferryqr.R
-import io.github.lcebot.ferryqr.dispatch.Launch
 import io.github.lcebot.ferryqr.dispatch.ActiveFerries
 import io.github.lcebot.ferryqr.dispatch.ActiveFerry
+import io.github.lcebot.ferryqr.dispatch.DefaultApp
+import io.github.lcebot.ferryqr.dispatch.DefaultApps
+import io.github.lcebot.ferryqr.dispatch.Handling
+import io.github.lcebot.ferryqr.dispatch.Launch
 import io.github.lcebot.ferryqr.dispatch.Route
+import io.github.lcebot.ferryqr.dispatch.SystemFeature
+import io.github.lcebot.ferryqr.dispatch.SystemFeatures
 import io.github.lcebot.ferryqr.openin.ModuleState
 import io.github.lcebot.ferryqr.openin.OpenInApps
 import io.github.lcebot.ferryqr.openin.OpenInModule
@@ -78,14 +90,22 @@ private fun settingOf(ferry: ActiveFerry): AppSetting {
 }
 
 /**
- * The apps FerryQR hands codes to its own way, in two tabs by how it reaches them: through the
- * LSPosed module, each with whether the module works there and the method it takes codes by, and
- * through an entry of the app's own, which needs nothing set.
+ * Where codes go, in two tabs by whether the LSPosed module is needed. With it: each app the module
+ * works in, with whether it works there and the method the app takes codes by. Without it: the apps
+ * FerryQR reaches through their own entries, the features the system provides, and the app the
+ * system picks for each kind of content, none of which has anything to set.
  */
 @Composable
 fun FerrySettingsScreen(onBack: () -> Unit) {
-    val modules = remember { ActiveFerries.all.filter { it.route == Route.MODULE }.map(::settingOf) }
-    val entries = remember { ActiveFerries.all.filter { it.route == Route.ENTRY } }
+    // Each group lists its rows by name as the display language sorts them, the way an index reads.
+    val context = LocalContext.current
+    val locale = LocalConfiguration.current.locales[0]
+    val collator = remember(locale) { Collator.getInstance(locale) }
+    fun <T> sorted(items: List<T>, name: (T) -> Int) = items.sortedWith(compareBy(collator) { context.getString(name(it)) })
+    val modules = remember(collator) { sorted(ActiveFerries.all.filter { it.route == Route.MODULE }) { it.name }.map(::settingOf) }
+    val entries = remember(collator) { sorted(ActiveFerries.all.filter { it.route == Route.ENTRY }) { it.name } }
+    val features = remember(collator) { sorted(SystemFeatures.all) { it.name } }
+    val defaults = remember(collator) { sorted(DefaultApps.all) { it.name } }
 
     // Coming back from LSPosed, or from an app that restarted, the framework may say otherwise.
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -104,23 +124,23 @@ fun FerrySettingsScreen(onBack: () -> Unit) {
                 AppSettingItem(app, segmentShape(index, modules.size))
             }
         } else {
-            item(key = "header") { Intro(R.string.settings_entries_intro) }
-            itemsIndexed(entries, key = { _, ferry -> ferry.pkg }) { index, ferry ->
-                EntryItem(ferry, segmentShape(index, entries.size))
+            item(key = "apps") {
+                SettingsSection(R.string.ferry_group_apps, R.string.settings_entries_intro) {
+                    entries.forEachIndexed { index, ferry -> EntryItem(ferry, segmentShape(index, entries.size)) }
+                }
+            }
+            item(key = "system") {
+                SettingsSection(R.string.ferry_group_system, R.string.ferry_group_system_intro) {
+                    features.forEachIndexed { index, feature -> FeatureItem(feature, segmentShape(index, features.size)) }
+                }
+            }
+            item(key = "defaults") {
+                SettingsSection(R.string.ferry_group_defaults, R.string.ferry_group_defaults_intro) {
+                    defaults.forEachIndexed { index, app -> DefaultAppItem(app, segmentShape(index, defaults.size)) }
+                }
             }
         }
     }
-}
-
-/** Text above a tab's apps, on the page's text inset. */
-@Composable
-private fun Intro(@StringRes text: Int) {
-    Text(
-        stringResource(text),
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(start = LIST_TEXT_INSET, end = LIST_TEXT_INSET, bottom = SECTION_GAP),
-    )
 }
 
 /**
@@ -129,8 +149,9 @@ private fun Intro(@StringRes text: Int) {
  */
 @Composable
 private fun OpenInHeader() {
+    // A header's space above, so the text starts level with the other tab's first header.
     Column(
-        modifier = Modifier.padding(start = LIST_TEXT_INSET, end = LIST_TEXT_INSET, bottom = SECTION_GAP),
+        modifier = Modifier.padding(start = LIST_TEXT_INSET, end = LIST_TEXT_INSET, top = SECTION_TOP, bottom = SECTION_GAP),
         verticalArrangement = Arrangement.spacedBy(SECTION_GAP),
     ) {
         Text(
@@ -157,20 +178,20 @@ private fun OpenInHeader() {
 }
 
 /**
- * One app, laid out with the setting rows' measures rather than as a list item: [below] spans the
- * whole row under the app, and a list item would either start it under the app's name, in its
+ * One app or feature, laid out with the setting rows' measures rather than as a list item: [below]
+ * spans the whole row under it, and a list item would either start it under the name, in its
  * supporting content, or keep its minimum height above it and leave a gap that grows and shrinks
- * with the status text. A [working] app's [status] stands out in the primary colour; anything else
+ * with the status text. A [working] row's [status] stands out in the primary colour; anything else
  * reads as a note.
  */
 @Composable
 private fun AppRow(
-    pkg: String,
+    icon: @Composable () -> Unit,
     name: String,
     status: String,
     working: Boolean,
     shape: Shape,
-    below: @Composable ColumnScope.() -> Unit,
+    below: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     val layoutDirection = LocalLayoutDirection.current
     Surface(shape = shape, color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
@@ -180,11 +201,12 @@ private fun AppRow(
                     start = SETTING_ROW_PADDING.calculateStartPadding(layoutDirection),
                     end = SETTING_ROW_PADDING.calculateEndPadding(layoutDirection),
                     top = SETTING_ROW_PADDING.calculateTopPadding(),
+                    bottom = if (below == null) SETTING_ROW_PADDING.calculateBottomPadding() else 0.dp,
                 ),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(LEADING_TO_TEXT),
             ) {
-                SettingIcon { AppIcon(pkg, R.drawable.ic_apps, Modifier.size(24.dp)) }
+                SettingIcon(icon)
                 Column(Modifier.weight(1f)) {
                     Text(name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
                     Text(
@@ -194,7 +216,7 @@ private fun AppRow(
                     )
                 }
             }
-            Column(
+            if (below != null) Column(
                 // Level with the row's edges, and its padding below, as every setting row keeps.
                 modifier = Modifier.padding(
                     start = SETTING_ROW_PADDING.calculateStartPadding(layoutDirection),
@@ -229,7 +251,7 @@ private fun AppSettingItem(app: AppSetting, shape: Shape) {
             ModuleState.Outdated -> stringResource(R.string.module_outdated, name)
         }
     }
-    AppRow(app.pkg, name, status, working, shape) {
+    AppRow({ AppIcon(app.pkg, R.drawable.ic_apps, Modifier.size(24.dp)) }, name, status, working, shape) {
         MethodButtons(
             selected = method,
             choosable = app.fixed == null,
@@ -247,12 +269,55 @@ private fun AppSettingItem(app: AppSetting, shape: Shape) {
 /** An app reached through an entry of its own: nothing to set, only whether it is there and what it opens. */
 @Composable
 private fun EntryItem(ferry: ActiveFerry, shape: Shape) {
-    val context = LocalContext.current
-    val installed = remember(ferry.pkg) { ferry.installed(context) }
+    val installed = rememberOnResume { ferry.installed(it) }
     val status = stringResource(if (installed) R.string.entry_ready else R.string.app_not_installed)
-    AppRow(ferry.pkg, stringResource(ferry.name), status, installed, shape) {
+    AppRow({ AppIcon(ferry.pkg, R.drawable.ic_apps, Modifier.size(24.dp)) }, stringResource(ferry.name), status, installed, shape) {
         ferry.summary?.let { Note(it) }
     }
+}
+
+/** A feature of the system: whether this device has it, and what it does. */
+@Composable
+private fun FeatureItem(feature: SystemFeature, shape: Shape) {
+    val context = LocalContext.current
+    val supported = remember(feature) { feature.supported(context) }
+    val status = stringResource(if (supported) R.string.entry_ready else R.string.feature_unsupported)
+    AppRow({ FeatureIcon(feature.icon) }, stringResource(feature.name), status, supported, shape) {
+        Note(feature.summary)
+    }
+}
+
+/** A kind of content and the app the system hands it to, which a change of default apps changes. */
+@Composable
+private fun DefaultAppItem(app: DefaultApp, shape: Shape) {
+    val handling = rememberOnResume { app.handling(it) }
+    val context = LocalContext.current
+    val status = when (handling) {
+        is Handling.App -> stringResource(R.string.default_opens_in, Launch.appLabel(context, handling.pkg) ?: handling.pkg)
+        Handling.Asks -> stringResource(R.string.default_asks)
+        Handling.None -> stringResource(R.string.default_none)
+    }
+    AppRow({ FeatureIcon(app.icon) }, stringResource(app.name), status, handling !is Handling.None, shape)
+}
+
+@Composable
+private fun FeatureIcon(@DrawableRes icon: Int) {
+    Icon(painterResource(icon), contentDescription = null, modifier = Modifier.size(24.dp))
+}
+
+/**
+ * [read] again each time the page comes back, since what it reads, such as whether an app is
+ * installed or which app is the default, can change in the system's settings meanwhile.
+ */
+@Composable
+private fun <T> rememberOnResume(read: (Context) -> T): T {
+    val context = LocalContext.current
+    var value by remember { mutableStateOf(read(context)) }
+    LifecycleResumeEffect(Unit) {
+        value = read(context)
+        onPauseOrDispose {}
+    }
+    return value
 }
 
 @Composable

@@ -30,6 +30,20 @@
             <category android:name="android.intent.category.BROWSABLE" />
             <data android:scheme="*" android:host="*" />
         </intent>
+        <!-- What takes passkey requests, and the apps that add contacts and events, which the ferry
+             page names or checks for. -->
+        <intent>
+            <action android:name="org.fidoalliance.intent.QRCodeAuthenticator" />
+            <data android:scheme="*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.INSERT" />
+            <data android:mimeType="vnd.android.cursor.dir/raw_contact" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.INSERT" />
+            <data android:mimeType="vnd.android.cursor.dir/event" />
+        </intent>
         <!-- Whether an authenticator is installed decides what a two-factor key's card offers. -->
         <intent>
             <action android:name="android.intent.action.VIEW" />

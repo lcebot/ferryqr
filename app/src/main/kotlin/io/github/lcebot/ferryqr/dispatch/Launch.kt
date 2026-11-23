@@ -20,6 +20,7 @@ import android.provider.CalendarContract
 import android.provider.ContactsContract
 import android.provider.ContactsContract.Intents.Insert
 import android.provider.Settings
+import android.telephony.euicc.EuiccManager
 import io.github.lcebot.ferryqr.content.CalendarEvent
 import io.github.lcebot.ferryqr.content.Classifier
 import io.github.lcebot.ferryqr.content.Contact
@@ -113,6 +114,12 @@ internal object Launch {
         return pkg.takeIf { matches && it != context.packageName && it !in browsers(context) }
     }
 
+    /** Where [intent] goes: the app the system picks without asking, several it asks between, or none. */
+    fun handling(context: Context, intent: Intent): Handling {
+        handler(context, intent)?.let { return Handling.App(it) }
+        return if (query(context, intent, PackageManager.MATCH_DEFAULT_ONLY).isEmpty()) Handling.None else Handling.Asks
+    }
+
     /** Succeeds only when an app other than a browser claims the link, such as a verified App Link. */
     fun nonBrowser(activity: Activity, url: String) =
         start(activity, browsable(Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_REQUIRE_NON_BROWSER))
@@ -151,12 +158,22 @@ internal object Launch {
     }
 
     /** QR codes write the scheme as `FIDO`, while intent filters match schemes case-sensitively. */
-    fun fido(activity: Activity, raw: String): Boolean {
+    fun fido(activity: Activity, raw: String): Boolean = fidoIntents(raw).any { start(activity, it) }
+
+    /** Whether anything takes passkey requests, asked with the forms [fido] tries. */
+    fun fidoSupported(context: Context): Boolean =
+        fidoIntents("FIDO:/").any { query(context, it, PackageManager.MATCH_DEFAULT_ONLY).isNotEmpty() }
+
+    private fun fidoIntents(raw: String): List<Intent> {
         val original = Uri.parse(raw)
         val candidates = listOf(original, original.normalizeScheme()).distinct()
-        return candidates.any { start(activity, Intent("org.fidoalliance.intent.QRCodeAuthenticator", it)) } ||
-            candidates.any { start(activity, Intent(Intent.ACTION_VIEW, it)) }
+        return candidates.map { Intent(FIDO_ACTION, it) } + candidates.map { Intent(Intent.ACTION_VIEW, it) }
     }
+
+    private const val FIDO_ACTION = "org.fidoalliance.intent.QRCodeAuthenticator"
+
+    /** Whether the phone has an eSIM it can add profiles to. */
+    fun esimSupported(context: Context): Boolean = context.getSystemService(EuiccManager::class.java)?.isEnabled == true
 
     /** No public eSIM activation intent exists, so known LPA apps are tried in turn. */
     fun esim(activity: Activity, raw: String): Boolean {
@@ -200,8 +217,11 @@ internal object Launch {
             .putParcelableArrayListExtra(Settings.EXTRA_WIFI_NETWORK_LIST, arrayListOf(suggestion)),
     )
 
+    /** Where a new contact is added, which the contacts app takes. */
+    fun contactIntent(): Intent = Intent(Insert.ACTION).setType(ContactsContract.RawContacts.CONTENT_TYPE)
+
     fun addContact(activity: Activity, contact: Contact): Boolean {
-        val intent = Intent(Insert.ACTION).setType(ContactsContract.RawContacts.CONTENT_TYPE)
+        val intent = contactIntent()
         contact.name?.let { intent.putExtra(Insert.NAME, it) }
         listOf(Insert.PHONE, Insert.SECONDARY_PHONE, Insert.TERTIARY_PHONE)
             .zip(contact.phones).forEach { (key, value) -> intent.putExtra(key, value) }
@@ -221,8 +241,11 @@ internal object Launch {
         return start(activity, intent)
     }
 
+    /** Where a new event is added, which the calendar app takes. */
+    fun eventIntent(): Intent = Intent(Intent.ACTION_INSERT).setData(CalendarContract.Events.CONTENT_URI)
+
     fun addEvent(activity: Activity, event: CalendarEvent): Boolean {
-        val intent = Intent(Intent.ACTION_INSERT).setData(CalendarContract.Events.CONTENT_URI)
+        val intent = eventIntent()
         event.title?.let { intent.putExtra(CalendarContract.Events.TITLE, it) }
         event.begin?.let { intent.putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, it) }
         event.end?.let { intent.putExtra(CalendarContract.EXTRA_EVENT_END_TIME, it) }
