@@ -1,4 +1,4 @@
-// No opt-in: ToggleButton, the connected button shapes and ListItem are stable APIs.
+// No opt-in: ToggleButton, the connected button shapes and ListItemDefaults are stable APIs.
 package io.github.lcebot.ferryqr.ui
 
 import androidx.annotation.StringRes
@@ -6,7 +6,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
@@ -17,7 +16,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ButtonGroupDefaults
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -32,7 +30,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -64,6 +61,9 @@ private enum class Method(@StringRes val label: Int, @StringRes val description:
 
 /** One app in the settings. [fixed] is its only method and [reason] says why; both are null where the user chooses. */
 private class AppSetting(val pkg: String, @StringRes val name: Int, val fixed: Method?, @StringRes val reason: Int?)
+
+/** The space between a list item's leading icon and its text. */
+private val LEADING_TO_TEXT = 16.dp
 
 private val REASONS = mapOf(
     OpenInApps.DIDI to R.string.method_didi_reason,
@@ -109,7 +109,7 @@ fun FerrySettingsScreen(onBack: () -> Unit) {
 @Composable
 private fun OpenInHeader() {
     Column(
-        modifier = Modifier.padding(start = LIST_TEXT_INSET, end = LIST_TEXT_INSET, bottom = SECTION_GAP),
+        modifier = Modifier.padding(bottom = SECTION_GAP),
         verticalArrangement = Arrangement.spacedBy(SECTION_GAP),
     ) {
         Text(
@@ -147,20 +147,24 @@ private fun AppSettingItem(app: AppSetting, shape: Shape) {
     val working = installed && (state == ModuleState.Loaded || state == ModuleState.Enabled)
     val rowPadding = ListItemDefaults.ContentPadding
     val layoutDirection = LocalLayoutDirection.current
-    // The app is a list item, and its buttons span the whole row under it; in the item's supporting
-    // content they would start under the app's name instead.
+    // Laid out with the list item's own measures rather than as a list item: the buttons span the
+    // whole row under the app, and a list item would either start them under the app's name, in its
+    // supporting content, or keep its minimum height above them and leave a gap that grows and
+    // shrinks with the status text.
     Surface(shape = shape, color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
         Column {
-            ListItem(
-                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                // The controls below continue the row, so the item leaves its bottom padding to them.
-                contentPadding = PaddingValues(
+            Row(
+                modifier = Modifier.padding(
                     start = rowPadding.calculateStartPadding(layoutDirection),
                     end = rowPadding.calculateEndPadding(layoutDirection),
                     top = rowPadding.calculateTopPadding(),
                 ),
-                leadingContent = { SettingIcon { AppIcon(app.pkg, R.drawable.ic_apps, Modifier.size(24.dp)) } },
-                supportingContent = {
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(LEADING_TO_TEXT),
+            ) {
+                SettingIcon { AppIcon(app.pkg, R.drawable.ic_apps, Modifier.size(24.dp)) }
+                Column(Modifier.weight(1f)) {
+                    Text(name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
                     Text(
                         when {
                             !installed -> stringResource(R.string.app_not_installed)
@@ -172,12 +176,11 @@ private fun AppSettingItem(app: AppSetting, shape: Shape) {
                                 ModuleState.Outdated -> stringResource(R.string.module_outdated, name)
                             }
                         },
+                        style = MaterialTheme.typography.bodyMedium,
                         // Working stands out in the primary colour; anything else reads as a note.
-                        color = if (working) MaterialTheme.colorScheme.primary else Color.Unspecified,
+                        color = if (working) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                },
-            ) {
-                Text(name)
+                }
             }
             Column(
                 // Level with the list item's own edges, and its padding below.

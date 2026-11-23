@@ -526,7 +526,7 @@ private fun FavoritesHeader(
     modifier: Modifier = Modifier,
 ) {
     Row(
-        modifier = modifier.fillMaxWidth().padding(start = LIST_TEXT_INSET, top = 12.dp, bottom = 4.dp),
+        modifier = modifier.fillMaxWidth().padding(top = 12.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -656,7 +656,7 @@ private fun DayHeader(day: LocalDate, sample: Long, modifier: Modifier = Modifie
         label,
         style = MaterialTheme.typography.titleSmall,
         color = MaterialTheme.colorScheme.primary,
-        modifier = modifier.padding(start = LIST_TEXT_INSET, end = LIST_TEXT_INSET, top = SECTION_TOP, bottom = SECTION_GAP),
+        modifier = modifier.padding(top = SECTION_TOP, bottom = SECTION_GAP),
     )
 }
 

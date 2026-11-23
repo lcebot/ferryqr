@@ -247,10 +247,7 @@ private fun CreateSettings() {
     }
 }
 
-/**
- * A group of settings under its header, with an optional [intro] between them. Header and note line
- * up with the text inside the rows.
- */
+/** A group of settings under its header, with an optional [intro] between them. */
 @Composable
 private fun SettingsSection(@StringRes title: Int, @StringRes intro: Int? = null, rows: @Composable ColumnScope.() -> Unit) {
     Column {
@@ -260,7 +257,7 @@ private fun SettingsSection(@StringRes title: Int, @StringRes intro: Int? = null
                 stringResource(intro),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = LIST_TEXT_INSET, end = LIST_TEXT_INSET, bottom = SECTION_GAP),
+                modifier = Modifier.padding(bottom = SECTION_GAP),
             )
         }
         Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap), content = rows)
@@ -274,7 +271,7 @@ internal fun SectionHeader(text: String, modifier: Modifier = Modifier) {
         text,
         style = MaterialTheme.typography.titleSmall,
         color = MaterialTheme.colorScheme.primary,
-        modifier = modifier.padding(start = LIST_TEXT_INSET, end = LIST_TEXT_INSET, top = SECTION_TOP, bottom = SECTION_GAP),
+        modifier = modifier.padding(top = SECTION_TOP, bottom = SECTION_GAP),
     )
 }
 
@@ -313,12 +310,11 @@ internal fun settingColors() = ListItemDefaults.segmentedColors(containerColor =
 
 /*
  * One set of spaces for the grouped lists of settings and history, on the 4dp grid; rows keep the
- * list item's own padding. Text outside the rows, headers and notes, starts where text inside them
- * does, at the list item's 16dp inset. A section starts 24dp below the one before, and its header
- * and note keep 12dp from what follows, the same as a note from its controls and controls from
- * each other.
+ * list item's own padding. Text outside the rows, headers and notes, stands on the page's keyline,
+ * with the top bar's title and the rows' edges. A section starts 24dp below the one before, and its
+ * header and note keep 12dp from what follows, the same as a note from its controls and controls
+ * from each other.
  */
-internal val LIST_TEXT_INSET = 16.dp
 internal val SECTION_TOP = 24.dp
 internal val SECTION_GAP = 12.dp
 internal val SETTING_CONTROL_GAP = 12.dp
