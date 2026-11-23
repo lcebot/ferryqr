@@ -1,11 +1,19 @@
 package io.github.lcebot.ferryqr.scan
 
 import android.graphics.Rect
+import android.hardware.camera2.CameraCaptureSession
+import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.CaptureResult
+import android.hardware.camera2.TotalCaptureResult
 import android.os.SystemClock
 import androidx.camera.core.Camera
 import androidx.camera.core.FocusMeteringAction
+import androidx.camera.core.ImageProxy
+import androidx.camera.core.MeteringPoint
 import androidx.camera.core.SurfaceOrientedMeteringPointFactory
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -52,11 +60,46 @@ private const val FOCUS_INTERVAL_MS = 1500L
 private const val FOCUS_HOLD_S = 3L
 
 /**
+ * How long a focus the user tapped stays theirs before a code waiting to be read may take it over:
+ * as long as the AOSP camera app holds a touch focus before returning to continuous focus.
+ */
+private const val TAP_GUARD_MS = 3000L
+
+/**
+ * How long the camera holds a tapped focus at most before returning to its own, CameraX's default.
+ * A new scene usually lets it go sooner.
+ */
+private const val TAP_HOLD_MS = 5000L
+
+/** The exposure states in which metering on the tapped point has settled. */
+private val SETTLED_EXPOSURE = setOf(
+    CaptureResult.CONTROL_AE_STATE_CONVERGED,
+    CaptureResult.CONTROL_AE_STATE_LOCKED,
+    CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED,
+)
+
+/** Without any capture result for this long after the focus finished, the exposure counts as settled. */
+private const val SILENT_SETTLE_MS = 500L
+
+/**
+ * For a camera that does not report scene changes itself: the average change of brightness across
+ * the view, out of 255 and with an overall shift of exposure left out, from which the view counts as
+ * a new scene that the tapped focus no longer fits. Neither AOSP nor CameraX has a figure for this;
+ * it is the camera's own detection that the other cameras use.
+ */
+private const val SCENE_CHANGE = 24
+
+/** The view is recorded as the average brightness of this many cells along each side. */
+private const val SCENE_GRID = 8
+
+/**
  * Points the camera at codes located but not yet read: zooms toward small ones, and focuses and
  * meters on one, since blur and glare on the code, not its position, decide most failed reads.
- * On a logical multi-camera the zoom ratio also drives the switch to the telephoto lens.
+ * On a logical multi-camera the zoom ratio also drives the switch to the telephoto lens. A focus
+ * the user taps comes first, for as long as [tapFocus] holds.
  *
- * [observe] and [focusOn] run on the analysis thread; the other methods run on the main thread.
+ * [observe], [focusOn] and [watchScene] run on the analysis thread; the other methods run on the main
+ * thread.
  */
 class AutoZoom {
 
@@ -98,6 +141,46 @@ class AutoZoom {
 
     @Volatile
     private var lastFocusAt = 0L
+
+    private val tapped = MutableStateFlow(false)
+
+    /**
+     * Whether the camera holds a focus the user tapped. It lets go once the hold runs out, the view
+     * changes to a new scene, a code waiting to be read takes over after the guard, or the scan ends.
+     */
+    val tapFocus: StateFlow<Boolean> = tapped
+
+    @Volatile
+    private var tappedAt = 0L
+
+    /** When the focus on the tapped point finished, successful or not; 0 until then. */
+    @Volatile
+    private var focusDoneAt = 0L
+
+    /** Set once both focus and exposure on the tapped point have settled, from when the scene is watched. */
+    @Volatile
+    private var settled = false
+
+    @Volatile
+    private var lastResultAt = 0L
+
+    /** Set once the camera has reported whether it saw a scene change, which it then judges itself. */
+    @Volatile
+    private var reportsSceneChange = false
+
+    /** The view as it was once the tapped focus settled; null until then. */
+    @Volatile
+    private var sceneAtTap: IntArray? = null
+
+    /**
+     * Reads each capture result for the exposure state and the camera's own scene change detection.
+     * The preview binds it, and it runs on the camera's thread.
+     */
+    val captureCallback = object : CameraCaptureSession.CaptureCallback() {
+        override fun onCaptureCompleted(session: CameraCaptureSession, request: CaptureRequest, result: TotalCaptureResult) {
+            onCaptureResult(result)
+        }
+    }
 
     /**
      * Returns true while zooming in is still expected to help, so the caller can postpone the far
@@ -176,6 +259,11 @@ class AutoZoom {
         val cam = camera ?: return
         val now = SystemClock.elapsedRealtime()
         if (now - lastFocusAt < FOCUS_INTERVAL_MS) return
+        if (tapped.value) {
+            if (now - tappedAt < TAP_GUARD_MS) return
+            // The code waiting to be read takes the focus over from the tap.
+            tapped.value = false
+        }
         lastFocusAt = now
         val u = region.exactCenterX() / frameWidth
         val v = region.exactCenterY() / frameHeight
@@ -203,6 +291,80 @@ class AutoZoom {
         return now - highZoomSince > HIGH_ZOOM_TIMEOUT_MS
     }
 
+    /**
+     * Focuses and meters on [point] of the viewfinder, where the user tapped. Returns false when
+     * the camera cannot focus there, such as a fixed-focus lens.
+     */
+    fun focusAt(point: MeteringPoint): Boolean {
+        val cam = camera ?: return false
+        val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
+            .setAutoCancelDuration(TAP_HOLD_MS, TimeUnit.MILLISECONDS)
+            .build()
+        if (!cam.cameraInfo.isFocusMeteringSupported(action)) return false
+        val at = SystemClock.elapsedRealtime()
+        tappedAt = at
+        focusDoneAt = 0L
+        settled = false
+        sceneAtTap = null
+        tapped.value = true
+        val result = cam.cameraControl.startFocusAndMetering(action)
+        // A later tap starts its own wait, so only the latest focus counts.
+        result.addListener({ if (tappedAt == at) focusDoneAt = SystemClock.elapsedRealtime() }) { it.run() }
+        return true
+    }
+
+    /** Lets go of a tapped focus, so the camera focuses by itself again. */
+    fun releaseTapFocus() {
+        if (!tapped.value) return
+        tapped.value = false
+        camera?.cameraControl?.cancelFocusAndMetering()
+    }
+
+    /**
+     * Once the tapped focus has finished, waits for the exposure metered there to settle, and from
+     * then on lets the focus go when the camera reports a scene change, as its continuous focus
+     * would start a new scan on one.
+     */
+    private fun onCaptureResult(result: CaptureResult) {
+        val change = result.get(CaptureResult.CONTROL_AF_SCENE_CHANGE)
+        if (change != null) reportsSceneChange = true
+        lastResultAt = SystemClock.elapsedRealtime()
+        if (!tapped.value || focusDoneAt == 0L) return
+        if (!settled) {
+            val exposure = result.get(CaptureResult.CONTROL_AE_STATE)
+            if (exposure == null || exposure in SETTLED_EXPOSURE) settled = true
+            return
+        }
+        if (change == CaptureResult.CONTROL_AF_SCENE_CHANGE_DETECTED) releaseTapFocus()
+    }
+
+    /**
+     * Follows the view while a tapped focus is held, on the analysis thread. Lets the focus go once
+     * the camera has let go of it by itself, and, for a camera that does not report scene changes,
+     * once the view has become a new scene since focus and exposure settled.
+     */
+    fun watchScene(image: ImageProxy) {
+        if (!tapped.value) return
+        val now = SystemClock.elapsedRealtime()
+        if (now - tappedAt >= TAP_HOLD_MS) {
+            tapped.value = false
+            return
+        }
+        val focusDone = focusDoneAt
+        if (!settled && focusDone != 0L && now - maxOf(focusDone, lastResultAt) > SILENT_SETTLE_MS) {
+            // The camera reports nothing, so the finished focus has to do.
+            settled = true
+        }
+        if (!settled || reportsSceneChange) return
+        val scene = sceneOf(image)
+        val before = sceneAtTap
+        if (before == null) {
+            sceneAtTap = scene
+        } else if (sceneChange(before, scene) > SCENE_CHANGE) {
+            releaseTapFocus()
+        }
+    }
+
     /** A pinch hands zoom control to the user until the next scan starts. */
     fun onUserZoom() {
         userOverride = true
@@ -210,6 +372,7 @@ class AutoZoom {
 
     /** Returns to the base zoom when a new scan starts, unless the user set the zoom themselves. */
     fun reset() {
+        releaseTapFocus()
         val cam = camera
         if (cam != null && autoZoomed && !userOverride) {
             cam.cameraControl.setZoomRatio(BASE_ZOOM.coerceIn(cam))
@@ -219,6 +382,7 @@ class AutoZoom {
 
     /** Returns to the base zoom no matter who set the current one. */
     fun forceReset() {
+        releaseTapFocus()
         camera?.let { it.cameraControl.setZoomRatio(BASE_ZOOM.coerceIn(it)) }
         clearState()
     }
@@ -234,7 +398,40 @@ class AutoZoom {
         lastStepAt = 0L
         lastRequested = 0f
         lastFocusAt = 0L
+        tapped.value = false
+        focusDoneAt = 0L
+        settled = false
+        sceneAtTap = null
     }
+}
+
+/** The average brightness of each cell of a [SCENE_GRID] grid over the luma plane, from a few samples per cell. */
+private fun sceneOf(image: ImageProxy): IntArray {
+    val plane = image.planes[0]
+    val buffer = plane.buffer
+    val crop = image.cropRect
+    val cellWidth = crop.width() / SCENE_GRID
+    val cellHeight = crop.height() / SCENE_GRID
+    val samples = 4
+    return IntArray(SCENE_GRID * SCENE_GRID) { cell ->
+        val left = crop.left + (cell % SCENE_GRID) * cellWidth
+        val top = crop.top + (cell / SCENE_GRID) * cellHeight
+        var sum = 0
+        for (j in 0 until samples) {
+            val y = top + (2 * j + 1) * cellHeight / (2 * samples)
+            for (i in 0 until samples) {
+                val x = left + (2 * i + 1) * cellWidth / (2 * samples)
+                sum += buffer.get(y * plane.rowStride + x * plane.pixelStride).toInt() and 0xFF
+            }
+        }
+        sum / (samples * samples)
+    }
+}
+
+/** How far two views differ on average per cell, with the shift of their overall brightness left out. */
+private fun sceneChange(a: IntArray, b: IntArray): Int {
+    val shift = (b.sum() - a.sum()) / a.size
+    return a.indices.sumOf { abs(b[it] - a[it] - shift) } / a.size
 }
 
 private fun Float.coerceIn(camera: Camera): Float {

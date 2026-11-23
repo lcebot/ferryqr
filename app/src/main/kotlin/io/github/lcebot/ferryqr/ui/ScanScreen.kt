@@ -137,6 +137,7 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
                     onFlashUnit = { hasFlash = it },
                     onZoom = { zoom = it },
                     onUnavailable = { vm.message(R.string.no_camera) },
+                    scanning = phase == Phase.Scanning,
                     modifier = Modifier.fillMaxSize(),
                 )
                 ScanOverlay(

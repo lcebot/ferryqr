@@ -129,6 +129,7 @@ class LiveAnalyzer(
 
     private fun process(image: ImageProxy) {
         if (paused) return
+        autoZoom.watchScene(image)
         if (clearRequested) {
             clearRequested = false
             startOver()
