@@ -259,7 +259,7 @@
     <string name="format_auto_desc">根据内容自动选择码制</string>
     <string name="format_more">更多码制</string>
     <string name="format_pick_title">选择码制</string>
-    <string name="format_original">原码制</string>
+    <string name="format_original">原始</string>
     <string name="format_group_matrix">二维码</string>
     <string name="format_group_product">商品条码</string>
     <string name="format_group_linear">条形码</string>

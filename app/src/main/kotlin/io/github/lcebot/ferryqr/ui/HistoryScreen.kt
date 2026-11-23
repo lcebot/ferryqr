@@ -11,6 +11,11 @@ import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.animation.core.animate
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.interaction.DragInteraction
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import kotlinx.coroutines.Job
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -130,8 +135,13 @@ import java.time.ZoneId
 import java.util.Date
 import kotlinx.coroutines.launch
 
-private val OUTER_CORNER = 24.dp
-private val INNER_CORNER = 6.dp
+/**
+ * The corners of a segmented list, as the expressive list tokens give them: the group's outer
+ * corners large, 16dp, and those between its rows extra small, 4dp. A pressed row rounds to the
+ * large corner all round, so the outer corners stay put as it morphs.
+ */
+private val OUTER_CORNER = 16.dp
+private val INNER_CORNER = 4.dp
 
 /** With more favorites than this, the section can fold down to its first few. */
 private const val FOLDED_FAVORITES = 4
@@ -172,8 +182,12 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
         order.retainAll(current.toSet())
         order.addAll(0, current.filter { it !in order })
     }
+    // The favorite being dragged, and while [settling] the one gliding into its place after the
+    // finger lifted, which stays lifted until it lands.
     var dragging by remember { mutableStateOf<String?>(null) }
     var dragOffset by remember { mutableFloatStateOf(0f) }
+    var settling by remember { mutableStateOf<Job?>(null) }
+    val settleSpec = MaterialTheme.motionScheme.defaultSpatialSpec<Float>()
     val listState = rememberLazyListState()
     val recent = remember(entries) { entries.filterNot { it.favorite } }
     val shortcutsFull = favorites.count { it.shortcut } >= FavoriteShortcuts.MAX
@@ -277,6 +291,21 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
                     }
                 }
             }
+            fun startDrag(text: String) {
+                settling?.cancel()
+                // Caught again on its way into place, the row goes on from where it is.
+                if (dragging != text) dragOffset = 0f
+                dragging = text
+                haptics.step()
+            }
+            /** Glides the row from where the finger left it into its place, then sets it down. */
+            fun endDrag() {
+                settling = scope.launch {
+                    animate(dragOffset, 0f, animationSpec = settleSpec) { value, _ -> dragOffset = value }
+                    dragging = null
+                    settling = null
+                }
+            }
             fun moveInOrder(text: String, to: Int) {
                 val from = order.indexOf(text)
                 if (from < 0 || to !in order.indices) return
@@ -302,10 +331,10 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
                 shortcutsFull = shortcutsFull,
                 onRename = { haptics.tap(); renaming = it },
                 onDelete = ::delete,
-                favoriteOrder = favorites.map { it.text },
-                onMove = { entry, index ->
+                topFavorite = favorites.firstOrNull()?.text,
+                onMoveToTop = { entry ->
                     haptics.tap()
-                    store.moveFavorite(entry.text, index)
+                    store.moveFavorite(entry.text, 0)
                 },
             )
             LazyColumn(
@@ -316,7 +345,7 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
                     top = padding.calculateTopPadding(),
                     bottom = padding.calculateBottomPadding() + 24.dp,
                 ),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
+                verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap),
             ) {
                 if (favorites.isNotEmpty()) {
                     item(key = "header:favorites") {
@@ -352,38 +381,16 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
                             ReorderRow(
                                 entry = entry,
                                 shape = segmentShape(index, shownFavorites.size),
-                                handle = Modifier.pointerInput(entry.text) {
-                                    detectDragGestures(
-                                        onDragStart = {
-                                            dragging = entry.text
-                                            dragOffset = 0f
-                                            haptics.step()
-                                        },
-                                        onDragEnd = {
-                                            dragging = null
-                                            dragOffset = 0f
-                                        },
-                                        onDragCancel = {
-                                            dragging = null
-                                            dragOffset = 0f
-                                        },
-                                        onDrag = { change, amount ->
-                                            change.consume()
-                                            dragOffset += amount.y
-                                            followDrag()
-                                        },
-                                    )
+                                lifted = dragged,
+                                onDragStart = { startDrag(entry.text) },
+                                onDrag = { amount ->
+                                    dragOffset += amount
+                                    followDrag()
                                 },
+                                onDragEnd = ::endDrag,
                                 modifier = (if (dragged) Modifier else animateRow())
                                     .zIndex(if (dragged) 1f else 0f)
-                                    .graphicsLayer {
-                                        if (dragged) {
-                                            translationY = dragOffset
-                                            scaleX = 1.02f
-                                            scaleY = 1.02f
-                                            shadowElevation = 8.dp.toPx()
-                                        }
-                                    }
+                                    .graphicsLayer { if (dragged) translationY = dragOffset }
                                     // Without a finger to drag with, the order changes a row at a time.
                                     .semantics {
                                         customActions = listOfNotNull(
@@ -479,7 +486,7 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
     }
 }
 
-/** [favoriteOrder] is the favorites' contents in their order, for moving one with [onMove]. */
+/** [topFavorite] is the content of the favorite at the top, which has nowhere higher to move. */
 private class EntryActions(
     val onOpen: (HistoryEntry) -> Unit,
     val onFavorite: (HistoryEntry, Boolean) -> Unit,
@@ -487,8 +494,8 @@ private class EntryActions(
     val shortcutsFull: Boolean,
     val onRename: (HistoryEntry) -> Unit,
     val onDelete: (HistoryEntry) -> Unit,
-    val favoriteOrder: List<String>,
-    val onMove: (HistoryEntry, Int) -> Unit,
+    val topFavorite: String?,
+    val onMoveToTop: (HistoryEntry) -> Unit,
 )
 
 /** What a favorite is called until the user names it: the same short title its shortcut shows. */
@@ -561,22 +568,69 @@ private fun FavoritesHeader(
 }
 
 /**
- * A favorite while the favorites are reordered: it neither opens nor swipes, and its handle at the
- * end, given [handle] to drag by, moves it among the others.
+ * A favorite while the favorites are reordered: it neither opens nor swipes nor opens its menu. A
+ * long press anywhere on it picks it up, and its handle at the end picks it up at once, as in
+ * Android's own reorderable lists. While [lifted], the list item takes its dragged look, from the
+ * expressive list's reorder tokens, through a drag interaction.
  */
 @Composable
-private fun ReorderRow(entry: HistoryEntry, shape: Shape, handle: Modifier, modifier: Modifier = Modifier) {
-    Box(modifier) {
+private fun ReorderRow(
+    entry: HistoryEntry,
+    shape: Shape,
+    lifted: Boolean,
+    onDragStart: () -> Unit,
+    onDrag: (Float) -> Unit,
+    onDragEnd: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val interactions = remember { MutableInteractionSource() }
+    var start by remember { mutableStateOf<DragInteraction.Start?>(null) }
+    LaunchedEffect(lifted) {
+        if (lifted && start == null) {
+            start = DragInteraction.Start().also { interactions.emit(it) }
+        } else if (!lifted) {
+            start?.let { interactions.emit(DragInteraction.Stop(it)) }
+            start = null
+        }
+    }
+    Box(
+        modifier.pointerInput(entry.text) {
+            detectDragGesturesAfterLongPress(
+                onDragStart = { onDragStart() },
+                onDragEnd = onDragEnd,
+                onDragCancel = onDragEnd,
+                onDrag = { change, amount ->
+                    change.consume()
+                    onDrag(amount.y)
+                },
+            )
+        },
+    ) {
         EntryItem(
             entry,
             shape,
             onClick = {},
-            onLongClick = {},
+            onLongClick = null,
+            interactionSource = interactions,
+            lifted = lifted,
             trailingOverride = {
                 Icon(
                     painterResource(R.drawable.ic_drag_indicator),
                     contentDescription = stringResource(R.string.favorite_drag),
-                    modifier = handle.size(40.dp).padding(8.dp),
+                    modifier = Modifier
+                        .pointerInput(entry.text) {
+                            detectDragGestures(
+                                onDragStart = { onDragStart() },
+                                onDragEnd = onDragEnd,
+                                onDragCancel = onDragEnd,
+                                onDrag = { change, amount ->
+                                    change.consume()
+                                    onDrag(amount.y)
+                                },
+                            )
+                        }
+                        .size(40.dp)
+                        .padding(8.dp),
                 )
             },
         )
@@ -722,22 +776,34 @@ private fun EntryItem(
     entry: HistoryEntry,
     shape: Shape,
     onClick: () -> Unit,
-    onLongClick: () -> Unit,
+    onLongClick: (() -> Unit)?,
     trailingOverride: (@Composable () -> Unit)? = null,
+    interactionSource: MutableInteractionSource? = null,
+    lifted: Boolean = false,
 ) {
     val context = LocalContext.current
     val payload = remember(entry.text, entry.format) { Classifier.classify(entry.text, entry.format) }
     val kind = remember(payload) { Cards.kindOf(payload) }
     val shown = remember(payload) { Cards.shownText(context, payload) }
     val time = remember(entry.time) { DateFormat.getTimeFormat(context).format(Date(entry.time)) }
-    // Favorites take the tertiary colour, so they stay apart from the history at a glance.
+    // Favorites take the tertiary colour, so they stay apart from the history at a glance. A lifted
+    // row turns tertiary container itself, so its icon takes the full tertiary to stand out on it.
+    val colors = MaterialTheme.colorScheme
     val container by animateColorAsState(
-        if (entry.favorite) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.primaryContainer,
+        when {
+            lifted -> colors.tertiary
+            entry.favorite -> colors.tertiaryContainer
+            else -> colors.primaryContainer
+        },
         MaterialTheme.motionScheme.defaultEffectsSpec(),
         label = "entry-icon-container",
     )
     val onContainer by animateColorAsState(
-        if (entry.favorite) MaterialTheme.colorScheme.onTertiaryContainer else MaterialTheme.colorScheme.onPrimaryContainer,
+        when {
+            lifted -> colors.onTertiary
+            entry.favorite -> colors.onTertiaryContainer
+            else -> colors.onPrimaryContainer
+        },
         MaterialTheme.motionScheme.defaultEffectsSpec(),
         label = "entry-icon",
     )
@@ -749,7 +815,8 @@ private fun EntryItem(
     ListItem(
         onClick = onClick,
         onLongClick = onLongClick,
-        onLongClickLabel = stringResource(R.string.entry_more),
+        onLongClickLabel = if (onLongClick != null) stringResource(R.string.entry_more) else null,
+        interactionSource = interactionSource,
         leadingContent = {
             Box(
                 modifier = Modifier
@@ -852,6 +919,9 @@ private fun EntryMenu(entry: HistoryEntry, expanded: Boolean, onDismiss: () -> U
             if (entry.favorite) {
                 add(MenuEntry(R.string.favorite_remove, R.drawable.ic_star_filled) { actions.onFavorite(entry, false) })
                 add(MenuEntry(R.string.rename, R.drawable.ic_edit) { actions.onRename(entry) })
+                if (entry.text != actions.topFavorite) {
+                    add(MenuEntry(R.string.favorite_move_top, R.drawable.ic_drag_indicator) { actions.onMoveToTop(entry) })
+                }
                 if (entry.shortcut) {
                     add(MenuEntry(R.string.shortcut_remove, R.drawable.ic_app_shortcut) { actions.onShortcut(entry, false) })
                 } else {
@@ -869,33 +939,13 @@ private fun EntryMenu(entry: HistoryEntry, expanded: Boolean, onDismiss: () -> U
                 add(MenuEntry(R.string.favorite, R.drawable.ic_star) { actions.onFavorite(entry, true) })
             }
         }
-        val position = actions.favoriteOrder.indexOf(entry.text)
-        val move = buildList {
-            if (!entry.favorite || position < 0) return@buildList
-            if (position > 0) {
-                add(MenuEntry(R.string.favorite_move_top, R.drawable.ic_drag_indicator) { actions.onMove(entry, 0) })
-                add(MenuEntry(R.string.favorite_move_up, R.drawable.ic_drag_indicator) { actions.onMove(entry, position - 1) })
-            }
-            if (position < actions.favoriteOrder.size - 1) {
-                add(MenuEntry(R.string.favorite_move_down, R.drawable.ic_drag_indicator) { actions.onMove(entry, position + 1) })
-            }
-        }
-        val groups = if (move.isEmpty()) 2 else 3
-        DropdownMenuGroup(shapes = MenuDefaults.groupShape(0, groups)) {
+        DropdownMenuGroup(shapes = MenuDefaults.groupShape(0, 2)) {
             keep.forEachIndexed { index, item ->
                 MenuRow(item, menuItemShape(index, keep.size), onDismiss)
             }
         }
-        if (move.isNotEmpty()) {
-            Spacer(Modifier.height(MenuDefaults.GroupSpacing))
-            DropdownMenuGroup(shapes = MenuDefaults.groupShape(1, groups)) {
-                move.forEachIndexed { index, item ->
-                    MenuRow(item, menuItemShape(index, move.size), onDismiss)
-                }
-            }
-        }
         Spacer(Modifier.height(MenuDefaults.GroupSpacing))
-        DropdownMenuGroup(shapes = MenuDefaults.groupShape(groups - 1, groups)) {
+        DropdownMenuGroup(shapes = MenuDefaults.groupShape(1, 2)) {
             MenuRow(
                 MenuEntry(R.string.delete, R.drawable.ic_delete) { actions.onDelete(entry) },
                 menuItemShape(0, 1),
@@ -1012,7 +1062,8 @@ private const val ZERO_WIDTH_SPACE = '\u200B'
 
 /**
  * Expressive grouped list: large corners outside a group, small ones between its rows. The corners
- * follow a row that becomes the first or last of its group, as when a neighbour is deleted.
+ * follow a row that becomes the first or last of its group, as when a neighbour is deleted, where
+ * the list item's own segmented shapes would switch at once.
  */
 @Composable
 fun segmentShape(index: Int, count: Int): Shape {

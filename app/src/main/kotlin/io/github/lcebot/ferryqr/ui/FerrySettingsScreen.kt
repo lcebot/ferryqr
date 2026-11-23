@@ -1,6 +1,4 @@
-// ToggleButton is an expressive Material 3 API.
-@file:OptIn(ExperimentalMaterial3ExpressiveApi::class)
-
+// No opt-in: ToggleButton, the connected button shapes and SegmentedListItem are stable APIs.
 package io.github.lcebot.ferryqr.ui
 
 import androidx.annotation.StringRes
@@ -16,14 +14,12 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ButtonGroupDefaults
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
+import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.ToggleButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -32,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -143,53 +140,42 @@ private fun AppSettingItem(app: AppSetting, shape: Shape) {
     val state by OpenInModule.state(app.pkg).collectAsStateWithLifecycle()
     var cameraFeed by remember(app.pkg) { mutableStateOf(OpenInModule.cameraFeed(context, app.pkg)) }
     val method = app.fixed ?: if (cameraFeed) Method.Camera else Method.Direct
-    Surface(shape = shape, color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.secondaryContainer),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSecondaryContainer) {
-                        AppIcon(app.pkg, R.drawable.ic_apps, Modifier.size(24.dp))
-                    }
-                }
-                Column(Modifier.weight(1f)) {
-                    Text(name, style = MaterialTheme.typography.titleMedium)
-                    val working = installed && (state == ModuleState.Loaded || state == ModuleState.Enabled)
-                    Text(
-                        when {
-                            !installed -> stringResource(R.string.app_not_installed)
-                            else -> when (state) {
-                                ModuleState.Inactive -> stringResource(R.string.module_inactive)
-                                ModuleState.OutOfScope -> stringResource(R.string.module_out_of_scope)
-                                ModuleState.Enabled -> stringResource(R.string.module_enabled, name)
-                                ModuleState.Loaded -> stringResource(R.string.module_active)
-                                ModuleState.Outdated -> stringResource(R.string.module_outdated, name)
-                            }
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (working) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+    val working = installed && (state == ModuleState.Loaded || state == ModuleState.Enabled)
+    SegmentedListItem(
+        shapes = ListItemDefaults.shapes(shape = shape),
+        colors = settingColors(),
+        leadingContent = { SettingIcon { AppIcon(app.pkg, R.drawable.ic_apps, Modifier.size(24.dp)) } },
+        supportingContent = {
+            Column(verticalArrangement = Arrangement.spacedBy(SETTING_CONTROL_GAP)) {
+                Text(
+                    when {
+                        !installed -> stringResource(R.string.app_not_installed)
+                        else -> when (state) {
+                            ModuleState.Inactive -> stringResource(R.string.module_inactive)
+                            ModuleState.OutOfScope -> stringResource(R.string.module_out_of_scope)
+                            ModuleState.Enabled -> stringResource(R.string.module_enabled, name)
+                            ModuleState.Loaded -> stringResource(R.string.module_active)
+                            ModuleState.Outdated -> stringResource(R.string.module_outdated, name)
+                        }
+                    },
+                    // Working stands out in the primary colour; anything else reads as a note.
+                    color = if (working) MaterialTheme.colorScheme.primary else Color.Unspecified,
+                )
+                MethodButtons(
+                    selected = method,
+                    choosable = app.fixed == null,
+                    onSelect = { chosen ->
+                        haptics.toggle(chosen == Method.Camera)
+                        cameraFeed = chosen == Method.Camera
+                        OpenInModule.setCameraFeed(context, app.pkg, cameraFeed)
+                    },
+                )
+                // Only an app limited to one method says why; the methods themselves are described above.
+                if (app.reason != null) Text(stringResource(app.reason))
             }
-            MethodButtons(
-                selected = method,
-                choosable = app.fixed == null,
-                onSelect = { chosen ->
-                    haptics.toggle(chosen == Method.Camera)
-                    cameraFeed = chosen == Method.Camera
-                    OpenInModule.setCameraFeed(context, app.pkg, cameraFeed)
-                },
-            )
-            // Only an app limited to one method says why; the methods themselves are described above.
-            if (app.reason != null) {
-                Text(stringResource(app.reason), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
+        },
+    ) {
+        Text(name)
     }
 }
 

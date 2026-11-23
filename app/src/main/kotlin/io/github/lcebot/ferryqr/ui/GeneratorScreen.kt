@@ -42,6 +42,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -299,12 +301,13 @@ fun GeneratorScreen(onBack: () -> Unit) {
                             label = { Text(stringResource(option.label)) },
                         )
                     }
-                    FilterChip(
-                        selected = false,
+                    // It opens the picker rather than being chosen, so it is an assist chip, which
+                    // screen readers announce as a button rather than as an unchecked option.
+                    AssistChip(
                         onClick = { haptics.tap(); picking = true },
                         label = { Text(stringResource(R.string.format_more)) },
                         trailingIcon = {
-                            Icon(painterResource(R.drawable.ic_expand), contentDescription = null, modifier = Modifier.size(FilterChipDefaults.IconSize))
+                            Icon(painterResource(R.drawable.ic_expand), contentDescription = null, modifier = Modifier.size(AssistChipDefaults.IconSize))
                         },
                     )
                 }

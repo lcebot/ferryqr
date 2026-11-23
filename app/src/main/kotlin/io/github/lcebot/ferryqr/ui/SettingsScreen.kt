@@ -1,6 +1,6 @@
-// LargeFlexibleTopAppBar and ToggleButton are expressive APIs; the top bar's scroll behavior is an
-// experimental Material 3 API.
-@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
+// The top bar's scroll behavior is an experimental Material 3 API; the expressive components here
+// are stable.
+@file:OptIn(ExperimentalMaterial3Api::class)
 
 package io.github.lcebot.ferryqr.ui
 
@@ -22,18 +22,20 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
+import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.ToggleButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -50,6 +52,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -98,7 +102,7 @@ internal fun SettingsPage(@StringRes title: Int, onBack: () -> Unit, content: La
                 top = padding.calculateTopPadding() + 8.dp,
                 bottom = padding.calculateBottomPadding() + 24.dp,
             ),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
+            verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap),
             content = content,
         )
     }
@@ -116,7 +120,7 @@ private fun FerryEntry(onOpen: () -> Unit) {
         opening = false
         onPauseOrDispose {}
     }
-    Surface(
+    SegmentedListItem(
         onClick = {
             if (!opening) {
                 opening = true
@@ -124,43 +128,15 @@ private fun FerryEntry(onOpen: () -> Unit) {
                 onOpen()
             }
         },
-        shape = segmentShape(0, 1),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        modifier = Modifier.fillMaxWidth(),
+        shapes = ListItemDefaults.shapes(shape = segmentShape(0, 1)),
+        colors = settingColors(),
+        leadingContent = {
+            SettingIcon { Icon(painterResource(R.drawable.ic_apps), contentDescription = null, modifier = Modifier.size(24.dp)) }
+        },
+        trailingContent = { Icon(painterResource(R.drawable.ic_arrow_forward), contentDescription = null) },
+        supportingContent = { Text(stringResource(R.string.settings_open_in_summary)) },
     ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.secondaryContainer),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    painterResource(R.drawable.ic_apps),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                    modifier = Modifier.size(24.dp),
-                )
-            }
-            Column(Modifier.weight(1f)) {
-                Text(stringResource(R.string.settings_open_in_title), style = MaterialTheme.typography.titleMedium)
-                Text(
-                    stringResource(R.string.settings_open_in_summary),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Icon(
-                painterResource(R.drawable.ic_arrow_forward),
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+        Text(stringResource(R.string.settings_open_in_title))
     }
 }
 
@@ -170,7 +146,7 @@ private fun HistorySettings() {
     val context = LocalContext.current
     val haptics = rememberHaptics()
     val kinds = SensitiveKind.entries
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
         // Named for what the switches do, so on reads as kept.
         SectionTitle(R.string.settings_keep_title)
         Text(
@@ -202,49 +178,44 @@ private fun DisplaySettings() {
     val haptics = rememberHaptics()
     var mode by remember { mutableStateOf(AppSettings.longCodeEnlarge(context)) }
     var bright by remember { mutableStateOf(AppSettings.fullBrightness(context)) }
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
         SectionTitle(R.string.settings_display_title)
-        Surface(shape = segmentShape(0, 2), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                Column {
-                    Text(stringResource(R.string.settings_long_codes), style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        stringResource(R.string.settings_long_codes_desc),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth().selectableGroup(),
-                    horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
-                ) {
-                    LongCodeEnlarge.entries.forEachIndexed { index, option ->
-                        ToggleButton(
-                            checked = option == mode,
-                            onCheckedChange = {
-                                if (it) {
-                                    haptics.step()
-                                    mode = option
-                                    AppSettings.setLongCodeEnlarge(context, option)
-                                }
-                            },
-                            shapes = when (index) {
-                                0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
-                                LongCodeEnlarge.entries.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
-                                else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
-                            },
-                            modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
-                        ) {
-                            Text(stringResource(enlargeLabel(option)), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        SegmentedListItem(
+            shapes = ListItemDefaults.shapes(shape = segmentShape(0, 2)),
+            colors = settingColors(),
+            supportingContent = {
+                Column(verticalArrangement = Arrangement.spacedBy(SETTING_CONTROL_GAP)) {
+                    Text(stringResource(R.string.settings_long_codes_desc))
+                    Row(
+                        modifier = Modifier.fillMaxWidth().selectableGroup(),
+                        horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
+                    ) {
+                        LongCodeEnlarge.entries.forEachIndexed { index, option ->
+                            ToggleButton(
+                                checked = option == mode,
+                                onCheckedChange = {
+                                    if (it) {
+                                        haptics.step()
+                                        mode = option
+                                        AppSettings.setLongCodeEnlarge(context, option)
+                                    }
+                                },
+                                shapes = when (index) {
+                                    0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
+                                    LongCodeEnlarge.entries.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
+                                    else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+                                },
+                                modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
+                            ) {
+                                Text(stringResource(enlargeLabel(option)), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
                         }
                     }
+                    Text(stringResource(enlargeDescription(mode)))
                 }
-                Text(
-                    stringResource(enlargeDescription(mode)),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            },
+        ) {
+            Text(stringResource(R.string.settings_long_codes))
         }
         SwitchItem(
             title = R.string.settings_full_brightness,
@@ -301,30 +272,41 @@ private fun SwitchItem(
     onChange: (Boolean) -> Unit,
     @StringRes description: Int? = null,
 ) {
-    Surface(
-        checked = checked,
-        onCheckedChange = onChange,
-        shape = shape,
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        modifier = Modifier.fillMaxWidth().semantics { role = Role.Switch },
+    // The click overload rather than the checked one: that one would colour a row that is on as
+    // selected, and read it as a checkbox.
+    SegmentedListItem(
+        onClick = { onChange(!checked) },
+        shapes = ListItemDefaults.shapes(shape = shape),
+        colors = settingColors(),
+        trailingContent = { Switch(checked = checked, onCheckedChange = null) },
+        supportingContent = description?.let { { Text(stringResource(it)) } },
+        modifier = Modifier.semantics {
+            role = Role.Switch
+            toggleableState = ToggleableState(checked)
+        },
     ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(stringResource(title), style = MaterialTheme.typography.titleMedium)
-                if (description != null) {
-                    Text(
-                        stringResource(description),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            Switch(checked = checked, onCheckedChange = null)
-        }
+        Text(stringResource(title))
+    }
+}
+
+/** The container colour every settings row shares, a step up from the page. */
+@Composable
+internal fun settingColors() = ListItemDefaults.segmentedColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
+
+/** Space between a setting's description and its controls, and between controls. */
+internal val SETTING_CONTROL_GAP = 12.dp
+
+/** A setting's icon, on a round secondary container. */
+@Composable
+internal fun SettingIcon(icon: @Composable () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(40.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.secondaryContainer),
+        contentAlignment = Alignment.Center,
+    ) {
+        CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSecondaryContainer, content = icon)
     }
 }
 
