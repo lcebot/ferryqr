@@ -90,15 +90,14 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
     var zoom by remember { mutableFloatStateOf(1f) }
 
     val haptics = rememberHaptics()
-    // A snackbar is shown until it times out, so a new message replaces it rather than waiting
-    // behind it, and its haptic plays at once instead of after the one before has gone.
+    // Messages the scanner sends by itself, such as an image without a code, mark a failure with a
+    // haptic of their own; an action's message follows the haptic its button already gave.
     LaunchedEffect(vm) {
         vm.messages.collectLatest { message ->
             when (message) {
-                R.string.reset_done -> haptics.confirm()
                 R.string.no_code_found, R.string.image_unreadable, R.string.no_camera -> haptics.reject()
             }
-            snackbar.showSnackbar(context.getString(message))
+            snackbar.showLatest(context.getString(message))
         }
     }
 
@@ -214,7 +213,6 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
                             R.drawable.ic_restart_alt,
                             R.string.action_reset,
                             Modifier.weight(1f),
-                            pressFeedback = false,
                             onClick = vm::manualReset,
                         )
                     } else {
@@ -260,12 +258,12 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
                 haptics.confirm()
                 // Android 13 and later confirm clipboard writes with their own overlay.
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-                    scope.launch { snackbar.showSnackbar(context.getString(R.string.copied)) }
+                    scope.launch { snackbar.showLatest(context.getString(R.string.copied)) }
                 }
             }
             ActionResult.Unavailable -> {
                 haptics.reject()
-                scope.launch { snackbar.showSnackbar(context.getString(R.string.no_app)) }
+                scope.launch { snackbar.showLatest(context.getString(R.string.no_app)) }
             }
             ActionResult.Done -> haptics.tap()
         }
@@ -286,7 +284,6 @@ private fun ControlButton(
     @DrawableRes icon: Int,
     @StringRes label: Int,
     modifier: Modifier = Modifier,
-    pressFeedback: Boolean = true,
     onClick: () -> Unit,
 ) {
     val haptics = rememberHaptics()
@@ -297,7 +294,7 @@ private fun ControlButton(
     ) {
         FilledTonalIconButton(
             onClick = {
-                if (pressFeedback) haptics.tap()
+                haptics.tap()
                 onClick()
             },
             shapes = IconButtonDefaults.shapes(),

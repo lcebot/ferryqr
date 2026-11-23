@@ -212,8 +212,7 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
         haptics.confirm()
         store.delete(entry)
         scope.launch {
-            snackbar.currentSnackbarData?.dismiss()
-            val result = snackbar.showSnackbar(
+            val result = snackbar.showLatest(
                 message = context.getString(R.string.history_deleted),
                 actionLabel = context.getString(R.string.undo),
                 duration = SnackbarDuration.Short,
@@ -325,8 +324,7 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
                     store.setShortcut(entry.text, on)
                     if (on) {
                         scope.launch {
-                            snackbar.currentSnackbarData?.dismiss()
-                            snackbar.showSnackbar(context.getString(R.string.shortcut_added))
+                            snackbar.showLatest(context.getString(R.string.shortcut_added))
                         }
                     }
                 },
@@ -429,7 +427,7 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
                     haptics.confirm()
                     store.clear()
                     confirmClear = false
-                    scope.launch { snackbar.showSnackbar(context.getString(R.string.history_cleared)) }
+                    scope.launch { snackbar.showLatest(context.getString(R.string.history_cleared)) }
                 }) { Text(stringResource(R.string.clear)) }
             },
             dismissButton = {
@@ -460,12 +458,12 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
             ActionResult.Copied -> {
                 haptics.confirm()
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-                    scope.launch { snackbar.showSnackbar(context.getString(R.string.copied)) }
+                    scope.launch { snackbar.showLatest(context.getString(R.string.copied)) }
                 }
             }
             ActionResult.Unavailable -> {
                 haptics.reject()
-                scope.launch { snackbar.showSnackbar(context.getString(R.string.no_app)) }
+                scope.launch { snackbar.showLatest(context.getString(R.string.no_app)) }
             }
         }
     }
