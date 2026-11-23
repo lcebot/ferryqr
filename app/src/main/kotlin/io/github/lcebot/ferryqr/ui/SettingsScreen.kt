@@ -210,6 +210,9 @@ private fun FerryEntry(onOpen: () -> Unit) {
         shapes = ListItemDefaults.shapes(shape = segmentShape(0, 1)),
         colors = settingColors(),
         contentPadding = SETTING_ROW_PADDING,
+        // Deliberately centred, as the switch rows are, against the list's rule that top-aligns the
+        // icons of a row three lines tall, which a long summary or a large font makes this one.
+        verticalAlignment = Alignment.CenterVertically,
         leadingContent = {
             SettingIcon { Icon(painterResource(R.drawable.ic_apps), contentDescription = null, modifier = Modifier.size(24.dp)) }
         },

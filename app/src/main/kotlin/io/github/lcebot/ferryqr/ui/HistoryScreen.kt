@@ -819,6 +819,9 @@ private fun EntryItem(
         onLongClick = onLongClick,
         onLongClickLabel = if (onLongClick != null) stringResource(R.string.entry_more) else null,
         interactionSource = interactionSource,
+        // Deliberately centred, as the settings rows are, against the list's rule that top-aligns
+        // the icon, time and handle of a row three lines tall, which a title on two lines makes it.
+        verticalAlignment = Alignment.CenterVertically,
         leadingContent = {
             Box(
                 modifier = Modifier
