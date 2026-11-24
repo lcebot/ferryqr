@@ -25,22 +25,27 @@ import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.zIndex
-import androidx.compose.animation.rememberSplineBasedDecay
-import androidx.compose.foundation.gestures.AnchoredDraggableState
-import androidx.compose.foundation.gestures.DraggableAnchors
 import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.anchoredDraggable
-import androidx.compose.foundation.gestures.animateTo
-import androidx.compose.foundation.gestures.snapping.SnapLayoutInfoProvider
-import androidx.compose.foundation.gestures.snapping.snapFlingBehavior
-import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.ui.input.pointer.util.VelocityTracker1D
+import android.os.SystemClock
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.unit.lerp
+import kotlinx.coroutines.flow.collectLatest
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.sign
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
 import kotlin.math.abs
-import kotlin.math.roundToInt
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -146,6 +151,9 @@ private val INNER_CORNER = 4.dp
 /** With more favorites than this, the section can fold down to its first few. */
 private const val FOLDED_FAVORITES = 4
 
+/** The group the favorites form for a swipe; the other rows group by day. */
+private const val FAVORITES_GROUP = "favorites"
+
 private const val PREFS = "history"
 private const val PREF_FAVORITES_FOLDED = "favorites_folded"
 
@@ -190,6 +198,7 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
     var settling by remember { mutableStateOf<Job?>(null) }
     val settleSpec = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
     val listState = rememberLazyListState()
+    val magnetic = remember { MagneticList() }
     val recent = remember(entries) { entries.filterNot { it.favorite } }
     val shortcutsFull = favorites.count { it.shortcut } >= FavoriteShortcuts.MAX
     val subtitle: (@Composable () -> Unit)? = if (entries.isEmpty()) {
@@ -402,14 +411,14 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
                                     },
                             )
                         } else {
-                            EntryRow(entry, segmentShape(index, shownFavorites.size), actions, animateRow())
+                            EntryRow(entry, FAVORITES_GROUP, index, shownFavorites.size, magnetic, actions, animateRow())
                         }
                     }
                 }
                 groups.forEach { (day, items) ->
                     item(key = "header:$day") { DayHeader(day, items.first().time, animateRow()) }
                     itemsIndexed(items, key = { _, e -> "entry:${e.text}" }) { index, entry ->
-                        EntryRow(entry, segmentShape(index, items.size), actions, animateRow())
+                        EntryRow(entry, day, index, items.size, magnetic, actions, animateRow())
                     }
                 }
             }
@@ -659,64 +668,72 @@ private fun DayHeader(day: LocalDate, sample: Long, modifier: Modifier = Modifie
 }
 
 /**
- * How far a row must travel, as a share of its width, before letting go deletes it or changes its
- * favorite: half, the default swipe threshold of Android's ItemTouchHelper and of the first
- * Material swipe to dismiss. A swipe is decided by distance rather than speed, so a short quick flick
- * springs back, as a full swipe does on iOS, and the tick felt at this point always means that
- * letting go will act.
- */
-private const val SWIPE_COMMIT = 0.5f
-
-/** A release faster than this toward the row's rest place takes a committed swipe back; Compose's fling threshold. */
-private val SWIPE_RETURN_VELOCITY = 125.dp
-
-/**
  * One entry: a tap opens it, a long press opens its menu, a swipe toward the start deletes it, and a
  * swipe toward the end makes it a favorite or stops it being one. A favorite swipe slides the row
- * back once done. The swipe state lives only as long as the row, so an entry brought back by undo
- * arrives settled.
+ * back once done. The swipe works as a notification's does: the row follows the finger at half its
+ * pace, pulling the rows around it, until it comes loose at [DETACH_AT] and follows the finger
+ * itself. The swipe state lives only as long as the row, so an entry brought back by undo arrives
+ * settled.
  */
 @Composable
-private fun EntryRow(entry: HistoryEntry, shape: Shape, actions: EntryActions, modifier: Modifier = Modifier) {
+private fun EntryRow(
+    entry: HistoryEntry,
+    group: Any,
+    index: Int,
+    count: Int,
+    list: MagneticList,
+    actions: EntryActions,
+    modifier: Modifier = Modifier,
+) {
     val haptics = rememberHaptics()
+    val swipeHaptics = rememberSwipeHaptics(haptics)
     var menu by remember { mutableStateOf(false) }
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     val density = LocalDensity.current
-    val swipe = remember { AnchoredDraggableState(SwipeToDismissBoxValue.Settled) }
+    val detachAt = with(density) { DETACH_AT.toPx() }
+    val attachAt = with(density) { ATTACH_AT.toPx() }
+    val dismissVelocity = with(density) { DISMISS_VELOCITY.toPx() }
+    val minDismissVelocity = with(density) { MIN_DISMISS_VELOCITY.toPx() }
+    val scope = rememberCoroutineScope()
+    val magnet = rememberRowMagnet(list, entry.text, group, index, detachAt)
+
+    // Where the row is drawn, apart from the finger: it follows at half pace until it comes loose.
+    val shift = remember { Follower() }
+    var pull by remember { mutableStateOf<Pull?>(null) }
+    // Let go to act, until the row is back in place.
+    var acting by remember { mutableStateOf(false) }
+    var release by remember { mutableStateOf<Job?>(null) }
     var width by remember { mutableIntStateOf(0) }
-    val offset = swipe.offset.takeUnless { it.isNaN() } ?: 0f
-    val direction = when {
-        offset == 0f -> SwipeToDismissBoxValue.Settled
-        (offset > 0f) != rtl -> SwipeToDismissBoxValue.StartToEnd
-        else -> SwipeToDismissBoxValue.EndToStart
+    val tracker = remember { VelocityTracker1D(isDataDifferential = true) }
+
+    val direction by remember(rtl) {
+        derivedStateOf {
+            val x = shift.value.value
+            when {
+                x == 0f -> SwipeToDismissBoxValue.Settled
+                (x > 0f) != rtl -> SwipeToDismissBoxValue.StartToEnd
+                else -> SwipeToDismissBoxValue.EndToStart
+            }
+        }
     }
-    val armed = width > 0 && abs(offset) >= width * SWIPE_COMMIT
-    LaunchedEffect(armed) { if (armed) haptics.step() }
+    val armed = pull?.phase == PullPhase.Detached || acting
 
-    val decay = rememberSplineBasedDecay<Float>()
-    val settle = MaterialTheme.motionScheme.defaultSpatialSpec<Float>()
-    val returnVelocity = with(density) { SWIPE_RETURN_VELOCITY.toPx() }
-    val fling = remember(swipe, decay, settle, returnVelocity, rtl) {
-        snapFlingBehavior(
-            snapLayoutInfoProvider = object : SnapLayoutInfoProvider {
-                // No glide first: where the row ends up depends on where it was let go, not on speed.
-                override fun calculateApproachOffset(velocity: Float, decayOffset: Float): Float = 0f
-
-                override fun calculateSnapOffset(velocity: Float): Float {
-                    val at = swipe.offset.takeUnless { it.isNaN() } ?: return 0f
-                    val committed = width > 0 && abs(at) >= width * SWIPE_COMMIT
-                    val flungBack = at != 0f && velocity * at < 0f && abs(velocity) >= returnVelocity
-                    val target = when {
-                        !committed || flungBack -> SwipeToDismissBoxValue.Settled
-                        (at > 0f) != rtl -> SwipeToDismissBoxValue.StartToEnd
-                        else -> SwipeToDismissBoxValue.EndToStart
-                    }
-                    return swipe.anchors.positionOf(target) - at
-                }
-            },
-            decayAnimationSpec = decay,
-            snapAnimationSpec = settle,
-        )
+    LaunchedEffect(pull) {
+        val swiped = pull ?: return@LaunchedEffect
+        var phase = swiped.phase
+        snapshotFlow { swiped.phase to swiped.finger }.collectLatest { (now, finger) ->
+            if (now == PullPhase.Released) return@collectLatest
+            if (now != phase) {
+                // Coming loose throws the row on at the finger's speed; rejoining throws it back.
+                val speed = abs(tracker.calculateVelocity()) * sign(finger)
+                if (now == PullPhase.Detached) shift.animateWith(DetachSpring, speed) else shift.animateWith(AttachSpring, -speed)
+                phase = now
+            }
+            shift.follow(if (now == PullPhase.Detached) finger else PULLED_SHARE * finger)
+        }
+    }
+    DisposableEffect(list) {
+        onDispose { if (list.pull?.key == entry.text) list.pull = null }
     }
 
     // What a favorite swipe will do is fixed when it starts, so the row sliding back after the
@@ -729,37 +746,100 @@ private fun EntryRow(entry: HistoryEntry, shape: Shape, actions: EntryActions, m
     val current by rememberUpdatedState(entry)
     val delete by rememberUpdatedState(actions.onDelete)
     val favorite by rememberUpdatedState(actions.onFavorite)
-    LaunchedEffect(swipe.settledValue) {
-        when (swipe.settledValue) {
-            SwipeToDismissBoxValue.EndToStart -> delete(current)
-            SwipeToDismissBoxValue.StartToEnd -> {
-                favorite(current, !current.favorite)
-                swipe.animateTo(SwipeToDismissBoxValue.Settled, settle)
+    val place by rememberUpdatedState(index)
+    val settle = MaterialTheme.motionScheme.defaultSpatialSpec<Float>()
+
+    val drag = rememberDraggableState { delta ->
+        val swiped = pull ?: return@rememberDraggableState
+        tracker.addDataPoint(SystemClock.uptimeMillis(), delta)
+        swiped.finger += delta
+        val travel = abs(swiped.finger)
+        when (swiped.phase) {
+            PullPhase.Pulling ->
+                if (travel >= detachAt) {
+                    swiped.phase = PullPhase.Detached
+                    swipeHaptics.threshold(true)
+                } else {
+                    swipeHaptics.pull(PULLED_SHARE * travel / detachAt)
+                }
+            PullPhase.Detached ->
+                if (travel <= attachAt) {
+                    swiped.phase = PullPhase.Pulling
+                    swipeHaptics.threshold(false)
+                }
+            PullPhase.Released -> Unit
+        }
+    }
+
+    fun start() {
+        // A row caught while it moves is swiped on from where it is.
+        release?.cancel()
+        acting = false
+        tracker.resetTracking()
+        val from = shift.value.value
+        if (from != 0f) shift.animateWith(AttachSpring) else shift.stopAnimating()
+        val swiped = Pull(entry.text, group, place).apply { finger = from }
+        pull = swiped
+        list.pull = swiped
+    }
+
+    fun letGo(velocity: Float) {
+        val swiped = pull ?: return
+        val detached = swiped.phase == PullPhase.Detached
+        val side = sign(swiped.finger)
+        val fast = abs(velocity) >= dismissVelocity
+        // A loose row acts unless flung back; an attached one only when flung on.
+        val acts = side != 0f && if (detached) !(fast && sign(velocity) != side) else fast && sign(velocity) == side
+        swiped.releaseVelocity = velocity
+        swiped.dismissing = acts
+        swiped.phase = PullPhase.Released
+        release = scope.launch {
+            try {
+                if (acts) {
+                    if (!detached) swipeHaptics.threshold(true)
+                    acting = true
+                    val speed = if (detached) max(minDismissVelocity, abs(velocity)) else abs(velocity)
+                    val end = side * width
+                    val distance = abs(end - shift.value.value)
+                    val millis = if (speed > 0f) min(MAX_ESCAPE_MS, (distance * 1000f / speed).toInt()) else DEFAULT_ESCAPE_MS
+                    // A flick carries on at its own speed; a row let go slowly gathers speed as it leaves.
+                    shift.value.animateTo(end, tween(millis, easing = if (fast) LinearEasing else FastOutLinearInEasing))
+                    if ((side > 0f) != rtl) {
+                        favorite(current, !current.favorite)
+                        if (list.pull === swiped) list.pull = null
+                        shift.value.animateTo(0f, settle)
+                        acting = false
+                    } else {
+                        delete(current)
+                    }
+                } else {
+                    shift.value.animateTo(0f, SnapBackSpring, velocity)
+                }
+            } finally {
+                if (list.pull === swiped) list.pull = null
+                if (pull === swiped) pull = null
             }
-            SwipeToDismissBoxValue.Settled -> Unit
         }
     }
 
     Box(
-        modifier.onSizeChanged { size ->
-            width = size.width
-            val end = size.width.toFloat()
-            swipe.updateAnchors(
-                DraggableAnchors {
-                    SwipeToDismissBoxValue.Settled at 0f
-                    SwipeToDismissBoxValue.StartToEnd at if (rtl) -end else end
-                    SwipeToDismissBoxValue.EndToStart at if (rtl) end else -end
-                },
-            )
-        },
+        modifier
+            .onSizeChanged { width = it.width }
+            .draggable(
+                drag,
+                Orientation.Horizontal,
+                onDragStarted = { start() },
+                onDragStopped = { letGo(it) },
+            ),
     ) {
-        SwipeBackground(direction, armed, becomesFavorite, shape, Modifier.matchParentSize())
-        Box(
-            Modifier
-                .offset { IntOffset(offset.roundToInt(), 0) }
-                .anchoredDraggable(swipe, Orientation.Horizontal, flingBehavior = fling),
-        ) {
-            EntryItem(entry, shape, onClick = { actions.onOpen(entry) }, onLongClick = { menu = true })
+        SwipeBackground(direction, armed, becomesFavorite, segmentShape(index, count), Modifier.matchParentSize())
+        Box(Modifier.graphicsLayer { translationX = shift.value.value + magnet.lean.value.value }) {
+            EntryItem(
+                entry,
+                segmentShape(index, count, magnet.top.value.value, magnet.bottom.value.value),
+                onClick = { actions.onOpen(entry) },
+                onLongClick = { menu = true },
+            )
         }
         EntryMenu(
             entry = entry,
@@ -1069,9 +1149,18 @@ private const val ZERO_WIDTH_SPACE = '\u200B'
  * the list item's own segmented shapes would switch at once.
  */
 @Composable
-fun segmentShape(index: Int, count: Int): Shape {
+fun segmentShape(index: Int, count: Int): Shape = segmentShape(index, count, roundTop = 0f, roundBottom = 0f)
+
+/**
+ * [roundTop] and [roundBottom], from 0 to 1, round a row's corners further toward the large corner,
+ * as a swipe does to the row pulled and those around it.
+ */
+@Composable
+internal fun segmentShape(index: Int, count: Int, roundTop: Float, roundBottom: Float): Shape {
     val spec = MaterialTheme.motionScheme.defaultEffectsSpec<Dp>()
     val top by animateDpAsState(if (index == 0) OUTER_CORNER else INNER_CORNER, spec, label = "row-top")
     val bottom by animateDpAsState(if (index == count - 1) OUTER_CORNER else INNER_CORNER, spec, label = "row-bottom")
-    return RoundedCornerShape(topStart = top, topEnd = top, bottomStart = bottom, bottomEnd = bottom)
+    val shownTop = maxOf(top, lerp(INNER_CORNER, OUTER_CORNER, roundTop.coerceIn(0f, 1f)))
+    val shownBottom = maxOf(bottom, lerp(INNER_CORNER, OUTER_CORNER, roundBottom.coerceIn(0f, 1f)))
+    return RoundedCornerShape(topStart = shownTop, topEnd = shownTop, bottomStart = shownBottom, bottomEnd = shownBottom)
 }

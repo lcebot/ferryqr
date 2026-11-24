@@ -9,6 +9,9 @@
     <!-- Asking whether the phone supports Wi-Fi Easy Connect needs it; granted at install, it shows
          no prompt and reads nothing about the networks. -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- A history row pulled by a swipe ticks harder the further it goes, which needs vibrations of
+         a chosen strength rather than the fixed feedback a view gives. Granted at install. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <!-- The apps the optional LSPosed module supports accept its broadcasts only from holders of
          this, so no other app can make them open content it chose. -->
