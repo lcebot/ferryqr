@@ -168,9 +168,19 @@ class AutoZoom {
     @Volatile
     private var reportsSceneChange = false
 
-    /** The view as it was once the tapped focus settled; null until then. */
+    /** Set when the camera saw a scene change before the tapped focus settled, which lets it go once it has. */
+    @Volatile
+    private var changedWhileFocusing = false
+
+    /**
+     * The view as it was when tapped, and once [sceneRetaken], as it was when the focus settled; null
+     * until the first frame after the tap.
+     */
     @Volatile
     private var sceneAtTap: IntArray? = null
+
+    @Volatile
+    private var sceneRetaken = false
 
     /**
      * Reads each capture result for the exposure state and the camera's own scene change detection.
@@ -305,7 +315,9 @@ class AutoZoom {
         tappedAt = at
         focusDoneAt = 0L
         settled = false
+        changedWhileFocusing = false
         sceneAtTap = null
+        sceneRetaken = false
         tapped.value = true
         val result = cam.cameraControl.startFocusAndMetering(action)
         // A later tap starts its own wait, so only the latest focus counts.
@@ -323,25 +335,36 @@ class AutoZoom {
     /**
      * Once the tapped focus has finished, waits for the exposure metered there to settle, and from
      * then on lets the focus go when the camera reports a scene change, as its continuous focus
-     * would start a new scan on one.
+     * would start a new scan on one. A change reported while the focus still runs is kept until it
+     * settles, so a view that moved on mid-focus does not hold a focus that fits it no longer.
      */
     private fun onCaptureResult(result: CaptureResult) {
         val change = result.get(CaptureResult.CONTROL_AF_SCENE_CHANGE)
         if (change != null) reportsSceneChange = true
         lastResultAt = SystemClock.elapsedRealtime()
-        if (!tapped.value || focusDoneAt == 0L) return
+        if (!tapped.value) return
+        val detected = change == CaptureResult.CONTROL_AF_SCENE_CHANGE_DETECTED
         if (!settled) {
+            if (detected) changedWhileFocusing = true
+            if (focusDoneAt == 0L) return
             val exposure = result.get(CaptureResult.CONTROL_AE_STATE)
-            if (exposure == null || exposure in SETTLED_EXPOSURE) settled = true
+            if (exposure == null || exposure in SETTLED_EXPOSURE) onSettled()
             return
         }
-        if (change == CaptureResult.CONTROL_AF_SCENE_CHANGE_DETECTED) releaseTapFocus()
+        if (detected) releaseTapFocus()
+    }
+
+    private fun onSettled() {
+        settled = true
+        if (changedWhileFocusing) releaseTapFocus()
     }
 
     /**
      * Follows the view while a tapped focus is held, on the analysis thread. Lets the focus go once
      * the camera has let go of it by itself, and, for a camera that does not report scene changes,
-     * once the view has become a new scene since focus and exposure settled.
+     * once the view has become a new scene. The view at the tap is compared when the focus settles,
+     * which catches a view that moved on mid-focus, and from then on the view at that point, after
+     * the exposure metered on the tap has changed it.
      */
     fun watchScene(image: ImageProxy) {
         if (!tapped.value) return
@@ -353,15 +376,19 @@ class AutoZoom {
         val focusDone = focusDoneAt
         if (!settled && focusDone != 0L && now - maxOf(focusDone, lastResultAt) > SILENT_SETTLE_MS) {
             // The camera reports nothing, so the finished focus has to do.
-            settled = true
+            onSettled()
         }
-        if (!settled || reportsSceneChange) return
+        if (reportsSceneChange) return
         val scene = sceneOf(image)
         val before = sceneAtTap
-        if (before == null) {
-            sceneAtTap = scene
-        } else if (sceneChange(before, scene) > SCENE_CHANGE) {
-            releaseTapFocus()
+        when {
+            before == null -> sceneAtTap = scene
+            !settled -> Unit
+            sceneChange(before, scene) > SCENE_CHANGE -> releaseTapFocus()
+            !sceneRetaken -> {
+                sceneAtTap = scene
+                sceneRetaken = true
+            }
         }
     }
 
@@ -401,7 +428,9 @@ class AutoZoom {
         tapped.value = false
         focusDoneAt = 0L
         settled = false
+        changedWhileFocusing = false
         sceneAtTap = null
+        sceneRetaken = false
     }
 }
 
