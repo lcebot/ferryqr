@@ -36,6 +36,9 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.unit.lerp
 import kotlinx.coroutines.flow.collectLatest
 import kotlin.math.max
+import kotlin.math.min
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.runtime.withFrameNanos
 import kotlin.math.sign
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.layout.onSizeChanged
@@ -147,6 +150,27 @@ private val INNER_CORNER = 4.dp
 /** With more favorites than this, the section can fold down to its first few. */
 private const val FOLDED_FAVORITES = 4
 
+/**
+ * How close to the top or bottom of the visible list a favorite being dragged makes the list scroll
+ * toward the favorites out of view: 48dp, the edge zone of the Reorderable library for Compose and
+ * the size of a touch target. Scrolling stops once the first or last favorite is as far inside the
+ * edge, so the row dragged to it rests outside the zone. Material leaves this to the app.
+ */
+private val REORDER_EDGE = 48.dp
+
+/**
+ * How fast the list scrolls per second with the row at the edge or past it, slower in proportion
+ * the less far into [REORDER_EDGE] it is: RecyclerView's ItemTouchHelper scrolls at most 20dp a
+ * frame, which is this at 60 frames a second.
+ */
+private val REORDER_SCROLL_SPEED = 1200.dp
+
+/**
+ * Nearing where it stops, the list scrolls at most this many times the distance left each second,
+ * so it eases into place instead of halting at full speed.
+ */
+private const val REORDER_SCROLL_EASE = 10f
+
 /** The group the favorites form for a swipe; the other rows group by day. */
 private const val FAVORITES_GROUP = "favorites"
 
@@ -194,7 +218,7 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
     var settling by remember { mutableStateOf<Job?>(null) }
     val settleSpec = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
     val listState = rememberLazyListState()
-    val magnetic = remember { MagneticList() }
+    val magnetic = remember(scope) { MagneticList(scope) }
     val recent = remember(entries) { entries.filterNot { it.favorite } }
     val shortcutsFull = favorites.count { it.shortcut } >= FavoriteShortcuts.MAX
     val subtitle: (@Composable () -> Unit)? = if (entries.isEmpty()) {
@@ -256,6 +280,7 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
             EmptyHistory(Modifier.fillMaxSize().padding(padding))
         } else {
             val zone = remember { ZoneId.systemDefault() }
+            val density = LocalDensity.current
             val groups = remember(recent) {
                 recent.groupBy { Instant.ofEpochMilli(it.time).atZone(zone).toLocalDate() }
             }
@@ -317,6 +342,65 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
                 if (from < 0 || to !in order.indices) return
                 order.add(to, order.removeAt(from))
                 haptics.step()
+            }
+
+            // While a favorite is held near the top or bottom of the visible list, and favorites
+            // reach past that edge, the list scrolls toward them. Only the list's content moves: the
+            // held row stays under the finger, taking each scroll off its drag offset, the top bar
+            // keeps its size since the scroll does not pass through it, and the list goes no further
+            // than the first or last favorite plus [REORDER_EDGE]. It stops as the finger lifts.
+            val edge = with(density) { REORDER_EDGE.toPx() }
+            val fastest = with(density) { REORDER_SCROLL_SPEED.toPx() }
+            // The list is drawn behind the navigation bar, so its edge for scrolling is the top of the bar.
+            val barHeight = with(density) { padding.calculateBottomPadding().toPx() }
+            val held = dragging.takeIf { reordering && settling == null }
+            LaunchedEffect(held, edge, fastest, barHeight) {
+                if (held == null) return@LaunchedEffect
+                // The way the list has been scrolling, which it keeps up until the margin even once
+                // the favorites no longer reach past the edge.
+                var going = 0
+                var last = 0L
+                while (true) {
+                    val now = withFrameNanos { it }
+                    val seconds = if (last == 0L) 0f else (now - last) / 1_000_000_000f
+                    last = now
+                    val info = listState.layoutInfo
+                    val rows = info.visibleItemsInfo
+                    val row = rows.firstOrNull { it.key == "entry:$held" }
+                    if (row == null || order.isEmpty()) {
+                        going = 0
+                        continue
+                    }
+                    // Offset 0 is the top of the visible list, just below the top bar; the bottom is
+                    // where the navigation bar starts covering the list, which runs on behind it.
+                    val bottom = info.viewportEndOffset - barHeight
+                    val rowTop = row.offset + dragOffset
+                    // How far the favorites reach past each edge. The held row is a favorite in view,
+                    // so the first one out of view lies above and the last one below.
+                    val first = rows.firstOrNull { it.key == "entry:${order.first()}" }
+                    val lastRow = rows.firstOrNull { it.key == "entry:${order.last()}" }
+                    val above = first?.let { -it.offset.toFloat() } ?: Float.POSITIVE_INFINITY
+                    val below = lastRow?.let { it.offset + it.size - bottom } ?: Float.POSITIVE_INFINITY
+                    val upDepth = (edge - rowTop) / edge
+                    val downDepth = (rowTop + row.size - (bottom - edge)) / edge
+                    val way = when {
+                        upDepth > 0f && (above > 0f || (going < 0 && above > -edge)) -> -1
+                        downDepth > 0f && (below > 0f || (going > 0 && below > -edge)) -> 1
+                        else -> 0
+                    }
+                    going = way
+                    if (way == 0 || seconds == 0f) continue
+                    val depth = (if (way < 0) upDepth else downDepth).coerceIn(0f, 1f)
+                    // Slows on the way to the margin rather than stopping at full speed.
+                    val left = (if (way < 0) above else below) + edge
+                    // Within half a pixel the list has arrived, so the easing does not creep on forever.
+                    if (left < 0.5f) continue
+                    val speed = min(fastest * depth, left * REORDER_SCROLL_EASE)
+                    if (speed <= 0f) continue
+                    val consumed = listState.scrollBy(way * speed * seconds)
+                    dragOffset += consumed
+                    followDrag()
+                }
             }
             val actions = EntryActions(
                 onOpen = { haptics.tap(); open(it) },
@@ -690,7 +774,6 @@ private fun EntryRow(
     val attachAt = with(density) { ATTACH_AT.toPx() }
     val dismissVelocity = with(density) { DISMISS_VELOCITY.toPx() }
     val minDismissVelocity = with(density) { MIN_DISMISS_VELOCITY.toPx() }
-    val scope = rememberCoroutineScope()
     val magnet = rememberRowMagnet(list, entry.text, group, index, detachAt)
 
     // Where the row is drawn, apart from the finger: it follows at half pace until it comes loose.
@@ -775,6 +858,7 @@ private fun EntryRow(
         release?.cancel()
         acting = false
         shift.held = false
+        shift.value.updateBounds(null, null)
         tracker.resetTracking()
         val from = shift.value.value
         if (from != 0f) shift.animateWith(quick, shift.value.velocity) else shift.stopAnimating()
@@ -795,13 +879,17 @@ private fun EntryRow(
         swiped.phase = PullPhase.Released
         // From here the release moves the row, and the spring that followed the finger must not step it.
         shift.held = true
-        release = scope.launch {
+        release = list.scope.launch {
             try {
                 if (acts) {
                     if (!detached) swipeHaptics.threshold()
                     acting = true
                     val speed = if (detached) max(minDismissVelocity, abs(velocity)) else abs(velocity)
-                    shift.value.animateTo(side * width, settle, side * speed)
+                    // Aimed past the edge and stopped where the row has left, so the action follows
+                    // at once rather than once the spring has come to rest there.
+                    val edge = width.toFloat()
+                    if (edge > 0f) shift.value.updateBounds(-edge, edge)
+                    shift.value.animateTo(side * edge * FLY_PAST, settle, side * speed)
                     if ((side > 0f) != rtl) {
                         favorite(current, !current.favorite)
                         if (list.pull === swiped) list.pull = null

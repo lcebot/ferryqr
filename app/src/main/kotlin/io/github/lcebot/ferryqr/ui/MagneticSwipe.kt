@@ -36,6 +36,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import kotlin.math.abs
 import kotlin.math.pow
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -59,6 +60,13 @@ internal val DISMISS_VELOCITY = 500.dp
 
 /** A loose row let go starts flying off at least this fast, as a notification does. */
 internal val MIN_DISMISS_VELOCITY = 2000.dp
+
+/**
+ * How many widths past its place a row flying off is aimed, so it crosses the edge still moving. A
+ * quarter past leaves in about a tenth of a second at about the speed it was let go, keeping the
+ * pace of the spring without waiting for it to come to rest.
+ */
+internal const val FLY_PAST = 1.25f
 
 /** The share of the finger's travel the pulled row follows while still attached. */
 internal const val PULLED_SHARE = 0.5f
@@ -89,9 +97,13 @@ internal class Pull(val key: Any, val group: Any, index: Int) {
     var releaseVelocity = 0f
 }
 
-/** The one row of a list being swiped, if any. */
+/**
+ * The one row of a list being swiped, if any. A row let go finishes in [scope], the list's, since a
+ * row scrolled out of view leaves composition and would take its own coroutines with it, dropping
+ * a delete or favorite already decided.
+ */
 @Stable
-internal class MagneticList {
+internal class MagneticList(val scope: CoroutineScope) {
     var pull by mutableStateOf<Pull?>(null)
 }
 
