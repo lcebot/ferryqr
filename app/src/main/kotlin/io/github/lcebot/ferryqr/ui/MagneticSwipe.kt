@@ -16,7 +16,9 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationSpec
-import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.AnimationVector1D
+import androidx.compose.animation.core.VectorConverter
+import androidx.compose.animation.core.VectorizedAnimationSpec
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -29,6 +31,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import kotlin.math.abs
@@ -54,18 +57,18 @@ internal val ATTACH_AT = 64.dp
 /** A release this fast decides a swipe of any length, as it dismisses a notification. */
 internal val DISMISS_VELOCITY = 500.dp
 
-/** A loose row let go flies off at least this fast. */
+/** A loose row let go starts flying off at least this fast, as a notification does. */
 internal val MIN_DISMISS_VELOCITY = 2000.dp
-
-/** The longest a row takes to fly off, and how long it takes when let go without speed. */
-internal const val MAX_ESCAPE_MS = 400
-internal const val DEFAULT_ESCAPE_MS = 200
 
 /** The share of the finger's travel the pulled row follows while still attached. */
 internal const val PULLED_SHARE = 0.5f
 
-/** The shares the rows two and one away follow, on either side of [PULLED_SHARE]. */
-private val TRANSLATION_MULTIPLIERS = floatArrayOf(0.04f, 0.12f, PULLED_SHARE, 0.12f, 0.04f)
+/**
+ * The shares the rows two and one away follow, on either side of [PULLED_SHARE]: half as much
+ * again as a notification's 0.04 and 0.12, so the neighbours visibly cling to a row before it
+ * comes loose.
+ */
+private val TRANSLATION_MULTIPLIERS = floatArrayOf(0.06f, 0.18f, PULLED_SHARE, 0.18f, 0.06f)
 
 /**
  * How strongly each row, from three above the pulled one to three below, rounds as the pull
@@ -73,12 +76,6 @@ private val TRANSLATION_MULTIPLIERS = floatArrayOf(0.04f, 0.12f, PULLED_SHARE, 0
  */
 private val ROUNDNESS_MULTIPLIERS = floatArrayOf(0.5f, 0.7f, 0.9f, 1f, 0.9f, 0.7f, 0.5f)
 private const val MAX_PRE_DETACH_ROUNDNESS = 0.8f
-
-/** Springs of the pulled row coming loose and rejoining, of neighbours settling, and of a row let go in place. */
-internal val DetachSpring = spring<Float>(dampingRatio = 0.95f, stiffness = 800f)
-internal val AttachSpring = spring<Float>(dampingRatio = 0.95f, stiffness = 850f)
-private val NeighbourSpring = spring<Float>(dampingRatio = 0.6f, stiffness = 550f)
-internal val SnapBackSpring = spring<Float>(dampingRatio = 0.52f, stiffness = 550f)
 
 internal enum class PullPhase { Pulling, Detached, Released }
 
@@ -100,35 +97,64 @@ internal class MagneticList {
 
 /**
  * A value set directly while nothing animates it, and retargeted while an animation carries it, as
- * a notification moves while a magnetic spring runs.
+ * a notification moves while a magnetic spring runs, the way SpringAnimation.animateToFinalPosition
+ * moves the end of a running spring.
+ *
+ * The animation is stepped one frame at a time from wherever it has got to, with the velocity it
+ * has, rather than started anew on each target: an animation started anew on every frame of a drag
+ * would never leave its first frame, which only records when it began.
  */
 internal class Follower {
     val value = Animatable(0f)
-    private var spec: AnimationSpec<Float>? = null
-    private var kick: Float? = null
+    private var spec: VectorizedAnimationSpec<AnimationVector1D>? = null
+    private var velocity = 0f
+    private var lastFrame = 0L
+
+    /**
+     * While set, [follow] leaves the value alone, for another animation to move it: a step of a
+     * running spring would otherwise cancel that animation.
+     */
+    var held = false
 
     /** The next targets are reached through [spec], from [velocity] when given or else the current one. */
     fun animateWith(spec: AnimationSpec<Float>, velocity: Float? = null) {
-        this.spec = spec
-        kick = velocity
+        this.spec = spec.vectorize(Float.VectorConverter)
+        if (velocity != null) this.velocity = velocity
+        lastFrame = 0L
     }
 
-    /** Targets after this are set directly, once whatever animates the value has stopped. */
+    /** Targets after this are set directly. */
     fun stopAnimating() {
         spec = null
-        kick = null
+        velocity = 0f
+        lastFrame = 0L
     }
 
+    /** Moves to [target]: at once while nothing animates the value, else frame by frame until it arrives. */
     suspend fun follow(target: Float) {
-        val running = spec
-        if (running == null) {
-            value.snapTo(target)
-            return
+        while (!held) {
+            val running = spec
+            if (running == null) {
+                value.snapTo(target)
+                return
+            }
+            val now = withFrameNanos { it }
+            val elapsed = if (lastFrame == 0L) 0L else now - lastFrame
+            lastFrame = now
+            if (elapsed <= 0L) continue
+            val from = AnimationVector1D(value.value)
+            val to = AnimationVector1D(target)
+            val speed = AnimationVector1D(velocity)
+            if (running.getDurationNanos(from, to, speed) <= elapsed) {
+                stopAnimating()
+                value.snapTo(target)
+                return
+            }
+            val next = running.getValueFromNanos(elapsed, from, to, speed).value
+            val nextVelocity = running.getVelocityFromNanos(elapsed, from, to, speed).value
+            value.snapTo(next)
+            velocity = nextVelocity
         }
-        val velocity = kick ?: value.velocity
-        kick = null
-        value.animateTo(target, running, velocity)
-        spec = null
     }
 }
 
@@ -153,7 +179,10 @@ private val Unrelated = Targets(Mode(null, null, false), 0, 0f, 0f, 0f)
 @Composable
 internal fun rememberRowMagnet(list: MagneticList, key: Any, group: Any, index: Int, detachAt: Float): RowMagnet {
     val magnet = remember { RowMagnet() }
+    // Neighbours settle back and the corners change with the theme's motion, quickly when rejoining.
     val roundness by rememberUpdatedState(MaterialTheme.motionScheme.defaultEffectsSpec<Float>())
+    val settle by rememberUpdatedState(MaterialTheme.motionScheme.defaultSpatialSpec<Float>())
+    val quick by rememberUpdatedState(MaterialTheme.motionScheme.fastSpatialSpec<Float>())
     val place by rememberUpdatedState(Triple(key, group, index))
     LaunchedEffect(list, magnet, detachAt) {
         var mode = Unrelated.mode
@@ -163,10 +192,10 @@ internal fun rememberRowMagnet(list: MagneticList, key: Any, group: Any, index: 
                 val rejoined = next.phase == PullPhase.Pulling && mode.phase == PullPhase.Detached && next.pull === mode.pull
                 val share = leanShare(goal.distance)
                 when {
-                    next.phase == PullPhase.Detached -> magnet.lean.animateWith(NeighbourSpring, 0f)
-                    next.phase == PullPhase.Released -> magnet.lean.animateWith(NeighbourSpring, (next.pull?.releaseVelocity ?: 0f) * share)
-                    rejoined -> magnet.lean.animateWith(AttachSpring, 0f)
-                    next.pull == null -> magnet.lean.animateWith(NeighbourSpring)
+                    next.phase == PullPhase.Detached -> magnet.lean.animateWith(settle, 0f)
+                    next.phase == PullPhase.Released -> magnet.lean.animateWith(settle, (next.pull?.releaseVelocity ?: 0f) * share)
+                    rejoined -> magnet.lean.animateWith(quick, 0f)
+                    next.pull == null -> magnet.lean.animateWith(settle)
                 }
                 if (next.phase != PullPhase.Pulling || rejoined) {
                     magnet.top.animateWith(roundness)

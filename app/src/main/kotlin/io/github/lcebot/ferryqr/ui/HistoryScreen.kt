@@ -30,16 +30,12 @@ import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.ui.input.pointer.util.VelocityTracker1D
 import android.os.SystemClock
-import androidx.compose.animation.core.FastOutLinearInEasing
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.tween
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.unit.lerp
 import kotlinx.coroutines.flow.collectLatest
 import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.sign
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.layout.onSizeChanged
@@ -718,6 +714,10 @@ private fun EntryRow(
     }
     val armed = pull?.phase == PullPhase.Detached || acting
 
+    val settle = MaterialTheme.motionScheme.defaultSpatialSpec<Float>()
+    // Coming loose, rejoining and being caught are short moves to keep up with the finger.
+    val quick = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
+
     LaunchedEffect(pull) {
         val swiped = pull ?: return@LaunchedEffect
         var phase = swiped.phase
@@ -726,7 +726,7 @@ private fun EntryRow(
             if (now != phase) {
                 // Coming loose throws the row on at the finger's speed; rejoining throws it back.
                 val speed = abs(tracker.calculateVelocity()) * sign(finger)
-                if (now == PullPhase.Detached) shift.animateWith(DetachSpring, speed) else shift.animateWith(AttachSpring, -speed)
+                if (now == PullPhase.Detached) shift.animateWith(quick, speed) else shift.animateWith(quick, -speed)
                 phase = now
             }
             shift.follow(if (now == PullPhase.Detached) finger else PULLED_SHARE * finger)
@@ -747,7 +747,6 @@ private fun EntryRow(
     val delete by rememberUpdatedState(actions.onDelete)
     val favorite by rememberUpdatedState(actions.onFavorite)
     val place by rememberUpdatedState(index)
-    val settle = MaterialTheme.motionScheme.defaultSpatialSpec<Float>()
 
     val drag = rememberDraggableState { delta ->
         val swiped = pull ?: return@rememberDraggableState
@@ -775,9 +774,10 @@ private fun EntryRow(
         // A row caught while it moves is swiped on from where it is.
         release?.cancel()
         acting = false
+        shift.held = false
         tracker.resetTracking()
         val from = shift.value.value
-        if (from != 0f) shift.animateWith(AttachSpring) else shift.stopAnimating()
+        if (from != 0f) shift.animateWith(quick, shift.value.velocity) else shift.stopAnimating()
         val swiped = Pull(entry.text, group, place).apply { finger = from }
         pull = swiped
         list.pull = swiped
@@ -793,17 +793,15 @@ private fun EntryRow(
         swiped.releaseVelocity = velocity
         swiped.dismissing = acts
         swiped.phase = PullPhase.Released
+        // From here the release moves the row, and the spring that followed the finger must not step it.
+        shift.held = true
         release = scope.launch {
             try {
                 if (acts) {
                     if (!detached) swipeHaptics.threshold()
                     acting = true
                     val speed = if (detached) max(minDismissVelocity, abs(velocity)) else abs(velocity)
-                    val end = side * width
-                    val distance = abs(end - shift.value.value)
-                    val millis = if (speed > 0f) min(MAX_ESCAPE_MS, (distance * 1000f / speed).toInt()) else DEFAULT_ESCAPE_MS
-                    // A flick carries on at its own speed; a row let go slowly gathers speed as it leaves.
-                    shift.value.animateTo(end, tween(millis, easing = if (fast) LinearEasing else FastOutLinearInEasing))
+                    shift.value.animateTo(side * width, settle, side * speed)
                     if ((side > 0f) != rtl) {
                         favorite(current, !current.favorite)
                         if (list.pull === swiped) list.pull = null
@@ -813,7 +811,7 @@ private fun EntryRow(
                         delete(current)
                     }
                 } else {
-                    shift.value.animateTo(0f, SnapBackSpring, velocity)
+                    shift.value.animateTo(0f, settle, velocity)
                 }
             } finally {
                 if (list.pull === swiped) list.pull = null
