@@ -29,10 +29,8 @@ class Haptics(private val feedback: HapticFeedback) {
     /** The lightest feedback, for selections and for passing a step while dragging. */
     fun step() = feedback.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
 
-    /** A drag crossed the point where letting go acts, outward when [active], or back inside it. */
-    fun threshold(active: Boolean) = feedback.performHapticFeedback(
-        if (active) HapticFeedbackType.GestureThresholdActivate else HapticFeedbackType.GestureThresholdDeactivate,
-    )
+    /** A drag crossed the point where letting go acts, either way, as a notification swiped feels the same both ways. */
+    fun threshold() = feedback.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
 }
 
 @Composable

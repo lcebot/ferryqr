@@ -758,14 +758,14 @@ private fun EntryRow(
             PullPhase.Pulling ->
                 if (travel >= detachAt) {
                     swiped.phase = PullPhase.Detached
-                    swipeHaptics.threshold(true)
+                    swipeHaptics.threshold()
                 } else {
                     swipeHaptics.pull(PULLED_SHARE * travel / detachAt)
                 }
             PullPhase.Detached ->
                 if (travel <= attachAt) {
                     swiped.phase = PullPhase.Pulling
-                    swipeHaptics.threshold(false)
+                    swipeHaptics.threshold()
                 }
             PullPhase.Released -> Unit
         }
@@ -796,7 +796,7 @@ private fun EntryRow(
         release = scope.launch {
             try {
                 if (acts) {
-                    if (!detached) swipeHaptics.threshold(true)
+                    if (!detached) swipeHaptics.threshold()
                     acting = true
                     val speed = if (detached) max(minDismissVelocity, abs(velocity)) else abs(velocity)
                     val end = side * width

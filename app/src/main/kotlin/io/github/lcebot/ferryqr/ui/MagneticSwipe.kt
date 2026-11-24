@@ -259,11 +259,11 @@ internal class SwipeHaptics(context: Context, private val fallback: Haptics) {
         play(effect)
     }
 
-    fun threshold(active: Boolean) {
+    fun threshold() {
         if (clicks) {
             play(VibrationEffect.startComposition().addPrimitive(VibrationEffect.Composition.PRIMITIVE_CLICK, CLICK_SCALE).compose())
         } else {
-            fallback.threshold(active)
+            fallback.threshold()
         }
     }
 
