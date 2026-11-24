@@ -1,14 +1,14 @@
 package io.github.lcebot.ferryqr.ui
 
 import android.util.Size
-import androidx.camera.camera2.interop.Camera2Interop
-import androidx.camera.camera2.interop.ExperimentalCamera2Interop
+import androidx.camera.camera2.interop.camera2Interop
 import androidx.camera.compose.CameraXViewfinder
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraInfo
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
+import androidx.camera.core.SessionConfig
 import androidx.camera.core.SurfaceOrientedMeteringPointFactory
 import androidx.camera.core.SurfaceRequest
 import androidx.camera.core.ZoomState
@@ -74,15 +74,13 @@ private fun ProcessCameraProvider.preferredBackCamera(): CameraSelector {
 }
 
 /**
- * The preview, whose capture results also go to [autoZoom], which reads the camera's own exposure
- * state and scene change detection from them for a tapped focus.
+ * The preview and analysis as one session, whose capture results also go to [autoZoom], which
+ * reads the camera's own exposure state and scene change detection from them for a tapped focus.
  */
-@OptIn(ExperimentalCamera2Interop::class)
-private fun previewReporting(autoZoom: AutoZoom, selector: ResolutionSelector): Preview {
-    val builder = Preview.Builder().setResolutionSelector(selector)
-    Camera2Interop.Extender(builder).setSessionCaptureCallback(autoZoom.captureCallback)
-    return builder.build()
-}
+private fun sessionReporting(autoZoom: AutoZoom, preview: Preview, analysis: ImageAnalysis): SessionConfig =
+    SessionConfig.Builder(preview, analysis)
+        .camera2Interop { repeatingCaptureCallback = autoZoom.captureCallback }
+        .build()
 
 @Composable
 fun CameraPreview(
@@ -111,7 +109,7 @@ fun CameraPreview(
                 ResolutionStrategy(TARGET_SIZE, ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER)
             )
             .build()
-        val preview = previewReporting(autoZoom, selector)
+        val preview = Preview.Builder().setResolutionSelector(selector).build()
         preview.setSurfaceProvider { request = it }
         val analysis = ImageAnalysis.Builder()
             .setResolutionSelector(selector)
@@ -119,10 +117,11 @@ fun CameraPreview(
             .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
             .build()
         analysis.setAnalyzer(executor, analyzer)
+        val config = sessionReporting(autoZoom, preview, analysis)
         try {
             provider.unbindAll()
             val bound = try {
-                provider.bindToLifecycle(owner, provider.preferredBackCamera(), preview, analysis)
+                provider.bindToLifecycle(owner, provider.preferredBackCamera(), config)
             } catch (e: IllegalArgumentException) {
                 onUnavailable()
                 return@LaunchedEffect
@@ -134,7 +133,7 @@ fun CameraPreview(
         } finally {
             autoZoom.camera = null
             analysis.clearAnalyzer()
-            provider.unbind(preview, analysis)
+            provider.unbind(config)
             camera = null
         }
     }
