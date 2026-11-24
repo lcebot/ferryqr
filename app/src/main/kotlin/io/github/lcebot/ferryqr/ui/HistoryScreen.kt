@@ -908,6 +908,9 @@ private fun EntryRow(
         }
     }
 
+    // What a swipe shows behind the row takes the row's own shape, rounding with it as it is pulled
+    // and comes loose, so it matches the corners of the neighbours that round toward it.
+    val shape = segmentShape(index, count, magnet.top.value.value, magnet.bottom.value.value)
     Box(
         modifier
             .onSizeChanged { width = it.width }
@@ -918,11 +921,11 @@ private fun EntryRow(
                 onDragStopped = { letGo(it) },
             ),
     ) {
-        SwipeBackground(direction, armed, becomesFavorite, segmentShape(index, count), Modifier.matchParentSize())
+        SwipeBackground(direction, armed, becomesFavorite, shape, Modifier.matchParentSize())
         Box(Modifier.graphicsLayer { translationX = shift.value.value + magnet.lean.value.value }) {
             EntryItem(
                 entry,
-                segmentShape(index, count, magnet.top.value.value, magnet.bottom.value.value),
+                shape,
                 onClick = { actions.onOpen(entry) },
                 onLongClick = { menu = true },
             )
