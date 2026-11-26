@@ -12,12 +12,12 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.core.MeteringPoint
 import androidx.camera.core.SurfaceOrientedMeteringPointFactory
 import java.util.concurrent.TimeUnit
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 /** A suspected code whose longer side is below this share of the frame's shorter side is small. */
 private const val SMALL_FILL = 0.2f

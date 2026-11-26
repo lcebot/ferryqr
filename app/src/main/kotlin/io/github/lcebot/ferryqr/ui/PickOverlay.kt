@@ -5,15 +5,6 @@ package io.github.lcebot.ferryqr.ui
 import android.graphics.Bitmap
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.core.Animatable
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.IconButtonDefaults
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.graphics.graphicsLayer
-import kotlinx.coroutines.delay
-import kotlin.coroutines.cancellation.CancellationException
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -24,17 +15,24 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -45,23 +43,30 @@ import androidx.compose.ui.unit.dp
 import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.scan.Detection
 import io.github.lcebot.ferryqr.scan.isLocatedMiniCode
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.max
 import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
 
 private val MARKER_SIZE = 56.dp
 private const val STAGGER_MS = 70L
 
-/** Freezes the frame that contained several codes and lets the user tap the one they meant. */
+/**
+ * Freezes the frame that contained several codes and lets the user tap the one they meant. Only
+ * while [active] does it take the back gesture.
+ */
 @Composable
 fun PickOverlay(
     frame: Bitmap,
     detections: List<Detection>,
     alreadyShown: Set<String>,
+    active: Boolean,
     onPick: (Detection) -> Unit,
     onClose: () -> Unit,
 ) {
     var backProgress by remember { mutableFloatStateOf(0f) }
-    PredictiveBackHandler { progress ->
+    // Fading out after a pick, it no longer answers the back gesture, which would cancel the pick.
+    PredictiveBackHandler(enabled = active) { progress ->
         try {
             progress.collect { backProgress = it.progress }
             onClose()

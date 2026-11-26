@@ -2,38 +2,13 @@
 
 package io.github.lcebot.ferryqr.ui
 
-import android.content.Context
-import android.os.Build
-import android.text.format.DateFormat
 import android.text.format.DateUtils
 import androidx.activity.compose.LocalActivity
-import androidx.annotation.DrawableRes
-import androidx.annotation.StringRes
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.animation.core.animate
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
-import androidx.compose.foundation.interaction.DragInteraction
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import kotlinx.coroutines.Job
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.semantics.CustomAccessibilityAction
-import androidx.compose.ui.semantics.customActions
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.zIndex
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.ui.unit.lerp
-import kotlin.math.max
-import kotlin.math.min
-import androidx.compose.foundation.gestures.scrollBy
-import androidx.compose.runtime.withFrameNanos
-import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
@@ -42,114 +17,90 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.ui.geometry.Offset
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.calculateEndPadding
-import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListLayoutInfo
-import androidx.compose.ui.text.rememberTextMeasurer
-import androidx.lifecycle.compose.LifecycleResumeEffect
-import io.github.lcebot.ferryqr.AppSettings
-import io.github.lcebot.ferryqr.FavoriteLayout
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.DropdownMenuGroup
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.DropdownMenuPopup
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LargeFlexibleTopAppBar
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialShapes
-import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
-import androidx.collection.intListOf
-import kotlin.math.roundToInt
-import androidx.compose.ui.unit.LayoutDirection
-import androidx.compose.material3.MenuAnchorPosition
 import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
-import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.LineBreak
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.lerp
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import io.github.lcebot.ferryqr.R
-import io.github.lcebot.ferryqr.content.Classifier
-import io.github.lcebot.ferryqr.dispatch.ActionResult
-import io.github.lcebot.ferryqr.dispatch.Cards
-import io.github.lcebot.ferryqr.dispatch.Origin
-import io.github.lcebot.ferryqr.generate.CodeGenerator
-import io.github.lcebot.ferryqr.history.FavoriteShortcuts
-import io.github.lcebot.ferryqr.history.HistoryEntry
-import io.github.lcebot.ferryqr.history.HistoryStore
-import java.text.BreakIterator
-import java.time.Instant
-import java.time.LocalDate
-import java.time.ZoneId
-import java.util.Date
-import kotlinx.coroutines.launch
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.key
-import androidx.compose.runtime.produceState
-import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.material3.IconButtonDefaults
+import io.github.lcebot.ferryqr.FavoriteLayout
 import io.github.lcebot.ferryqr.HistoryDialog
 import io.github.lcebot.ferryqr.HistoryViewModel
-import io.github.lcebot.ferryqr.dispatch.Kind
-import io.github.lcebot.ferryqr.dispatch.ResultCard
+import io.github.lcebot.ferryqr.R
+import io.github.lcebot.ferryqr.dispatch.CardSource
+import io.github.lcebot.ferryqr.dispatch.Origin
+import io.github.lcebot.ferryqr.history.FavoriteShortcuts
+import io.github.lcebot.ferryqr.history.HistoryEntry
+import java.time.LocalDate
+import kotlin.math.max
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
@@ -202,7 +153,6 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
     val tiled = layout != FavoriteLayout.LIST
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    val ready = ferriesReady()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val layoutDirection = LocalLayoutDirection.current
     val favorites = lists?.favorites.orEmpty()
@@ -228,11 +178,9 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
         onOpened()
     }
 
-    val latestTiled by rememberUpdatedState(tiled)
     fun delete(entry: HistoryEntry) {
         haptics.confirm()
         vm.delete(entry)
-        val tile = latestTiled && entry.favorite
         scope.launch {
             val result = snackbar.showLatest(
                 message = context.getString(R.string.history_deleted),
@@ -244,7 +192,6 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
                 vm.undoDelete(entry)
             } else {
                 vm.deleteDone(entry)
-                if (tile) board.forget(entry.text)
             }
         }
     }
@@ -316,11 +263,8 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
                 HistoryContent.LOADING -> Box(Modifier.fillMaxSize())
                 HistoryContent.EMPTY -> EmptyHistory(Modifier.fillMaxSize().padding(padding))
                 HistoryContent.LIST -> BoxWithConstraints(Modifier.fillMaxSize()) {
-                    val zone = remember { ZoneId.systemDefault() }
                     val density = LocalDensity.current
-                    val groups = remember(recent) {
-                        recent.groupBy { Instant.ofEpochMilli(it.time).atZone(zone).toLocalDate() }
-                    }
+                    val groups = lists?.days.orEmpty()
                     // Folded, the favorites show their first few rows, which in the list are favorites.
                     val foldable = favorites.size > foldedRows && !reorder.active
                     val ordered = if (reorder.active) reorder.order.mapNotNull { favoritesByKey[it] } else favorites
@@ -329,22 +273,10 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
                     // Tiles are as wide as their names, measured here so the rows they fill are known
                     // before they are laid out, for folding them and for suggesting them.
                     val gap = with(density) { ListItemDefaults.SegmentedGap.roundToPx() }
-                    val typography = MaterialTheme.typography
                     val available = constraints.maxWidth - with(density) {
                         (padding.calculateStartPadding(layoutDirection) + padding.calculateEndPadding(layoutDirection) + 32.dp).roundToPx()
                     }
-                    val measurer = rememberTextMeasurer()
-                    val chrome = with(density) { tileChrome(layoutDirection).roundToPx() }
-                    // A tile is as wide as the longer of its name and its kind, the two lines it shows.
-                    val presentations = remember(favorites) { favorites.associate { it.text to presentationOf(context, it) } }
-                    val tileWidths = remember(presentations, typography, measurer, chrome) {
-                        presentations.mapValues { (_, shown) ->
-                            val name = measurer.measure(shown.tileTitle, typography.bodyLarge, maxLines = 1, softWrap = false).size.width
-                            val kind = measurer.measure(context.getString(shown.kind.label), typography.bodyMedium, maxLines = 1, softWrap = false)
-                                .size.width
-                            max(name, kind) + chrome
-                        }
-                    }
+                    val tileWidths = rememberTileWidths(favorites, with(density) { tileChrome(layoutDirection).roundToPx() })
                     val tileKeys = if (board.key != null) board.order.filter { it in favoritesByKey } else favorites.map { it.text }
                     val columns = if (layout == FavoriteLayout.GRID) gridColumns(available, gap, with(density) { GRID_COLUMN.roundToPx() }) else null
                     val tileInputs = TileInputs(tileKeys, tileWidths, available, gap, columns)
@@ -465,84 +397,31 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
         }
     }
 
-    when (val shown = dialog) {
-        HistoryDialog.Clear -> AlertDialog(
-            onDismissRequest = { vm.show(null) },
-            icon = { Icon(painterResource(R.drawable.ic_delete_sweep), contentDescription = null) },
-            title = { Text(stringResource(R.string.history_clear_title)) },
-            text = { Text(stringResource(R.string.history_clear_body)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        haptics.confirm()
-                        vm.clear()
-                        scope.launch { snackbar.showLatest(context.getString(R.string.history_cleared)) }
-                    },
-                    shapes = ButtonDefaults.shapes(),
-                ) { Text(stringResource(R.string.clear)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { haptics.tap(); vm.show(null) }, shapes = ButtonDefaults.shapes()) {
-                    Text(stringResource(R.string.cancel))
-                }
-            },
-        )
-        HistoryDialog.SuggestTiles -> AlertDialog(
-            onDismissRequest = { vm.show(null) },
-            icon = { Icon(painterResource(R.drawable.ic_view_quilt), contentDescription = null) },
-            title = { Text(stringResource(R.string.tiles_suggest_title)) },
-            text = { Text(stringResource(R.string.tiles_suggest_body)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        haptics.confirm()
-                        vm.useTiles()
-                    },
-                    shapes = ButtonDefaults.shapes(),
-                ) { Text(stringResource(R.string.tiles_suggest_use)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { haptics.tap(); vm.show(null) }, shapes = ButtonDefaults.shapes()) {
-                    Text(stringResource(R.string.tiles_suggest_keep))
-                }
-            },
-        )
-        is HistoryDialog.Name -> NameFavoriteDialog(
-            current = shown.entry.label ?: defaultTitle(context, shown.entry.text, shown.entry.format),
-            onDismiss = { vm.show(null) },
-            onName = { name -> vm.name(shown.entry, name) },
-        )
-        is HistoryDialog.Rename -> RenameDialog(
-            current = shown.entry.label ?: defaultTitle(context, shown.entry.text, shown.entry.format),
-            onDismiss = { vm.show(null) },
-            onRename = { name -> vm.rename(shown.entry, name) },
-        )
-        null -> Unit
+    DamagedHistoryDialog(vm, show = lists != null) { message ->
+        scope.launch { snackbar.showLatest(context.getString(message)) }
     }
 
-    // History stays open after a handoff, so returning to the app lands back on the list.
-    val onResult = rememberActionResultHandler(onHandoff = { vm.open(null) }) { message ->
+    HistoryDialogs(vm, dialog) { message -> scope.launch { snackbar.showLatest(context.getString(message)) } }
+
+    // History stays open after a handoff, so returning to the app lands back on the list; the card
+    // slides away as it would when dismissed rather than vanishing as the other app opens.
+    var closing by remember(showing?.text) { mutableStateOf(false) }
+    val onResult = rememberActionResultHandler(onHandoff = { closing = true }) { message ->
         scope.launch { snackbar.showLatest(context.getString(message)) }
     }
 
     showing?.let { entry ->
         key(entry.text) {
-            // The original code is no longer in sight, so every entry is shown with its code drawn
-            // again, to be scanned by another phone or kept as an image. The card is built off the
-            // main thread, and again once the framework reports which apps take content.
-            val card by produceState<ResultCard?>(null, entry, ready) {
-                value = withContext(Dispatchers.Default) {
-                    val payload = Classifier.classify(entry.text, entry.format)
-                    val built = Cards.build(activity, payload, entry.format, Origin.HISTORY, scannedAt = entry.time)
-                    val image = built.image ?: CodeGenerator.redraw(entry.text, entry.format)
-                    built.copy(image = image, exportable = image != null)
-                }
-            }
+            val card = rememberResultCard(remember(entry) { CardSource.Read(entry.text, entry.format, Origin.HISTORY, entry.time) })
             card?.let {
                 ResultSheet(
                     card = it,
-                    onDismiss = { vm.open(null) },
+                    onDismiss = {
+                        closing = false
+                        vm.open(null)
+                    },
                     onAction = { action -> onResult(action.run(activity)) },
+                    closing = closing,
                 )
             }
         }
@@ -585,10 +464,11 @@ private fun FavoritesHeader(
                 label = "favorites-chevron",
             )
             val fade = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
+            val resize = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
             TextButton(onClick = onToggle, shapes = ButtonDefaults.shapes()) {
                 AnimatedContent(
                     targetState = folded,
-                    transitionSpec = { fadeIn(fade) togetherWith fadeOut(fade) },
+                    transitionSpec = { (fadeIn(fade) togetherWith fadeOut(fade)) using SizeTransform { _, _ -> resize } },
                     label = "favorites-toggle",
                 ) { isFolded ->
                     Text(
@@ -693,4 +573,147 @@ internal fun segmentShape(index: Int, count: Int, roundTop: Float, roundBottom: 
     val shownTop = maxOf(top, lerp(INNER_CORNER, OUTER_CORNER, roundTop.coerceIn(0f, 1f)))
     val shownBottom = maxOf(bottom, lerp(INNER_CORNER, OUTER_CORNER, roundBottom.coerceIn(0f, 1f)))
     return RoundedCornerShape(topStart = shownTop, topEnd = shownTop, bottomStart = shownBottom, bottomEnd = shownBottom)
+}
+
+/** The name an exported history file is offered under. */
+private const val EXPORT_NAME = "ferryqr-history.json"
+
+/**
+ * Offers to export a history file that could not be read in full, once [show] says the history is
+ * read, so what it held can be recovered by hand; letting it go removes it. Closed without either,
+ * it comes back the next time history opens. [message] tells how an export went.
+ */
+@Composable
+private fun DamagedHistoryDialog(vm: HistoryViewModel, show: Boolean, message: (Int) -> Unit) {
+    val context = LocalContext.current
+    val haptics = rememberHaptics()
+    val scope = rememberCoroutineScope()
+    val damaged by vm.damaged.collectAsStateWithLifecycle()
+    var closed by rememberSaveable { mutableStateOf(false) }
+    val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val done = withContext(Dispatchers.IO) {
+                runCatching { context.contentResolver.openOutputStream(uri)?.use(vm::exportDamaged) }.getOrNull() == true
+            }
+            if (done) vm.forgetDamaged()
+            message(if (done) R.string.history_damaged_exported else R.string.history_damaged_export_failed)
+        }
+    }
+    if (!damaged || closed || !show) return
+    AlertDialog(
+        onDismissRequest = { closed = true },
+        icon = { Icon(painterResource(R.drawable.ic_warning), contentDescription = null) },
+        title = { Text(stringResource(R.string.history_damaged_title)) },
+        text = { Text(stringResource(R.string.history_damaged_body)) },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    haptics.tap()
+                    closed = true
+                    export.launch(EXPORT_NAME)
+                },
+                shapes = ButtonDefaults.shapes(),
+            ) { Text(stringResource(R.string.history_damaged_export)) }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = {
+                    haptics.tap()
+                    closed = true
+                    vm.forgetDamaged()
+                },
+                shapes = ButtonDefaults.shapes(),
+            ) { Text(stringResource(R.string.history_damaged_discard)) }
+        },
+    )
+}
+
+/** The dialog the page shows over its list, if any; [message] tells how an action went. */
+@Composable
+private fun HistoryDialogs(vm: HistoryViewModel, dialog: HistoryDialog?, message: (Int) -> Unit) {
+    val context = LocalContext.current
+    val haptics = rememberHaptics()
+    when (val shown = dialog) {
+        HistoryDialog.Clear -> AlertDialog(
+            onDismissRequest = { vm.show(null) },
+            icon = { Icon(painterResource(R.drawable.ic_delete_sweep), contentDescription = null) },
+            title = { Text(stringResource(R.string.history_clear_title)) },
+            text = { Text(stringResource(R.string.history_clear_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        haptics.confirm()
+                        vm.clear()
+                        message(R.string.history_cleared)
+                    },
+                    shapes = ButtonDefaults.shapes(),
+                ) { Text(stringResource(R.string.clear)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { haptics.tap(); vm.show(null) }, shapes = ButtonDefaults.shapes()) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
+        HistoryDialog.SuggestTiles -> AlertDialog(
+            onDismissRequest = { vm.show(null) },
+            icon = { Icon(painterResource(R.drawable.ic_view_quilt), contentDescription = null) },
+            title = { Text(stringResource(R.string.tiles_suggest_title)) },
+            text = { Text(stringResource(R.string.tiles_suggest_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        haptics.confirm()
+                        vm.useTiles()
+                    },
+                    shapes = ButtonDefaults.shapes(),
+                ) { Text(stringResource(R.string.tiles_suggest_use)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { haptics.tap(); vm.show(null) }, shapes = ButtonDefaults.shapes()) {
+                    Text(stringResource(R.string.tiles_suggest_keep))
+                }
+            },
+        )
+        is HistoryDialog.Name -> NameFavoriteDialog(
+            current = shown.entry.label ?: defaultTitle(context, shown.entry.text, shown.entry.format),
+            onDismiss = { vm.show(null) },
+            onName = { name -> vm.name(shown.entry, name) },
+        )
+        is HistoryDialog.Rename -> RenameDialog(
+            current = shown.entry.label ?: defaultTitle(context, shown.entry.text, shown.entry.format),
+            onDismiss = { vm.show(null) },
+            onRename = { name -> vm.rename(shown.entry, name) },
+        )
+        null -> Unit
+    }
+}
+
+/**
+ * How wide each favorite's tile is: the longer of its name and its kind, the two lines it shows,
+ * with what the list item adds beside them. Each tile is measured once for what it shows, so a
+ * favorite moved, renamed or added measures only itself again.
+ */
+@Composable
+private fun rememberTileWidths(favorites: List<HistoryEntry>, chrome: Int): Map<String, Int> {
+    val context = LocalContext.current
+    val typography = MaterialTheme.typography
+    val measurer = rememberTextMeasurer()
+    val measured = remember(typography, measurer, chrome) { HashMap<Triple<String, String, String?>, Int>() }
+    return remember(favorites, measured) {
+        val widths = favorites.associate { entry ->
+            entry.text to measured.getOrPut(Triple(entry.text, entry.format, entry.label)) {
+                val shown = presentationOf(context, entry)
+                val name = measurer.measure(shown.tileTitle, typography.bodyLarge, maxLines = 1, softWrap = false).size.width
+                val kind = measurer.measure(context.getString(shown.kind.label), typography.bodyMedium, maxLines = 1, softWrap = false)
+                    .size.width
+                max(name, kind) + chrome
+            }
+        }
+        // Only what is still shown stays measured.
+        val kept = favorites.mapTo(HashSet()) { Triple(it.text, it.format, it.label) }
+        measured.keys.retainAll(kept)
+        widths
+    }
 }

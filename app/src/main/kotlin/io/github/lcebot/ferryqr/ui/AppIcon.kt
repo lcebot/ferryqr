@@ -7,16 +7,23 @@ import android.graphics.Canvas
 import android.graphics.drawable.AdaptiveIconDrawable
 import android.graphics.drawable.Drawable
 import android.os.Build
+import android.util.LruCache
 import androidx.annotation.DrawableRes
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /** Rendered size of an app glyph; buttons draw it at 18 to 24dp, so this stays sharp at any density. */
 private const val GLYPH_PX = 96
@@ -36,12 +43,40 @@ private class Glyph(val image: ImageBitmap, val themed: Boolean)
 @Composable
 fun AppIcon(packageName: String, @DrawableRes fallback: Int, modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    val glyph = remember(packageName) { glyph(context, packageName) }
-    when {
-        glyph == null -> Icon(painterResource(fallback), contentDescription = null, modifier = modifier)
-        glyph.themed -> Icon(glyph.image, contentDescription = null, modifier = modifier)
-        else -> Image(glyph.image, contentDescription = null, modifier = modifier)
+    // Asking the package manager and drawing the icon happen off the main thread, once per app for
+    // the whole process; an icon not drawn yet takes its place empty and fades in.
+    val icon by produceState(glyphs.get(packageName)?.let { IconLoad.Found(it) } ?: IconLoad.Loading, packageName) {
+        // The same place may come to show another app's icon, which then starts from that app's own.
+        glyphs.get(packageName)?.let {
+            value = IconLoad.Found(it)
+            return@produceState
+        }
+        value = IconLoad.Loading
+        value = withContext(Dispatchers.IO) {
+            glyph(context, packageName)?.also { glyphs.put(packageName, it) }?.let { IconLoad.Found(it) } ?: IconLoad.Missing
+        }
     }
+    Crossfade(icon, animationSpec = MaterialTheme.motionScheme.defaultEffectsSpec(), label = "app-icon") { shown ->
+        when (shown) {
+            IconLoad.Loading -> Box(modifier)
+            IconLoad.Missing -> Icon(painterResource(fallback), contentDescription = null, modifier = modifier)
+            is IconLoad.Found ->
+                if (shown.glyph.themed) Icon(shown.glyph.image, contentDescription = null, modifier = modifier)
+                else Image(shown.glyph.image, contentDescription = null, modifier = modifier)
+        }
+    }
+}
+
+/** Glyphs drawn so far, by package; an app that is missing is asked again, as it may be installed meanwhile. */
+private val glyphs = LruCache<String, Glyph>(GLYPH_CACHE)
+
+/** Enough for every app the result cards, the create page and the ferry page offer. */
+private const val GLYPH_CACHE = 32
+
+private sealed interface IconLoad {
+    data object Loading : IconLoad
+    data object Missing : IconLoad
+    class Found(val glyph: Glyph) : IconLoad
 }
 
 private fun glyph(context: Context, packageName: String): Glyph? {

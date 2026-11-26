@@ -200,6 +200,7 @@
     <string name="card_raw">原文</string>
     <string name="app_not_installed">未安装</string>
     <string name="module_active">模块已生效</string>
+    <string name="module_checking">检查中</string>
     <string name="module_inactive">未在 LSPosed 中启用 FerryQR</string>
     <string name="module_out_of_scope">未在 LSPosed 中加入 FerryQR 的作用域</string>
     <string name="module_enabled">已启用。如果%1$s已经在运行，请重启一次。</string>
@@ -245,6 +246,12 @@
     <string name="history_clear_title">清空历史？</string>
     <string name="history_clear_body">除收藏外，所有历史记录都会被删除，无法恢复。</string>
     <string name="history_cleared">已清空历史</string>
+    <string name="history_damaged_title">部分历史记录无法读取</string>
+    <string name="history_damaged_body">历史记录文件已损坏，可以读取的条目已保留。导出原文件后可自行恢复其余条目。</string>
+    <string name="history_damaged_export">导出</string>
+    <string name="history_damaged_discard">舍弃</string>
+    <string name="history_damaged_exported">已导出原历史记录文件</string>
+    <string name="history_damaged_export_failed">无法导出历史记录文件</string>
     <string name="history_empty_title">暂无历史记录</string>
     <string name="history_empty_body">扫描过的二维码将保存在本地。可随时清空。</string>
     <string name="history_deleted">记录已删除</string>

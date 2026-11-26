@@ -4,8 +4,8 @@ import android.graphics.Bitmap
 import android.graphics.PointF
 import android.graphics.Rect
 import androidx.camera.core.ImageProxy
-import zxingcpp.BarcodeReader
 import kotlin.math.max
+import zxingcpp.BarcodeReader
 
 /** A region smaller than this is enlarged before a deep read, so its modules span several pixels. */
 private const val MIN_REGION_SIDE = 400

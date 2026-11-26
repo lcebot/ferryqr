@@ -13,6 +13,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
@@ -49,6 +50,34 @@ private const val REORDER_SCROLL_EASE = 10f
  * edges of the visible list, in the list's pixels.
  */
 internal class HeldReach(val top: Float, val bottom: Float, val above: Float, val below: Float)
+
+/**
+ * The favorites' contents in their order while one is being moved, before the order is kept. The
+ * list's rows and the tiles each move favorites through one, so both move them the same way.
+ */
+@Stable
+internal class FavoriteOrder private constructor(private val keys: SnapshotStateList<String>) : List<String> by keys {
+    constructor() : this(mutableStateListOf())
+
+    fun reset(order: List<String>) {
+        keys.clear()
+        keys.addAll(order)
+    }
+
+    /** Moves [key] to [to]; false when it is not there, [to] is outside the order, or it is already there. */
+    fun move(key: String, to: Int): Boolean {
+        val from = keys.indexOf(key)
+        if (from < 0 || to !in keys.indices || to == from) return false
+        keys.add(to, keys.removeAt(from))
+        return true
+    }
+
+    /** Brings the order in line with [current]: one added joins at the top, where it would go anyway, and one removed leaves. */
+    fun sync(current: List<String>) {
+        keys.retainAll(current.toSet())
+        keys.addAll(0, current.filter { it !in keys })
+    }
+}
 
 /** A way of reordering the favorites in the history list, which scrolls for the favorite held. */
 internal interface FavoritesReorder {
@@ -133,7 +162,7 @@ internal class ListReorderState(
 ) : FavoritesReorder {
     var active by mutableStateOf(false)
         private set
-    val order = mutableStateListOf<String>()
+    val order = FavoriteOrder()
     var dragging by mutableStateOf<String?>(null)
         private set
     var dragOffset by mutableFloatStateOf(0f)
@@ -145,8 +174,7 @@ internal class ListReorderState(
 
     /** Starts reordering [favorites] as they are. */
     fun start(favorites: List<HistoryEntry>) {
-        order.clear()
-        order.addAll(favorites.map { it.text })
+        order.reset(favorites.map { it.text })
         active = true
     }
 
@@ -162,9 +190,7 @@ internal class ListReorderState(
      */
     fun sync(favorites: List<HistoryEntry>) {
         if (!active) return
-        val current = favorites.map { it.text }
-        order.retainAll(current.toSet())
-        order.addAll(0, current.filter { it !in order })
+        order.sync(favorites.map { it.text })
     }
 
     fun startDrag(text: String) {
@@ -192,10 +218,7 @@ internal class ListReorderState(
 
     /** Moves [text] to [to] in the order, for screen readers, which move a row at a time. */
     fun move(text: String, to: Int) {
-        val from = order.indexOf(text)
-        if (from < 0 || to !in order.indices) return
-        order.add(to, order.removeAt(from))
-        haptics.step()
+        if (order.move(text, to)) haptics.step()
     }
 
     /**
@@ -219,13 +242,13 @@ internal class ListReorderState(
         when {
             next != null && middle > next.offset + next.size / 2 -> {
                 pin()
-                order.add(index + 1, order.removeAt(index))
+                order.move(text, index + 1)
                 dragOffset -= (next.offset + next.size) - (row.offset + row.size)
                 haptics.step()
             }
             previous != null && middle < previous.offset + previous.size / 2 -> {
                 pin()
-                order.add(index - 1, order.removeAt(index))
+                order.move(text, index - 1)
                 dragOffset += row.offset - previous.offset
                 haptics.step()
             }

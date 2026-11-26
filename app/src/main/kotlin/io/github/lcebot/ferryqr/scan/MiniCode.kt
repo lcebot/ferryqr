@@ -4,14 +4,8 @@ import android.graphics.Bitmap
 import android.graphics.PointF
 import android.graphics.Rect
 import io.github.lcebot.wxcode.LumaImage
-import io.github.lcebot.wxcode.WxDecoder
 import io.github.lcebot.wxcode.Point as CodePoint
-import org.opencv.core.Mat
-import org.opencv.core.MatOfPoint
-import org.opencv.core.MatOfPoint2f
-import org.opencv.core.Point
-import org.opencv.core.Size
-import org.opencv.imgproc.Imgproc
+import io.github.lcebot.wxcode.WxDecoder
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
@@ -20,6 +14,12 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
+import org.opencv.core.Mat
+import org.opencv.core.MatOfPoint
+import org.opencv.core.MatOfPoint2f
+import org.opencv.core.Point
+import org.opencv.core.Size
+import org.opencv.imgproc.Imgproc
 
 /** How far the code's marks reach, as a share of the eyes' circumradius, with a margin around them. */
 private const val EXTENT = 1.45f

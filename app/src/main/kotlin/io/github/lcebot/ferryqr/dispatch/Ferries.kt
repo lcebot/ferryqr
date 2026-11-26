@@ -10,7 +10,6 @@ import io.github.lcebot.ferryqr.content.OtpPayload
 import io.github.lcebot.ferryqr.content.Payload
 import io.github.lcebot.ferryqr.content.SchemePayload
 import io.github.lcebot.ferryqr.content.WebPayload
-import io.github.lcebot.ferryqr.openin.OpenInApps
 import io.github.lcebot.ferryqr.openin.OpenInModule
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow

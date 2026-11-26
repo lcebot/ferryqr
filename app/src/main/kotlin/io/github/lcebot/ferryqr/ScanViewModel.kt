@@ -1,6 +1,5 @@
 package io.github.lcebot.ferryqr
 
-import android.app.Activity
 import android.app.Application
 import android.graphics.Bitmap
 import android.net.Uri
@@ -8,8 +7,11 @@ import androidx.annotation.StringRes
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.lcebot.ferryqr.content.Classifier
-import io.github.lcebot.ferryqr.dispatch.Cards
+import io.github.lcebot.ferryqr.content.Payload
+import io.github.lcebot.ferryqr.dispatch.CardFactory
+import io.github.lcebot.ferryqr.dispatch.CardSource
 import io.github.lcebot.ferryqr.dispatch.Dispatcher
+import io.github.lcebot.ferryqr.dispatch.LaunchPlan
 import io.github.lcebot.ferryqr.dispatch.Origin
 import io.github.lcebot.ferryqr.dispatch.ResultCard
 import io.github.lcebot.ferryqr.history.HistoryStore
@@ -17,19 +19,22 @@ import io.github.lcebot.ferryqr.openin.OpenInModule
 import io.github.lcebot.ferryqr.scan.AutoZoom
 import io.github.lcebot.ferryqr.scan.Detection
 import io.github.lcebot.ferryqr.scan.Engines
-import io.github.lcebot.ferryqr.scan.isLocatedMiniCode
-import io.github.lcebot.ferryqr.scan.locatedCrop
 import io.github.lcebot.ferryqr.scan.LiveAnalyzer
 import io.github.lcebot.ferryqr.scan.Sighting
 import io.github.lcebot.ferryqr.scan.StillResult
+import io.github.lcebot.ferryqr.scan.isLocatedMiniCode
+import io.github.lcebot.ferryqr.scan.locatedCrop
 import io.github.lcebot.ferryqr.scan.readStillImage
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -51,15 +56,23 @@ sealed interface Phase {
         val frameHeight: Int,
         val wasShown: Boolean = false,
     ) : Phase
-    data class Routing(val detection: Detection, val origin: Origin) : Phase
+    /** A code is on its way: to the app it belongs to, or to its card. */
+    data object Routing : Phase
 
     /**
      * Probably a mini program code, located but not read, shown as [crop]. [live] is set when the
      * camera saw it, so WeChat's own scanner can still see it too.
      */
     data class MiniCodeFound(val crop: Bitmap, val live: Boolean) : Phase
-    data class Showing(val card: ResultCard) : Phase
+    /** [card] is built for [source], and again for it whenever an app's readiness changes. */
+    data class Showing(val card: ResultCard, val source: CardSource) : Phase
 }
+
+/**
+ * A code that may go straight to its app, which only an activity can start: the screen tries
+ * [plan] on its way, and shows [card] when no app takes the code.
+ */
+class RouteEffect(val payload: Payload, val origin: Origin, val plan: LaunchPlan, val card: ResultCard)
 
 class ScanViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -91,26 +104,40 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         onSighting = { _sighting.value = it },
         onHit = ::onLiveHit,
         onMiniCode = { crop ->
-            showingLiveMiniCode = true
-            _phase.value = Phase.MiniCodeFound(crop, live = true)
+            val found = Phase.MiniCodeFound(crop, live = true)
+            if (_phase.compareAndSet(Phase.Scanning, found)) {
+                showingLiveMiniCode = true
+                viewModelScope.launch { foundMiniCode(found) }
+            } else {
+                crop.recycle()
+            }
         },
     )
 
     init {
         viewModelScope.launch { OpenInModule.refresh() }
+        // What a card offers depends on which apps take content, which the framework may report
+        // only after the card is up.
+        viewModelScope.launch { OpenInModule.readyApps.drop(1).collect { rebuildShown() } }
     }
 
+    /**
+     * Takes a live hit only while the scanner is still scanning: a frame read just as an image from
+     * the gallery started decoding, or as anything else took over, is dropped with its frame.
+     */
     private fun onLiveHit(frame: Bitmap, detections: List<Detection>, alreadyShown: Set<String>) {
-        _phase.value = if (detections.size == 1) {
+        val next = if (detections.size == 1) {
             val single = detections.single()
-            Phase.Confirming(single, frame.width, frame.height, single.text in alreadyShown).also { frame.recycle() }
+            Phase.Confirming(single, frame.width, frame.height, single.text in alreadyShown)
         } else {
             Phase.Picking(frame, detections, alreadyShown)
         }
+        val taken = _phase.compareAndSet(Phase.Scanning, next)
+        if (!taken || next is Phase.Confirming) frame.recycle()
     }
 
     fun confirmed(detection: Detection) {
-        if (_phase.value is Phase.Confirming) _phase.value = Phase.Routing(detection, Origin.CAMERA)
+        if (_phase.value is Phase.Confirming) route(detection, Origin.CAMERA)
     }
 
     fun pick(detection: Detection) {
@@ -119,32 +146,64 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         if (detection.isLocatedMiniCode) {
             // A mini program code that could not be read is offered to WeChat as its picture.
             val crop = picking?.frame?.let { detection.locatedCrop(it) }
-            if (crop != null) _phase.value = Phase.MiniCodeFound(crop, live = origin == Origin.CAMERA) else resume()
+            if (crop != null) foundMiniCode(Phase.MiniCodeFound(crop, live = origin == Origin.CAMERA)) else resume()
             return
         }
-        _phase.value = Phase.Routing(detection, origin)
+        route(detection, origin)
     }
+
+    private val _routes = Channel<RouteEffect>(Channel.BUFFERED)
 
     /**
-     * Takes a code that was read where it goes: it is kept in history, handed straight to the app
-     * it belongs to when one takes it, and otherwise shown as a card, built off the main thread since
-     * it asks the package manager which apps there are. True when another app took the code, so the
-     * scanner can close. [activity] starts the other app and is not kept.
+     * Codes on their way, each to be tried once by the screen on the main thread. Kept until the
+     * screen takes them, so a code routed while the activity is made again is still tried once.
      */
-    suspend fun route(activity: Activity, routing: Phase.Routing): Boolean {
-        val detection = routing.detection
+    val routes = _routes.receiveAsFlow()
+
+    /**
+     * Takes a code that was read where it goes: it is kept in history at once, then its way to its
+     * app and its card are worked out off the main thread, since both ask the package manager, and
+     * handed to the screen to try.
+     */
+    private fun route(detection: Detection, origin: Origin) {
+        _phase.value = Phase.Routing
         history.record(detection)
-        val payload = Classifier.classify(detection.text, detection.format)
-        if (Dispatcher.autoLaunch(activity, payload, routing.origin)) return true
-        val card = withContext(Dispatchers.Default) { Cards.build(activity, payload, detection.format, routing.origin) }
-        if (_phase.value == routing) _phase.value = Phase.Showing(card)
-        return false
+        val app = getApplication<Application>()
+        viewModelScope.launch {
+            val source = CardSource.Read(detection.text, detection.format, origin)
+            val payload = Classifier.classify(detection.text, detection.format)
+            val (plan, card) = withContext(Dispatchers.Default) {
+                Dispatcher.plan(app, payload) to CardFactory.build(app, source)
+            }
+            shownSource = source
+            _routes.send(RouteEffect(payload, origin, plan, card))
+        }
     }
 
-    /** Shows the card for a mini program code that was located but not read. */
-    suspend fun showMiniCode(activity: Activity, found: Phase.MiniCodeFound) {
-        val card = withContext(Dispatchers.Default) { Cards.miniProgram(activity, found.crop, live = found.live) }
-        if (_phase.value == found) _phase.value = Phase.Showing(card)
+    /** No app took the routed code, so its card shows. */
+    fun show(effect: RouteEffect) {
+        val source = shownSource ?: return
+        if (_phase.value == Phase.Routing) _phase.value = Phase.Showing(effect.card, source)
+    }
+
+    /** The source of the card being routed or shown, for building it again. */
+    private var shownSource: CardSource? = null
+
+    /** A mini program code located but not read: its card is built off the main thread, then shown. */
+    private fun foundMiniCode(found: Phase.MiniCodeFound) {
+        _phase.value = found
+        val source = CardSource.LocatedMini(found.crop, found.live)
+        viewModelScope.launch {
+            val card = withContext(Dispatchers.Default) { CardFactory.build(getApplication(), source) }
+            if (_phase.value == found) _phase.value = Phase.Showing(card, source)
+        }
+    }
+
+    /** Builds the card shown again for the apps ready now, keeping what it is shown for. */
+    private suspend fun rebuildShown() {
+        val showing = _phase.value as? Phase.Showing ?: return
+        val card = withContext(Dispatchers.Default) { CardFactory.build(getApplication(), showing.source) }
+        if (_phase.value === showing) _phase.value = Phase.Showing(card, showing.source)
     }
 
     fun resume() {
@@ -192,14 +251,14 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                     0 -> {
                         val crop = read.miniCodes.firstOrNull()?.crop(read.frame)
                         if (crop != null) {
-                            _phase.value = Phase.MiniCodeFound(crop, live = false)
+                            foundMiniCode(Phase.MiniCodeFound(crop, live = false))
                         } else {
                             message(R.string.no_code_found)
                             resume()
                         }
                     }
                     1 -> {
-                        _phase.value = Phase.Routing(read.detections.single(), Origin.IMAGE)
+                        route(read.detections.single(), Origin.IMAGE)
                     }
                     else -> {
                         _phase.value = Phase.Picking(read.frame, read.detections, origin = Origin.IMAGE)

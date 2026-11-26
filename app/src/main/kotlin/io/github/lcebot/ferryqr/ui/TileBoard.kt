@@ -1,83 +1,23 @@
-@file:OptIn(ExperimentalMaterial3ExpressiveApi::class)
-
 package io.github.lcebot.ferryqr.ui
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.AnimationVector4D
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.VectorConverter
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
-import androidx.compose.foundation.interaction.DragInteraction
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.calculateEndPadding
-import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.Icon
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
-import androidx.compose.material3.LocalTextStyle
-import androidx.compose.material3.MaterialShapes
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.toShape
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.SideEffect
+import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.Layout
-import androidx.compose.ui.layout.Placeable
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalLayoutDirection
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.CustomAccessibilityAction
-import androidx.compose.ui.semantics.customActions
-import androidx.compose.ui.semantics.onLongClick
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.LineBreak
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Constraints
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.unit.LayoutDirection
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.lerp
-import io.github.lcebot.ferryqr.R
-import io.github.lcebot.ferryqr.content.Classifier
-import io.github.lcebot.ferryqr.dispatch.Cards
 import io.github.lcebot.ferryqr.history.HistoryEntry
-import kotlin.math.ceil
-import kotlin.math.max
-import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import androidx.compose.foundation.lazy.LazyListLayoutInfo
 
 /**
  * What the tiles are laid out from: their contents in order, how wide each one's own content makes
@@ -107,7 +47,7 @@ internal data class TileInputs(
 @Stable
 internal class TileBoard(private val haptics: Haptics) : FavoritesReorder {
     /** The favorites' contents in the order the tiles show them while one is in hand. */
-    val order = mutableStateListOf<String>()
+    val order = FavoriteOrder()
 
     /** Every favorite shown and not yet faded out, so one that leaves can fade where it was. */
     val retained = mutableStateMapOf<String, HistoryEntry>()
@@ -207,8 +147,7 @@ internal class TileBoard(private val haptics: Haptics) : FavoritesReorder {
         settling = null
         val arrangement = arrange()
         val spot = arrangement.byKey[tile] ?: return
-        order.clear()
-        order.addAll(keys)
+        order.reset(keys)
         key = tile
         val rect = arrangement.rectOf(spot, heights)
         at = rect.topLeft
@@ -247,8 +186,7 @@ internal class TileBoard(private val haptics: Haptics) : FavoritesReorder {
         if (hover == null) return
         val next = keys.filter { it != tile }.toMutableList().apply { add(hover.at, tile) }
         if (next == keys) return
-        order.clear()
-        order.addAll(next)
+        order.reset(next)
         // Until the history is composed again, the next move must already see the new order.
         keys = next
         haptics.step()

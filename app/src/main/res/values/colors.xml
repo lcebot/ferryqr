@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The window behind a page, in the colour of the surface the page draws, so nothing of another
+     colour shows while a page opens or a back gesture reveals its edges. -->
+<resources>
+    <color name="page_background">#FFFEF7FF</color>
+</resources>

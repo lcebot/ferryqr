@@ -9,30 +9,21 @@ import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
-import androidx.compose.foundation.interaction.DragInteraction
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
-import androidx.compose.material3.LocalTextStyle
-import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -40,7 +31,6 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
@@ -49,16 +39,13 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.Placeable
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
@@ -67,15 +54,11 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.lerp
 import io.github.lcebot.ferryqr.R
-import io.github.lcebot.ferryqr.content.Classifier
-import io.github.lcebot.ferryqr.dispatch.Cards
 import io.github.lcebot.ferryqr.history.HistoryEntry
-import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /**
@@ -214,10 +197,20 @@ internal fun FavoriteTiles(
         return spot.row < rowsShown
     }
 
+    /** Lets go of everything kept for a tile that has left, here and on the board; tiles leave only this way. */
     fun forgetTile(tile: String) {
         board.forget(tile)
         shown.remove(tile)
+        motions.remove(tile)
         swipes.remove(tile)
+    }
+
+    // A tile swiped away and deleted waits where it flew to while undoing can bring it back, and
+    // is let go once that chance has passed.
+    LaunchedEffect(pendingUndo) {
+        board.retained.keys
+            .filter { it !in presentKeys && it !in pendingUndo && swipes[it]?.acting == true }
+            .forEach(::forgetTile)
     }
 
     /** How far a tile swiped toward [side] travels to leave past the edge of the favorites. */
@@ -255,6 +248,8 @@ internal fun FavoriteTiles(
                             // One swiped away has already left the screen. Deleted, it waits there
                             // while undoing can bring it back; taken out of the favorites, it goes.
                             gone && swipe.acting -> {
+                                // What the swipe showed behind it fades before the tile's place is let go.
+                                swipe.backdrop.animateTo(0f, showSpec)
                                 progress.snap(false)
                                 if (tile !in undoable) forgetTile(tile)
                             }
@@ -322,7 +317,10 @@ internal fun FavoriteTiles(
                             swipe.armed,
                             swipe.becomesFavorite,
                             shape,
-                            Modifier.matchParentSize().graphicsLayer { translationX = magnet.backdrop.value.value },
+                            Modifier.matchParentSize().graphicsLayer {
+                                translationX = magnet.backdrop.value.value
+                                alpha = swipe.backdrop.value
+                            },
                         )
                         val moreLabel = stringResource(R.string.entry_more)
                         val earlier = stringResource(R.string.favorite_move_earlier)

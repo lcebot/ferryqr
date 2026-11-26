@@ -23,22 +23,14 @@ import androidx.compose.foundation.gestures.DraggableState
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
-import androidx.compose.material3.SwipeToDismissBoxValue
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.derivedStateOf
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.pointer.util.VelocityTracker1D
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalLayoutDirection
-import androidx.compose.ui.unit.LayoutDirection
-import io.github.lcebot.ferryqr.history.HistoryEntry
-import kotlin.math.max
-import kotlin.math.sign
-import kotlinx.coroutines.Job
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -48,11 +40,20 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.util.VelocityTracker1D
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import io.github.lcebot.ferryqr.history.HistoryEntry
 import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.pow
+import kotlin.math.sign
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -387,6 +388,12 @@ internal class EntrySwipe {
         internal set
 
     /**
+     * How much of what the swipe shows behind the entry is in view: it fades out once an action
+     * has taken the entry away, and fades in as undoing brings the entry flying back over it.
+     */
+    val backdrop = Animatable(1f)
+
+    /**
      * What a favorite swipe will do, fixed when it starts, so an entry sliding back after the
      * change still shows the change it made rather than the opposite one.
      */
@@ -435,7 +442,7 @@ internal fun rememberEntrySwipe(
     val haptics = rememberHaptics()
     val swipeHaptics = rememberSwipeHaptics(haptics)
     val swipe = remember { EntrySwipe() }
-    swipe.rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     val density = LocalDensity.current
     val detachAt = with(density) { DETACH_AT.toPx() }
     val attachAt = with(density) { ATTACH_AT.toPx() }
@@ -467,6 +474,7 @@ internal fun rememberEntrySwipe(
         if (swipe.direction == SwipeToDismissBoxValue.Settled) swipe.becomesFavorite = !entry.favorite
     }
 
+    val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
     val current by rememberUpdatedState(entry)
     val delete by rememberUpdatedState(onDelete)
     val favorite by rememberUpdatedState(onFavorite)
@@ -496,71 +504,83 @@ internal fun rememberEntrySwipe(
         }
     }
 
-    swipe.onStart = {
-        // An entry caught while it moves is swiped on from where it is.
-        swipe.release?.cancel()
-        swipe.acting = false
-        shift.held = false
-        shift.value.updateBounds(null, null)
-        swipe.tracker.resetTracking()
-        val from = shift.value.value
-        if (from != 0f) shift.animateWith(quick, shift.value.velocity) else shift.stopAnimating()
-        val swiped = Pull(entry.text, group, place, swipe.rtl).apply { finger = from }
-        swipe.pull = swiped
-        list.pull = swiped
-    }
-
-    swipe.onReturn = {
-        swipe.release?.cancel()
-        swipe.release = list.scope.launch {
-            shift.held = true
-            shift.value.updateBounds(null, null)
-            shift.value.animateTo(0f, settle)
+    // Handed to the swipe once the composition they come from is kept, never while it is composed.
+    SideEffect {
+        swipe.rtl = rtl
+        swipe.onStart = {
+            // An entry caught while it moves is swiped on from where it is.
+            swipe.release?.cancel()
+            list.scope.launch { swipe.backdrop.snapTo(1f) }
             swipe.acting = false
             shift.held = false
+            shift.value.updateBounds(null, null)
+            swipe.tracker.resetTracking()
+            val from = shift.value.value
+            if (from != 0f) shift.animateWith(quick, shift.value.velocity) else shift.stopAnimating()
+            val swiped = Pull(entry.text, group, place, swipe.rtl).apply { finger = from }
+            swipe.pull = swiped
+            list.pull = swiped
         }
-    }
 
-    swipe.onStop = { velocity ->
-        val swiped = swipe.pull
-        if (swiped != null) {
-            val detached = swiped.phase == PullPhase.Detached
-            val side = sign(swiped.finger)
-            val fast = abs(velocity) >= dismissVelocity
-            // A loose entry acts unless flung back; an attached one only when flung on.
-            val acts = side != 0f && if (detached) !(fast && sign(velocity) != side) else fast && sign(velocity) == side
-            swiped.releaseVelocity = velocity
-            swiped.dismissing = acts
-            swiped.phase = PullPhase.Released
-            // From here the release moves the entry, and the spring that followed the finger must not step it.
-            shift.held = true
+        swipe.onReturn = {
+            swipe.release?.cancel()
             swipe.release = list.scope.launch {
-                try {
-                    if (acts) {
-                        if (!detached) swipeHaptics.threshold()
-                        swipe.acting = true
-                        val speed = if (detached) max(minDismissVelocity, abs(velocity)) else abs(velocity)
-                        // Aimed past where it has left and stopped there, so the action follows at
-                        // once rather than once the spring has come to rest there.
-                        val edge = distance(side)
-                        if (edge > 0f) shift.value.updateBounds(-edge, edge)
-                        shift.value.animateTo(side * edge * FLY_PAST, settle, side * speed)
-                        if ((side > 0f) != swipe.rtl) {
-                            favorite(current, !current.favorite)
-                            if (!leaves) {
-                                if (list.pull === swiped) list.pull = null
-                                shift.value.animateTo(0f, settle)
-                                swipe.acting = false
+                launch {
+                    swipe.backdrop.snapTo(0f)
+                    swipe.backdrop.animateTo(1f, fade)
+                }
+                shift.held = true
+                shift.value.updateBounds(null, null)
+                shift.value.animateTo(0f, settle)
+                swipe.acting = false
+                shift.held = false
+            }
+        }
+
+        swipe.onStop = { velocity ->
+            val swiped = swipe.pull
+            if (swiped != null) {
+                val detached = swiped.phase == PullPhase.Detached
+                val side = sign(swiped.finger)
+                val fast = abs(velocity) >= dismissVelocity
+                // A loose entry acts unless flung back; an attached one only when flung on.
+                val acts = side != 0f && if (detached) !(fast && sign(velocity) != side) else fast && sign(velocity) == side
+                swiped.releaseVelocity = velocity
+                swiped.dismissing = acts
+                swiped.phase = PullPhase.Released
+                // From here the release moves the entry, and the spring that followed the finger must not step it.
+                shift.held = true
+                swipe.release = list.scope.launch {
+                    try {
+                        if (acts) {
+                            if (!detached) swipeHaptics.threshold()
+                            swipe.acting = true
+                            val speed = if (detached) max(minDismissVelocity, abs(velocity)) else abs(velocity)
+                            // Aimed past where it has left and stopped there, so the action follows at
+                            // once rather than once the spring has come to rest there.
+                            val edge = distance(side)
+                            if (edge > 0f) shift.value.updateBounds(-edge, edge)
+                            shift.value.animateTo(side * edge * FLY_PAST, settle, side * speed)
+                            if ((side > 0f) != swipe.rtl) {
+                                favorite(current, !current.favorite)
+                                if (!leaves) {
+                                    if (list.pull === swiped) list.pull = null
+                                    shift.value.animateTo(0f, settle)
+                                    swipe.acting = false
+                                } else {
+                                    swipe.backdrop.animateTo(0f, fade)
+                                }
+                            } else {
+                                delete(current)
+                                swipe.backdrop.animateTo(0f, fade)
                             }
                         } else {
-                            delete(current)
+                            shift.value.animateTo(0f, settle, velocity)
                         }
-                    } else {
-                        shift.value.animateTo(0f, settle, velocity)
+                    } finally {
+                        if (list.pull === swiped) list.pull = null
+                        if (swipe.pull === swiped) swipe.pull = null
                     }
-                } finally {
-                    if (list.pull === swiped) list.pull = null
-                    if (swipe.pull === swiped) swipe.pull = null
                 }
             }
         }

@@ -20,10 +20,15 @@ fun ImageProxy.toUprightBitmap(): Bitmap {
     val crop = cropRect
     val cropped = if (crop.left == 0 && crop.top == 0 && crop.width() == raw.width && crop.height() == raw.height) raw
     else Bitmap.createBitmap(raw, crop.left, crop.top, crop.width(), crop.height())
+    // Each step leaves a whole frame behind, several megabytes, so it goes at once rather than
+    // waiting for the collector several times a second.
+    if (cropped !== raw) raw.recycle()
     val rotation = imageInfo.rotationDegrees
     if (rotation == 0) return cropped
     val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
-    return Bitmap.createBitmap(cropped, 0, 0, cropped.width, cropped.height, matrix, true)
+    return Bitmap.createBitmap(cropped, 0, 0, cropped.width, cropped.height, matrix, true).also {
+        if (it !== cropped) cropped.recycle()
+    }
 }
 
 fun decodeStill(context: Context, uri: Uri): Bitmap? = try {

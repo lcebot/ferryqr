@@ -1,15 +1,15 @@
 // No opt-in: ToggleButton and the connected button shapes are stable APIs.
 package io.github.lcebot.ferryqr.ui
 
-import androidx.compose.animation.togetherWith
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.SizeTransform
-import androidx.compose.animation.AnimatedContent
 import android.content.Context
 import android.icu.text.Collator
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -30,6 +30,7 @@ import androidx.compose.material3.ToggleButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -46,6 +47,7 @@ import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -67,6 +69,8 @@ import io.github.lcebot.ferryqr.openin.ModuleState
 import io.github.lcebot.ferryqr.openin.OpenInApps
 import io.github.lcebot.ferryqr.openin.OpenInModule
 import io.github.lcebot.ferryqr.openin.Strategy
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /** How a code reaches an app's scanner, in the terms the settings use. */
 private enum class Method(@StringRes val label: Int, @StringRes val description: Int) {
@@ -217,9 +221,10 @@ private fun AppRow(
                     // The module's state arrives after the page opens, and its status fades in over
                     // the one shown until then, in its colour and wording together.
                     val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+                    val resize = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
                     AnimatedContent(
                         targetState = status to working,
-                        transitionSpec = { (fadeIn(fade) togetherWith fadeOut(fade)) using SizeTransform(clip = false) },
+                        transitionSpec = { (fadeIn(fade) togetherWith fadeOut(fade)) using SizeTransform(clip = false) { _, _ -> resize } },
                         label = "app-status",
                     ) { (text, on) ->
                         Text(
@@ -250,7 +255,7 @@ private fun AppSettingItem(app: AppSetting, shape: Shape) {
     val context = LocalContext.current
     val haptics = rememberHaptics()
     val name = stringResource(app.name)
-    val installed = remember(app.pkg) { Launch.isInstalled(context, app.pkg) }
+    val installed = rememberOnResume { Launch.isInstalled(it, app.pkg) }
     val state by OpenInModule.state(app.pkg).collectAsStateWithLifecycle()
     val cameraFeedSetting = remember(app.pkg) { AppSettings.of(context).cameraFeed(app.pkg) }
     val cameraFeed by cameraFeedSetting.flow.collectAsStateWithLifecycle()
@@ -259,6 +264,7 @@ private fun AppSettingItem(app: AppSetting, shape: Shape) {
     val status = when {
         !installed -> stringResource(R.string.app_not_installed)
         else -> when (state) {
+            ModuleState.Unknown -> stringResource(R.string.module_checking)
             ModuleState.Inactive -> stringResource(R.string.module_inactive)
             ModuleState.OutOfScope -> stringResource(R.string.module_out_of_scope)
             ModuleState.Enabled -> stringResource(R.string.module_enabled, name)
@@ -307,7 +313,7 @@ private fun DefaultAppItem(app: DefaultApp, shape: Shape) {
     val handling = rememberOnResume { app.handling(it) }
     val context = LocalContext.current
     val status = when (handling) {
-        is Handling.App -> stringResource(R.string.default_opens_in, Launch.appLabel(context, handling.pkg) ?: handling.pkg)
+        is Handling.App -> stringResource(R.string.default_opens_in, remember(handling.pkg) { Launch.appLabel(context, handling.pkg) } ?: handling.pkg)
         Handling.Asks -> stringResource(R.string.default_asks)
         Handling.None -> stringResource(R.string.default_none)
     }
@@ -326,10 +332,16 @@ private fun FeatureIcon(@DrawableRes icon: Int) {
 @Composable
 private fun <T> rememberOnResume(read: (Context) -> T): T {
     val context = LocalContext.current
+    // Read once at once, so the row opens with its answer rather than changing to it, and again
+    // off the main thread each time the page comes back, since each read asks the package manager.
     var value by remember { mutableStateOf(read(context)) }
+    var resumes by remember { mutableIntStateOf(0) }
     LifecycleResumeEffect(Unit) {
-        value = read(context)
+        resumes++
         onPauseOrDispose {}
+    }
+    LaunchedEffect(resumes) {
+        if (resumes > 1) value = withContext(Dispatchers.IO) { read(context) }
     }
     return value
 }

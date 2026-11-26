@@ -2,7 +2,10 @@ package io.github.lcebot.ferryqr.scan
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Rect
 import android.net.Uri
+import kotlin.math.max
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -46,4 +49,21 @@ suspend fun readStillImage(context: Context, uri: Uri, zxing: ZxingEngine, wecha
             StillResult.Read(frame, detections + survey.located.map { it.asLocatedDetection(frame.width, frame.height) })
         }
     }
+}
+
+/** Margin around a code's thumbnail, as a share of the code's longer side. */
+private const val THUMBNAIL_MARGIN = 0.15f
+
+/** The code's own region of [frame] with a little margin, or null when its position is unknown. */
+fun Detection.thumbnail(frame: Bitmap): Bitmap? {
+    if (corners.isEmpty()) return null
+    val margin = max(bounds.width(), bounds.height()) * THUMBNAIL_MARGIN
+    val region = Rect(
+        (bounds.left - margin).roundToInt(),
+        (bounds.top - margin).roundToInt(),
+        (bounds.right + margin).roundToInt(),
+        (bounds.bottom + margin).roundToInt(),
+    )
+    if (!region.intersect(0, 0, frame.width, frame.height) || region.isEmpty) return null
+    return Bitmap.createBitmap(frame, region.left, region.top, region.width(), region.height())
 }

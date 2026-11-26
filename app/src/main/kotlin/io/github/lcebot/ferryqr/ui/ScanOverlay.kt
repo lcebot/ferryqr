@@ -4,13 +4,13 @@ package io.github.lcebot.ferryqr.ui
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.VectorConverter
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.VectorConverter
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -80,13 +80,15 @@ private const val HIDE_DELAY_MS = 250L
  */
 @Composable
 fun ScanOverlay(
-    sighting: Sighting?,
+    sighting: () -> Sighting?,
     lookingCloser: Boolean,
     confirming: Phase.Confirming?,
     onConfirmed: (Detection) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     BoxWithConstraints(modifier) {
+        // Read here rather than by the caller, so only the overlay follows the code frame by frame.
+        val sighting = sighting()
         val density = LocalDensity.current
         val viewWidth = constraints.maxWidth.toFloat()
         val viewHeight = constraints.maxHeight.toFloat()

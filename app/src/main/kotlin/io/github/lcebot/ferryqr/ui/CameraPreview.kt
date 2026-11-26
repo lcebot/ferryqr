@@ -32,7 +32,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,6 +55,8 @@ import kotlin.math.ln
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /** 1080p keeps small and distant codes readable while zxing-cpp stays fast on the luma plane. */
@@ -193,7 +194,6 @@ fun CameraPreview(
     val surface = request ?: return
     val transformer = remember { MutableCoordinateTransformer() }
     var tap by remember { mutableStateOf<FocusTap?>(null) }
-    val held by autoZoom.tapFocus.collectAsState()
     Box(modifier) {
         CameraXViewfinder(
             surfaceRequest = surface,
@@ -226,7 +226,7 @@ fun CameraPreview(
                     }
                 },
         )
-        FocusBox(tap, held)
+        FocusBox(tap, autoZoom.tapFocus)
     }
 }
 
@@ -251,7 +251,7 @@ private val FOCUS_BOX_TICK = 6.dp
  * lets go of that focus, whatever the reason.
  */
 @Composable
-private fun FocusBox(tap: FocusTap?, held: Boolean) {
+private fun FocusBox(tap: FocusTap?, held: StateFlow<Boolean>) {
     val alpha = remember { Animatable(0f) }
     val scale = remember { Animatable(1f) }
     val spatial = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
@@ -264,10 +264,11 @@ private fun FocusBox(tap: FocusTap?, held: Boolean) {
         alpha.snapTo(0f)
         scale.snapTo(FOCUS_BOX_ENTER_SCALE)
         launch { scale.animateTo(1f, spatial) }
-        alpha.animateTo(1f, appear)
-    }
-    LaunchedEffect(held) {
-        if (!held) alpha.animateTo(0f, disappear)
+        launch { alpha.animateTo(1f, appear) }
+        // Waits on the focus itself rather than on what the page last saw of it, so a focus let go
+        // before the page saw it held still fades the box.
+        held.first { !it }
+        alpha.animateTo(0f, disappear)
     }
     val at = tap?.at ?: return
     Canvas(

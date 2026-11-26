@@ -28,6 +28,7 @@ import kotlin.coroutines.EmptyCoroutineContext
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 
 /** A cold app registers its receiver only once its Application exists, so handoffs are retried. */
@@ -36,8 +37,14 @@ private const val HANDOFF_WINDOW_MS = 6_000L
 
 private const val IMAGE_QUALITY = 92
 
+/** How long after FerryQR starts the framework may still be handing its service over. */
+private const val BIND_GRACE_MS = 2000L
+
 /** What the LSPosed framework reports about the module in one app. */
 enum class ModuleState {
+    /** Not known yet: the framework may still be handing its service over as FerryQR starts. */
+    Unknown,
+
     /** No framework service reached FerryQR: the module is not enabled, or LSPosed is not running. */
     Inactive,
 
@@ -70,9 +77,19 @@ enum class ModuleState {
  */
 object OpenInModule {
     private val main = Handler(Looper.getMainLooper())
+
+    /**
+     * When FerryQR started listening for the framework, which hands its service over shortly after,
+     * if at all; until [BIND_GRACE_MS] have passed, no service yet is not yet an answer.
+     */
+    private val listeningSince = SystemClock.elapsedRealtime()
     private val service = MutableStateFlow<XposedService?>(null)
     private val states = ConcurrentHashMap<String, MutableStateFlow<ModuleState>>()
     private val readies = ConcurrentHashMap<String, MutableStateFlow<Boolean>>()
+    private val _readyApps = MutableStateFlow<Set<String>>(emptySet())
+
+    /** The apps that take content from FerryQR, for whatever is built from all of them at once, such as a card. */
+    val readyApps: StateFlow<Set<String>> = _readyApps.asStateFlow()
 
     /**
      * Every question to the framework runs here, one at a time and off the main thread: each is a
@@ -94,7 +111,7 @@ object OpenInModule {
         })
     }
 
-    private fun stateFlow(pkg: String) = states.computeIfAbsent(pkg) { MutableStateFlow(ModuleState.Inactive) }
+    private fun stateFlow(pkg: String) = states.computeIfAbsent(pkg) { MutableStateFlow(ModuleState.Unknown) }
 
     private fun readyFlow(pkg: String) = readies.computeIfAbsent(pkg) { MutableStateFlow(false) }
 
@@ -137,8 +154,12 @@ object OpenInModule {
             // The service went away or was replaced while it was asked; the newer update decides.
             if (service.value !== bound) return
         }
+        val waiting = BIND_GRACE_MS - (SystemClock.elapsedRealtime() - listeningSince)
+        // Still within the time the framework takes to hand its service over, so ask again after it.
+        if (bound == null && waiting > 0) main.postDelayed({ framework.dispatch(EmptyCoroutineContext) { update() } }, waiting)
         for (app in OpenInApps.all) {
             val state = when {
+                bound == null && waiting > 0 -> ModuleState.Unknown
                 bound == null -> ModuleState.Inactive
                 app.pkg !in scope -> ModuleState.OutOfScope
                 else -> when (running[app.pkg]) {
@@ -150,6 +171,7 @@ object OpenInModule {
             stateFlow(app.pkg).value = state
             readyFlow(app.pkg).value = state.takesContent
         }
+        _readyApps.value = OpenInApps.all.filter { readyFlow(it.pkg).value }.mapTo(HashSet()) { it.pkg }
     }
 
     /**

@@ -205,6 +205,7 @@
     <string name="card_raw">Raw content</string>
     <string name="app_not_installed">Not installed</string>
     <string name="module_active">Module active</string>
+    <string name="module_checking">Checking…</string>
     <string name="module_inactive">FerryQR is not enabled in LSPosed</string>
     <string name="module_out_of_scope">Not in the FerryQR scope in LSPosed</string>
     <string name="module_enabled">Enabled. If %1$s was already open, restart it once.</string>
@@ -251,6 +252,12 @@
     <string name="history_clear_title">Clear history?</string>
     <string name="history_clear_body">All history except favorites will be deleted. This cannot be undone.</string>
     <string name="history_cleared">History cleared</string>
+    <string name="history_damaged_title">Part of the history could not be read</string>
+    <string name="history_damaged_body">The history file is damaged. The entries that could be read are kept. Export the original file to recover the rest by hand.</string>
+    <string name="history_damaged_export">Export</string>
+    <string name="history_damaged_discard">Discard</string>
+    <string name="history_damaged_exported">Original history file exported</string>
+    <string name="history_damaged_export_failed">Could not export the history file</string>
     <string name="history_empty_title">No history yet</string>
     <string name="history_empty_body">Scanned codes are saved on this device only and can be cleared at any time.</string>
     <string name="history_deleted">Entry deleted</string>

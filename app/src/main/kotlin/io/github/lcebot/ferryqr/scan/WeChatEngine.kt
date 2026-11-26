@@ -7,6 +7,9 @@ import android.graphics.Rect
 import androidx.camera.core.ImageProxy
 import com.king.wechat.qrcode.WeChatQRCodeDetector
 import io.github.lcebot.wxcode.LumaImage
+import kotlin.math.hypot
+import kotlin.math.min
+import kotlin.math.sqrt
 import org.opencv.OpenCV
 import org.opencv.android.Utils
 import org.opencv.core.Core
@@ -18,9 +21,6 @@ import org.opencv.core.Size
 import org.opencv.dnn.Dnn
 import org.opencv.dnn.Net
 import org.opencv.imgproc.Imgproc
-import kotlin.math.hypot
-import kotlin.math.min
-import kotlin.math.sqrt
 
 /**
  * How hard a [WeChatEngine.survey] looks. The detector's input area decides how small a code it

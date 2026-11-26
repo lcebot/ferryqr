@@ -6,9 +6,9 @@ import android.graphics.RectF
 import android.os.SystemClock
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
-import org.opencv.core.Mat
 import kotlin.math.hypot
 import kotlin.math.max
+import org.opencv.core.Mat
 
 /**
  * While nothing is in view, the detector looks for codes zxing-cpp cannot see at this interval. It

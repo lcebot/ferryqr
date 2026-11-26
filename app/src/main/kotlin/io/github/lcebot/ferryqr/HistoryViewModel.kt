@@ -5,6 +5,10 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import io.github.lcebot.ferryqr.history.HistoryEntry
 import io.github.lcebot.ferryqr.history.HistoryStore
+import java.io.OutputStream
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -18,6 +22,11 @@ class HistoryLists(val all: List<HistoryEntry>) {
     val favorites: List<HistoryEntry> = HistoryStore.favoritesOf(all)
     val recent: List<HistoryEntry> = all.filterNot { it.favorite }
     val favoritesByKey: Map<String, HistoryEntry> = favorites.associateBy { it.text }
+
+    /** The other entries by the day they were scanned on, newest first, in the time zone of the phone. */
+    val days: Map<LocalDate, List<HistoryEntry>> = ZoneId.systemDefault().let { zone ->
+        recent.groupBy { Instant.ofEpochMilli(it.time).atZone(zone).toLocalDate() }
+    }
 }
 
 /** A dialog the history page shows over its list, kept across a configuration change. */
@@ -60,6 +69,14 @@ class HistoryViewModel(app: Application) : AndroidViewModel(app) {
      * where it flew to until then, so undoing flies it back into its place.
      */
     val pendingUndo: StateFlow<Set<String>> = _pendingUndo.asStateFlow()
+
+    /** Whether a history file that could not be read in full waits to be exported or let go. */
+    val damaged: StateFlow<Boolean> = store.damaged
+
+    /** Writes that file to [out]; false when that fails. Kept until [forgetDamaged]. */
+    fun exportDamaged(out: OutputStream): Boolean = store.exportDamaged(out)
+
+    fun forgetDamaged() = store.forgetDamaged()
 
     fun show(dialog: HistoryDialog?) {
         _dialog.value = dialog

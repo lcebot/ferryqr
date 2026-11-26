@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalMaterial3ExpressiveApi::class)
+
 package io.github.lcebot.ferryqr.ui
 
 import androidx.compose.foundation.layout.Arrangement
@@ -7,6 +9,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -50,7 +54,7 @@ fun PermissionPanel(openSettings: Boolean, onRequest: () -> Unit, modifier: Modi
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
-            Button(onClick = { haptics.tap(); onRequest() }) {
+            Button(onClick = { haptics.tap(); onRequest() }, shapes = ButtonDefaults.shapes()) {
                 Text(
                     stringResource(
                         if (openSettings) R.string.camera_permission_settings else R.string.camera_permission_grant

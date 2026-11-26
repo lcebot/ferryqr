@@ -3,14 +3,14 @@
 
 package io.github.lcebot.ferryqr.ui
 
-import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.animation.togetherWith
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.core.FiniteAnimationSpec
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.AnimatedContent
 import android.graphics.Bitmap
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -28,18 +28,19 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.SheetValue
 import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -49,9 +50,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import io.github.lcebot.ferryqr.R
@@ -122,6 +127,7 @@ fun FormatPickerSheet(
         )
         LazyVerticalGrid(
             columns = GridCells.Fixed(2),
+            modifier = Modifier.selectableGroup(),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -158,18 +164,20 @@ private fun FormatTile(type: CodeType, option: FormatOption?, selected: Boolean,
     val available = option?.problem == null
     val colors = MaterialTheme.colorScheme
     val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+    val textAlpha by animateFloatAsState(if (available) 1f else 0.38f, fade, label = "format-text")
     val previewColor by animateColorAsState(
         if (available) Color.White else colors.surfaceContainerHighest,
         MaterialTheme.motionScheme.defaultEffectsSpec(),
         label = "format-preview-color",
     )
     Surface(
+        selected = selected,
         onClick = onClick,
         enabled = option != null && available,
         shape = RoundedCornerShape(TILE_CORNER),
         color = colors.surfaceContainerHigh,
         border = if (selected) BorderStroke(2.dp, colors.primary) else null,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().semantics { role = Role.RadioButton },
     ) {
         Column(Modifier.padding(TILE_PADDING), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Box(
@@ -186,7 +194,7 @@ private fun FormatTile(type: CodeType, option: FormatOption?, selected: Boolean,
                 Text(
                     stringResource(type.label),
                     style = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier.weight(1f, fill = false).alpha(if (available) 1f else 0.38f),
+                    modifier = Modifier.weight(1f, fill = false).graphicsLayer { alpha = textAlpha },
                 )
                 if (original) {
                     Text(
@@ -207,7 +215,7 @@ private fun FormatTile(type: CodeType, option: FormatOption?, selected: Boolean,
                 stringResource(type.note),
                 style = MaterialTheme.typography.bodySmall,
                 color = colors.onSurfaceVariant,
-                modifier = Modifier.alpha(if (available) 1f else 0.38f),
+                modifier = Modifier.graphicsLayer { alpha = textAlpha },
             )
         }
     }

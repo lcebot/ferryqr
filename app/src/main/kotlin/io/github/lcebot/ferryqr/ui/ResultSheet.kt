@@ -7,33 +7,14 @@ package io.github.lcebot.ferryqr.ui
 import android.graphics.Bitmap
 import android.widget.Toast
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.systemBars
-import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.layout.LayoutCoordinates
-import androidx.compose.ui.layout.boundsInWindow
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalWindowInfo
-import androidx.compose.ui.text.font.FontFamily
-import io.github.lcebot.ferryqr.AppSettings
-import io.github.lcebot.ferryqr.LongCodeEnlarge
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import io.github.lcebot.ferryqr.dispatch.CardSection
-import io.github.lcebot.ferryqr.generate.CodeGenerator
-import io.github.lcebot.ferryqr.generate.CodeRules
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import io.github.lcebot.ferryqr.generate.CodeType
-import io.github.lcebot.ferryqr.scan.MINI_PROGRAM_FORMAT
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,11 +22,13 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -64,39 +47,67 @@ import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.Placeable
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.lcebot.ferryqr.AppSettings
+import io.github.lcebot.ferryqr.LongCodeEnlarge
 import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.dispatch.CardAction
+import io.github.lcebot.ferryqr.dispatch.CardSection
 import io.github.lcebot.ferryqr.dispatch.ResultCard
+import io.github.lcebot.ferryqr.generate.CodeGenerator
+import io.github.lcebot.ferryqr.generate.CodeRules
+import io.github.lcebot.ferryqr.generate.CodeType
+import io.github.lcebot.ferryqr.scan.MINI_PROGRAM_FORMAT
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
+/** With [closing] set, the sheet slides away as when dismissed, and then [onDismiss] follows. */
 @Composable
-fun ResultSheet(card: ResultCard, onDismiss: () -> Unit, onAction: (CardAction) -> Unit) {
+fun ResultSheet(card: ResultCard, onDismiss: () -> Unit, onAction: (CardAction) -> Unit, closing: Boolean = false) {
     val state = rememberBottomSheetState(
         initialValue = SheetValue.Hidden,
         enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded),
     )
+    val dismiss by rememberUpdatedState(onDismiss)
+    LaunchedEffect(closing) {
+        if (!closing) return@LaunchedEffect
+        state.hide()
+        dismiss()
+    }
     ModalSheet(onDismissRequest = onDismiss, sheetState = state) {
         ResultCardContent(
             card = card,
@@ -540,9 +551,10 @@ private fun CodeImage(
                 }
             }
             val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+            val resize = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
             AnimatedContent(
                 targetState = enlarged,
-                transitionSpec = { fadeIn(fade) togetherWith fadeOut(fade) },
+                transitionSpec = { (fadeIn(fade) togetherWith fadeOut(fade)) using SizeTransform { _, _ -> resize } },
                 label = "code-hint",
             ) { big ->
                 val hint = when {

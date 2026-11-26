@@ -5,9 +5,12 @@ import android.util.AtomicFile
 import io.github.lcebot.ferryqr.AppSettings
 import io.github.lcebot.ferryqr.content.Classifier
 import io.github.lcebot.ferryqr.content.sensitiveKind
+import io.github.lcebot.ferryqr.dispatch.Cards
 import io.github.lcebot.ferryqr.scan.Detection
 import io.github.lcebot.ferryqr.scan.isLocatedMiniCode
 import java.io.File
+import java.io.FileNotFoundException
+import java.io.OutputStream
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -73,9 +76,22 @@ class HistoryStore private constructor(private val context: Context) {
     /** The entries, newest first, or null while the file is still being read. */
     val entries: StateFlow<List<HistoryEntry>?> = _entries.asStateFlow()
 
+    /**
+     * The history file as it was when it could not be read in full, kept aside so it can still be
+     * exported for recovering what it held, until it is exported or let go. Saving goes on with the
+     * entries that could be read, so the app keeps working meanwhile.
+     */
+    private val unreadable = File(context.filesDir, "history.unreadable.json")
+
+    private val _damaged = MutableStateFlow(false)
+
+    /** Whether a history file that could not be read in full waits to be exported or let go. */
+    val damaged: StateFlow<Boolean> = _damaged.asStateFlow()
+
     init {
         scope.launch {
-            val read = read()
+            val read = runCatching { read() }.getOrDefault(emptyList())
+            _damaged.value = unreadable.exists()
             synchronized(lock) {
                 var current = read
                 pending.forEach { current = limited(it(current)) }
@@ -84,13 +100,31 @@ class HistoryStore private constructor(private val context: Context) {
                 if (current != read) saves.trySend(Unit)
             }
             // Shortcuts outlive the process, so they are brought in line with the file once it is read.
-            FavoriteShortcuts.update(context, favoritesOf(_entries.value.orEmpty()))
+            syncShortcuts(_entries.value.orEmpty())
             for (request in saves) {
                 val snapshot = _entries.value ?: continue
-                save(snapshot)
+                // One failed write leaves the next to try again, rather than ending saving for good.
+                runCatching { save(snapshot) }
                 val stale = synchronized(lock) { shortcutsStale.also { shortcutsStale = false } }
-                if (stale) FavoriteShortcuts.update(context, favoritesOf(snapshot))
+                if (stale) syncShortcuts(snapshot)
             }
+        }
+    }
+
+    private fun syncShortcuts(entries: List<HistoryEntry>) {
+        runCatching { FavoriteShortcuts.update(context, favoritesOf(entries)) }
+    }
+
+    /** Writes the history file that could not be read to [out], as it was; false when that fails. */
+    fun exportDamaged(out: OutputStream): Boolean = runCatching {
+        unreadable.inputStream().use { it.copyTo(out) }
+    }.isSuccess
+
+    /** Lets go of the history file that could not be read, once exported or no longer wanted. */
+    fun forgetDamaged() {
+        scope.launch {
+            unreadable.delete()
+            _damaged.value = false
         }
     }
 
@@ -131,7 +165,7 @@ class HistoryStore private constructor(private val context: Context) {
         val old = entries.find { it.text == text }
         // A new favorite goes to the top, above whatever order the user gave the others.
         val top = (entries.filter { it.favorite }.minOfOrNull { it.favoriteRank } ?: 0) - 1
-        val name = label?.trim()?.ifEmpty { null }
+        val name = label?.let { ownLabel(text, format, it) }
         when {
             old == null && favorite ->
                 listOf(HistoryEntry(text, format, now, favoritedAt = now, label = name, favoriteRank = top)) + entries
@@ -184,9 +218,27 @@ class HistoryStore private constructor(private val context: Context) {
         }
     }
 
-    /** A blank [label] removes the name, so the entry shows its content again. */
+    /** A [label] that is no name of the user's own, see [ownLabel], removes the name. */
     fun rename(text: String, label: String) = update { entries ->
-        entries.map { if (it.text == text) it.copy(label = label.trim().ifEmpty { null }) else it }
+        entries.map { if (it.text == text) it.copy(label = ownLabel(it.text, it.format, label)) else it }
+    }
+
+    /**
+     * [label] as a name the user gave the content, or null when it is none: blank, the content
+     * itself, or a title FerryQR shows for it anyway, as the naming dialog offers it to start
+     * from. Accepted unchanged, such a name changes nothing, so the content still counts as
+     * unnamed and goes on following its own title.
+     */
+    private fun ownLabel(text: String, format: String, label: String): String? {
+        val name = label.trim()
+        if (name.isEmpty() || name == text.trim()) return null
+        val payload = Classifier.classify(text, format)
+        val automatic = setOfNotNull(
+            Cards.shownText(context, payload),
+            Cards.titleOf(context, payload),
+            context.getString(Cards.kindOf(payload).label),
+        )
+        return name.takeIf { it !in automatic }
     }
 
     fun delete(entry: HistoryEntry) = update { entries -> entries.filter { it.text != entry.text } }
@@ -221,24 +273,44 @@ class HistoryStore private constructor(private val context: Context) {
         return if (dropped.isEmpty()) entries else entries.filterNot { it in dropped }
     }
 
-    private fun read(): List<HistoryEntry> =
-        try {
-            val array = JSONArray(String(file.readFully(), Charsets.UTF_8))
-            List(array.length()) { i ->
-                val o = array.getJSONObject(i)
-                HistoryEntry(
-                    text = o.getString("text"),
-                    format = o.optString("format"),
-                    time = o.getLong("time"),
-                    favoritedAt = o.optLong("favoritedAt"),
-                    label = o.optString("label").ifEmpty { null },
-                    shortcutAt = o.optLong("shortcutAt"),
-                    favoriteRank = o.optInt("favoriteRank"),
-                )
+    /**
+     * The entries in the file, an entry that cannot be read left out. A file that cannot be read
+     * in full is first set aside as it is, unless one already waits there, so the next save does
+     * not leave it lost.
+     */
+    private fun read(): List<HistoryEntry> {
+        val bytes = try {
+            file.readFully()
+        } catch (e: FileNotFoundException) {
+            return emptyList()
+        }
+        var whole = true
+        val entries = try {
+            val array = JSONArray(String(bytes, Charsets.UTF_8))
+            (0 until array.length()).mapNotNull { i ->
+                try {
+                    val o = array.getJSONObject(i)
+                    HistoryEntry(
+                        text = o.getString("text"),
+                        format = o.optString("format"),
+                        time = o.getLong("time"),
+                        favoritedAt = o.optLong("favoritedAt"),
+                        label = o.optString("label").ifEmpty { null },
+                        shortcutAt = o.optLong("shortcutAt"),
+                        favoriteRank = o.optInt("favoriteRank"),
+                    )
+                } catch (e: Exception) {
+                    whole = false
+                    null
+                }
             }
         } catch (e: Exception) {
+            whole = false
             emptyList()
         }
+        if (!whole && !unreadable.exists()) runCatching { unreadable.writeBytes(bytes) }
+        return entries
+    }
 
     private fun save(entries: List<HistoryEntry>) {
         val array = JSONArray()
