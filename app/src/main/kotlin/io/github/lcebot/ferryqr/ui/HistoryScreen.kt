@@ -213,7 +213,6 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
     fun showMessage(@StringRes message: Int) {
         note = Note(message)
     }
-    }
 
     // Made once for what they show, so rows that have not changed are not composed again.
     val shortcutsFull = favorites.count { it.shortcut } >= FavoriteShortcuts.MAX
