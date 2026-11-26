@@ -5,7 +5,12 @@
 package io.github.lcebot.ferryqr.ui
 
 import androidx.annotation.StringRes
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.material3.Label
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.SliderState
 import androidx.compose.runtime.mutableIntStateOf
 import kotlin.math.roundToInt
 import androidx.compose.foundation.background
@@ -269,7 +274,11 @@ private fun FavoriteSettings() {
             colors = settingColors(),
             contentPadding = SETTING_ROW_PADDING,
             supportingContent = {
-                Column(verticalArrangement = Arrangement.spacedBy(SETTING_CONTROL_GAP)) {
+                // The buttons keep the space from the title that controls keep from a description.
+                Column(
+                    modifier = Modifier.padding(top = SETTING_CONTROL_GAP),
+                    verticalArrangement = Arrangement.spacedBy(SETTING_CONTROL_GAP),
+                ) {
                     Row(
                         modifier = Modifier.fillMaxWidth().selectableGroup(),
                         horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
@@ -306,26 +315,53 @@ private fun FavoriteSettings() {
             shapes = ListItemDefaults.shapes(shape = segmentShape(1, 3)),
             colors = settingColors(),
             contentPadding = SETTING_ROW_PADDING,
-            trailingContent = { Text(rows.toString(), style = MaterialTheme.typography.labelLarge) },
             supportingContent = {
-                // Five values, so three stops between the ends.
+                // The slider runs from 0 to 1, a stop for each value between the ends. While held, its
+                // value indicator shows the value above the handle.
+                val first = AppSettings.FOLDED_ROWS.first
+                val span = AppSettings.FOLDED_ROWS.last - first
+                val slider = remember { SliderState(value = (rows - first).toFloat() / span, steps = span - 1) }
+                val interactions = remember { MutableInteractionSource() }
                 Slider(
-                    value = rows.toFloat(),
+                    state = slider,
                     onValueChange = { value ->
-                        val picked = value.roundToInt()
+                        slider.value = value
+                        val picked = first + (value * span).roundToInt()
                         if (picked != rows) {
                             haptics.step()
                             rows = picked
                             AppSettings.setFoldedRows(context, picked)
                         }
                     },
-                    valueRange = AppSettings.FOLDED_ROWS.first.toFloat()..AppSettings.FOLDED_ROWS.last.toFloat(),
-                    steps = AppSettings.FOLDED_ROWS.last - AppSettings.FOLDED_ROWS.first - 1,
+                    interactionSource = interactions,
+                    thumb = {
+                        Label(
+                            label = {
+                                PlainTooltip {
+                                    Text(rows.toString(), style = MaterialTheme.typography.labelLarge)
+                                }
+                            },
+                            interactionSource = interactions,
+                        ) {
+                            SliderDefaults.Thumb(interactionSource = interactions)
+                        }
+                    },
                     modifier = Modifier.padding(top = SETTING_CONTROL_GAP),
                 )
             },
         ) {
-            Text(stringResource(R.string.settings_folded_rows))
+            // At rest the value sits on the title's line as a list item's trailing supporting text,
+            // rather than in the trailing slot beside the slider, so the slider runs the row's full
+            // width. Figures of one width keep the title still as the value changes.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.settings_folded_rows), modifier = Modifier.weight(1f))
+                Text(
+                    rows.toString(),
+                    style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = SETTING_CONTROL_GAP),
+                )
+            }
         }
         SwitchItem(
             title = R.string.settings_name_favorites,

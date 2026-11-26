@@ -235,7 +235,7 @@
     <string name="favorite_layout_compact">Compact</string>
     <string name="favorite_layout_grid">Grid</string>
     <string name="favorite_layout_list_desc">Shows favorites as rows, like the rest of the history.</string>
-    <string name="favorite_layout_compact_desc">Shows favorites as tiles as wide as their text, as many to a row as fit, each row filled.</string>
+    <string name="favorite_layout_compact_desc">Shows favorites as tiles as wide as their text, as many to a row as fit.</string>
     <string name="favorite_layout_grid_desc">Shows favorites as tiles lined up in columns, each spanning as many columns as its text needs.</string>
     <string name="settings_folded_rows">Rows shown when folded</string>
     <string name="settings_name_favorites">Ask for a name</string>

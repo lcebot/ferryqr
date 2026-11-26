@@ -19,18 +19,12 @@ class TileArrangementTest {
     private val even = RowHeights(intArrayOf(10, 10), 2)
 
     @Test
-    fun compactRowsFillTheWidth() {
+    fun compactRowsKeepEachTileItsWidth() {
         val tiles = compact(listOf("a", "b", "c", "d"))
         // 30 and 40 fit with a gap; 50 more would not, so it starts the next row with 20.
         assertEquals(2, tiles.rows)
-        val first = tiles.spots.filter { it.row == 0 }
-        assertEquals(listOf("a", "b"), first.map { it.key })
-        assertEquals(100, first.last().x + first.last().width)
-        assertEquals(first[0].x + first[0].width + 2, first[1].x)
-        val second = tiles.spots.filter { it.row == 1 }
-        assertEquals(100, second.last().x + second.last().width)
-        // Each tile keeps at least its own width.
-        tiles.spots.forEach { assertTrue(it.width >= widths.getValue(it.key)) }
+        assertEquals(listOf("a", "b"), tiles.inRow(0).map { it.key })
+        assertEquals(listOf(0 to 30, 32 to 40, 0 to 50, 52 to 20), tiles.spots.map { it.x to it.width })
     }
 
     @Test
@@ -75,25 +69,30 @@ class TileArrangementTest {
     }
 
     @Test
-    fun aHeldTileGoesBeforeOrAfterTheTileItIsOver() {
+    fun aHeldTileTakesThePlaceOfTheTileItIsOver() {
         val keys = listOf("a", "b", "c", "d")
         val tiles = compact(keys)
-        val b = tiles.byKey.getValue("b")
-        // Held over the start half of "b", "d" goes before it; over its end half, after it.
-        assertEquals(1, tiles.targetFor("d", keys, Offset(b.x + 2f, 5f), tiles.rows, even))
-        assertEquals(2, tiles.targetFor("d", keys, Offset(b.x + b.width - 2f, 5f), tiles.rows, even))
-        // Over its own place, in the second row, it stays.
-        val d = tiles.byKey.getValue("d")
-        assertNull(tiles.targetFor("d", keys, Offset(d.x + 2f, 17f), tiles.rows, even))
+        // Anywhere over "b", "d" takes its place, and "b" moves aside toward where "d" was.
+        listOf(33f, 70f).forEach { x ->
+            val hover = tiles.hover("d", keys, Offset(x, 5f), tiles.rows, even)!!
+            assertEquals("b", hover.over)
+            assertEquals(1, hover.at)
+        }
+        // Over "c", "a" takes its place, and "b" and "c" move up toward where "a" was.
+        assertEquals(2, tiles.hover("a", keys, Offset(10f, 17f), tiles.rows, even)!!.at)
+        // Over its own place, it stays.
+        assertNull(tiles.hover("d", keys, Offset(60f, 17f), tiles.rows, even))
     }
 
     @Test
-    fun aHeldTileStaysWithinTheRowsShown() {
+    fun aHeldTilePastTheEndOfARowFollowsItsLast() {
         val keys = listOf("a", "b", "c", "d")
         val tiles = compact(keys)
-        // With one row shown, a finger far below still reads as the first row, here past the end
-        // of "b", so "a" follows it.
-        assertEquals(1, tiles.targetFor("a", keys, Offset(99f, 500f), 1, even))
+        val hover = tiles.hover("d", keys, Offset(90f, 5f), tiles.rows, even)!!
+        assertEquals("end:0", hover.over)
+        assertEquals(2, hover.at)
+        // With one row shown, a finger far below still reads as the first row.
+        assertEquals(1, tiles.hover("a", keys, Offset(99f, 500f), 1, even)!!.at)
     }
 
     @Test

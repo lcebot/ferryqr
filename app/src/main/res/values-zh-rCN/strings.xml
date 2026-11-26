@@ -230,7 +230,7 @@
     <string name="favorite_layout_compact">紧凑</string>
     <string name="favorite_layout_grid">网格</string>
     <string name="favorite_layout_list_desc">收藏与其他历史记录一样逐行显示。</string>
-    <string name="favorite_layout_compact_desc">以磁贴显示收藏，宽度随文字长短而定，每行放下尽可能多的磁贴并排满。</string>
+    <string name="favorite_layout_compact_desc">以磁贴显示收藏，宽度随文字长短而定，每行放下尽可能多的磁贴。</string>
     <string name="favorite_layout_grid_desc">以磁贴显示收藏，按列对齐，每个磁贴按文字长短占一列或多列。</string>
     <string name="settings_folded_rows">收起时显示的行数</string>
     <string name="settings_name_favorites">收藏时询问名称</string>
