@@ -6,6 +6,7 @@ import android.text.format.DateUtils
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SizeTransform
@@ -44,10 +45,10 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialShapes
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
@@ -65,6 +66,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -169,7 +171,8 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
     val subtitle: (@Composable () -> Unit)? = if (count == 0) {
         null
     } else {
-        { Text(pluralStringResource(R.plurals.history_count, count, count)) }
+        // The count changes as entries are deleted and brought back, with the title beside it kept still.
+        { Text(pluralStringResource(R.plurals.history_count, count, count), style = LocalTextStyle.current.withTabularFigures()) }
     }
 
     LaunchedEffect(openText) {
@@ -178,21 +181,57 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
         onOpened()
     }
 
+    // Only one snackbar shows at a time, so each deletion replaces the message with one counting
+    // every entry deleted since the chance to undo last passed, and one undo brings them all back.
+    // The message stays until it is acted on or closed with its button, as a snackbar with an
+    // action does. A message replaced, by this one or another, leaves the outcome to the newest.
+    val undoTurn = remember { intArrayOf(0) }
+    fun offerUndo() {
+        val deleted = vm.undoableCount
+        val turn = ++undoTurn[0]
+        scope.launch {
+            val result = snackbar.showLatest(
+                message = if (deleted == 1) {
+                    context.getString(R.string.history_deleted)
+                } else {
+                    context.resources.getQuantityString(R.plurals.history_deleted_count, deleted, deleted)
+                },
+                actionLabel = context.getString(R.string.undo),
+                withDismissAction = true,
+            )
+            if (turn != undoTurn[0]) return@launch
+            if (result == SnackbarResult.ActionPerformed) {
+                haptics.tap()
+                vm.undoDeletes()
+                // Rows brought back in view take up their swipes as they are laid out in the next
+                // frame; one out of view by then appears where it is once scrolled to, as any row.
+                withFrameNanos {}
+                withFrameNanos {}
+                magnetic.departed.clear()
+            } else {
+                magnetic.departed.clear()
+                vm.deletesDone()
+            }
+        }
+    }
+
     fun delete(entry: HistoryEntry) {
         haptics.confirm()
         vm.delete(entry)
+        offerUndo()
+    }
+
+    /**
+     * Shows [message] in place of any other, after which the offer to undo comes back while there
+     * are deletions it can still undo, so a message in between never takes that chance away.
+     */
+    fun showMessage(@StringRes message: Int) {
+        // With nothing left to undo, as after clearing, no row is to fly back with a swipe kept for it.
+        if (vm.undoableCount == 0) magnetic.departed.clear()
+        val turn = ++undoTurn[0]
         scope.launch {
-            val result = snackbar.showLatest(
-                message = context.getString(R.string.history_deleted),
-                actionLabel = context.getString(R.string.undo),
-                duration = SnackbarDuration.Short,
-            )
-            if (result == SnackbarResult.ActionPerformed) {
-                haptics.tap()
-                vm.undoDelete(entry)
-            } else {
-                vm.deleteDone(entry)
-            }
+            snackbar.showLatest(context.getString(message))
+            if (turn == undoTurn[0] && vm.undoableCount > 0) offerUndo()
         }
     }
 
@@ -213,7 +252,7 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
             onShortcut = { entry, on ->
                 haptics.toggle(on)
                 vm.setShortcut(entry, on)
-                if (on) scope.launch { snackbar.showLatest(context.getString(R.string.shortcut_added)) }
+                if (on) showMessage(R.string.shortcut_added)
             },
             shortcutsFull = shortcutsFull,
             onRename = { haptics.tap(); vm.show(HistoryDialog.Rename(it)) },
@@ -370,14 +409,16 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
                                             },
                                     )
                                 } else {
-                                    EntryRow(entry, FAVORITES_GROUP, index, shownFavorites.size, magnetic, actions, animateRow())
+                                    val back = remember { magnetic.departed.containsKey(entry.text) }
+                                    EntryRow(entry, FAVORITES_GROUP, index, shownFavorites.size, magnetic, actions, animateRow(flyingBack = back))
                                 }
                             }
                         }
                         groups.forEach { (day, items) ->
                             item(key = "header:$day") { DayHeader(day, items.first().time, animateRow()) }
                             itemsIndexed(items, key = { _, e -> rowKey(e.text) }) { index, entry ->
-                                EntryRow(entry, day, index, items.size, magnetic, actions, animateRow())
+                                val back = remember { magnetic.departed.containsKey(entry.text) }
+                                EntryRow(entry, day, index, items.size, magnetic, actions, animateRow(flyingBack = back))
                             }
                         }
                     }
@@ -397,18 +438,14 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
         }
     }
 
-    DamagedHistoryDialog(vm, show = lists != null) { message ->
-        scope.launch { snackbar.showLatest(context.getString(message)) }
-    }
+    DamagedHistoryDialog(vm, show = lists != null, message = ::showMessage)
 
-    HistoryDialogs(vm, dialog) { message -> scope.launch { snackbar.showLatest(context.getString(message)) } }
+    HistoryDialogs(vm, dialog, message = ::showMessage)
 
     // History stays open after a handoff, so returning to the app lands back on the list; the card
     // slides away as it would when dismissed rather than vanishing as the other app opens.
     var closing by remember(showing?.text) { mutableStateOf(false) }
-    val onResult = rememberActionResultHandler(onHandoff = { closing = true }) { message ->
-        scope.launch { snackbar.showLatest(context.getString(message)) }
-    }
+    val onResult = rememberActionResultHandler(onHandoff = { closing = true }, message = ::showMessage)
 
     showing?.let { entry ->
         key(entry.text) {
@@ -428,10 +465,14 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
     }
 }
 
-/** Rows and headers fade in and out and slide to their new places with the theme's motion. */
+/**
+ * Rows and headers fade in and out and slide to their new places with the theme's motion. A row
+ * [flyingBack] into its place, brought back by undo after it was swiped away, is in view as it comes
+ * rather than fading in.
+ */
 @Composable
-private fun LazyItemScope.animateRow(): Modifier = Modifier.animateItem(
-    fadeInSpec = MaterialTheme.motionScheme.defaultEffectsSpec(),
+private fun LazyItemScope.animateRow(flyingBack: Boolean = false): Modifier = Modifier.animateItem(
+    fadeInSpec = if (flyingBack) null else MaterialTheme.motionScheme.defaultEffectsSpec(),
     placementSpec = MaterialTheme.motionScheme.defaultSpatialSpec(),
     fadeOutSpec = MaterialTheme.motionScheme.defaultEffectsSpec(),
 )
@@ -474,6 +515,7 @@ private fun FavoritesHeader(
                     Text(
                         if (isFolded) pluralStringResource(R.plurals.favorites_show_more, hidden, hidden)
                         else stringResource(R.string.favorites_show_less),
+                        style = LocalTextStyle.current.withTabularFigures(),
                     )
                 }
                 Spacer(Modifier.width(ButtonDefaults.IconSpacing))

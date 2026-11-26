@@ -13,6 +13,7 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.expressiveLightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 
 @Composable
 fun FerryTheme(content: @Composable () -> Unit) {
@@ -30,3 +31,9 @@ fun FerryTheme(content: @Composable () -> Unit) {
         content = content,
     )
 }
+
+/**
+ * Figures of one width, for a number that changes while it is read, so the text around it keeps
+ * still as the digits change.
+ */
+fun TextStyle.withTabularFigures(): TextStyle = copy(fontFeatureSettings = "tnum")

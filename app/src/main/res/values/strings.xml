@@ -261,6 +261,10 @@
     <string name="history_empty_title">No history yet</string>
     <string name="history_empty_body">Scanned codes are saved on this device only and can be cleared at any time.</string>
     <string name="history_deleted">Entry deleted</string>
+    <plurals name="history_deleted_count">
+        <item quantity="one">%1$d entry deleted</item>
+        <item quantity="other">%1$d entries deleted</item>
+    </plurals>
     <string name="entry_more">More options</string>
 
     <string name="favorites_title">Favorites</string>

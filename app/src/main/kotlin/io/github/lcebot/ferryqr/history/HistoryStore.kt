@@ -243,10 +243,10 @@ class HistoryStore private constructor(private val context: Context) {
 
     fun delete(entry: HistoryEntry) = update { entries -> entries.filter { it.text != entry.text } }
 
-    /** Puts a deleted entry back where its time places it, unless the same content was scanned since. */
-    fun restore(entry: HistoryEntry) = update { entries ->
-        if (entries.any { it.text == entry.text }) entries
-        else (entries + entry).sortedByDescending { it.time }
+    /** Puts deleted entries back where their times place them, except content scanned again since. */
+    fun restore(deleted: List<HistoryEntry>) = update { entries ->
+        val present = entries.mapTo(HashSet()) { it.text }
+        (entries + deleted.filter { it.text !in present }).sortedByDescending { it.time }
     }
 
     /** Removes every entry that is not a favorite. */

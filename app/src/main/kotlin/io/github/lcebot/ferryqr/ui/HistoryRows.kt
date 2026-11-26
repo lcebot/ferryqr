@@ -39,6 +39,7 @@ import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -239,8 +240,8 @@ internal fun ReorderRow(
  * swipe toward the end makes it a favorite or stops it being one. A favorite swipe slides the row
  * back once done. The swipe works as a notification's does: the row follows the finger at half its
  * pace, pulling the rows around it, until it comes loose at [DETACH_AT] and follows the finger
- * itself. The swipe state lives only as long as the row, so an entry brought back by undo arrives
- * settled.
+ * itself. A row swiped away and deleted leaves its swipe with [list] while undoing can bring it
+ * back, and brought back, it flies back into its place from where it went, as a tile does.
  */
 @Composable
 internal fun EntryRow(
@@ -257,6 +258,7 @@ internal fun EntryRow(
     val density = LocalDensity.current
     val magnet = rememberRowMagnet(list, entry.text, group, index, with(density) { DETACH_AT.toPx() })
     var width by remember { mutableIntStateOf(0) }
+    val kept = remember { list.departed[entry.text] }
     val swipe = rememberEntrySwipe(
         entry = entry,
         group = group,
@@ -265,7 +267,16 @@ internal fun EntryRow(
         flyTo = { width.toFloat() },
         onDelete = actions.onDelete,
         onFavorite = actions.onFavorite,
+        kept = kept,
     )
+    DisposableEffect(swipe) {
+        onDispose { if (swipe.acting) list.departed[entry.text] = swipe }
+    }
+    LaunchedEffect(swipe) {
+        if (kept == null) return@LaunchedEffect
+        list.departed.remove(entry.text)
+        if (swipe.acting) swipe.comeBack()
+    }
     // What a swipe shows behind the row takes the row's own shape, rounding with it as it is pulled
     // and comes loose, so it matches the corners of the neighbours that round toward it.
     val shape = segmentShape(index, count, magnet.topStart.value.value, magnet.bottomStart.value.value)

@@ -62,11 +62,13 @@ class HistoryViewModel(app: Application) : AndroidViewModel(app) {
     private val _showing = MutableStateFlow<HistoryEntry?>(null)
     val showing: StateFlow<HistoryEntry?> = _showing.asStateFlow()
 
+    /** The entries deleted since the chance to undo last passed, which one undo brings back together. */
+    private val undoable = mutableListOf<HistoryEntry>()
     private val _pendingUndo = MutableStateFlow<Set<String>>(emptySet())
 
     /**
-     * Entries deleted while undoing can still bring them back. A tile swiped away waits out of sight
-     * where it flew to until then, so undoing flies it back into its place.
+     * Entries deleted while undoing can still bring them back. A tile or row swiped away waits out
+     * of sight where it flew to until then, so undoing flies it back into its place.
      */
     val pendingUndo: StateFlow<Set<String>> = _pendingUndo.asStateFlow()
 
@@ -91,19 +93,25 @@ class HistoryViewModel(app: Application) : AndroidViewModel(app) {
         store.find(text)?.let(::open)
     }
 
+    /** How many deleted entries one undo would bring back. */
+    val undoableCount: Int get() = undoable.size
+
     fun delete(entry: HistoryEntry) {
         store.delete(entry)
+        undoable += entry
         _pendingUndo.update { it + entry.text }
     }
 
-    fun undoDelete(entry: HistoryEntry) {
-        store.restore(entry)
-        _pendingUndo.update { it - entry.text }
+    /** Brings back every entry deleted since the chance to undo last passed. */
+    fun undoDeletes() {
+        store.restore(undoable.toList())
+        deletesDone()
     }
 
-    /** The chance to undo deleting [entry] has passed. */
-    fun deleteDone(entry: HistoryEntry) {
-        _pendingUndo.update { it - entry.text }
+    /** The chance to undo the deletions so far has passed. */
+    fun deletesDone() {
+        undoable.clear()
+        _pendingUndo.value = emptySet()
     }
 
     /** Makes [entry] a favorite or stops it being one; making it one asks for its name first where the settings say so and it has none. */
@@ -134,8 +142,10 @@ class HistoryViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setOrder(texts: List<String>) = store.setFavoriteOrder(texts)
 
+    /** Clears the history, which also ends the chance to undo earlier deletions. */
     fun clear() {
         store.clear()
+        deletesDone()
         _dialog.value = null
     }
 

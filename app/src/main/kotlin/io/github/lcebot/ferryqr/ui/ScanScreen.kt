@@ -68,6 +68,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
@@ -142,7 +143,9 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
     val zoomShown = rememberSteady(abs(zoom - 1f) >= 0.05f, showAfterMs = 0L, holdMs = ZOOM_HOLD_MS)
     val effects = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
     val spatial = MaterialTheme.motionScheme.defaultSpatialSpec<Float>()
-    val resize = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
+    val pillEffects = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
+    val pillSpatial = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
+    val pillResize = MaterialTheme.motionScheme.fastSpatialSpec<IntSize>()
 
     val camera = rememberCameraPermission(activity)
     val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -182,8 +185,10 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
                 ) {
                     if (camera.granted) {
                         // The hint gives way to the zoom pill, which is short, so both stay inside the
-                        // edges. The pill opens and closes its width together with the gap before it,
-                        // so the hint slides aside and back rather than jumping.
+                        // edges. The pill's place opens and closes together with the gap before it, so
+                        // the hint slides aside and back rather than jumping, while the pill itself
+                        // grows and fades in whole, its rounded ends never cut off by the opening place.
+                        // Both are small parts of the page, which the scheme's fast springs move.
                         Row(
                             modifier = Modifier.padding(horizontal = 24.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -198,8 +203,10 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
                             )
                             AnimatedVisibility(
                                 visible = zoomShown,
-                                enter = fadeIn(effects) + expandHorizontally(resize, expandFrom = Alignment.Start),
-                                exit = fadeOut(effects) + shrinkHorizontally(resize, shrinkTowards = Alignment.Start),
+                                enter = fadeIn(pillEffects) + scaleIn(pillSpatial) +
+                                    expandHorizontally(pillResize, expandFrom = Alignment.Start, clip = false),
+                                exit = fadeOut(pillEffects) + scaleOut(pillSpatial) +
+                                    shrinkHorizontally(pillResize, shrinkTowards = Alignment.Start, clip = false),
                             ) {
                                 ZoomPill(zoom, Modifier.padding(start = 8.dp))
                             }
@@ -409,8 +416,8 @@ private fun TorchButton(checked: Boolean, onCheckedChange: (Boolean) -> Unit, mo
 /** The hint under the camera; a new hint fades in over the old one as the pill takes its width. */
 @Composable
 private fun StatusPill(@StringRes text: Int, modifier: Modifier = Modifier) {
-    val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
-    val resize = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
+    val fade = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
+    val resize = MaterialTheme.motionScheme.fastSpatialSpec<IntSize>()
     PillSurface(modifier) {
         AnimatedContent(
             targetState = text,
@@ -423,9 +430,12 @@ private fun StatusPill(@StringRes text: Int, modifier: Modifier = Modifier) {
     }
 }
 
+/** The zoom, in figures of one width, so the pill and the hint beside it keep still as it changes. */
 @Composable
 private fun ZoomPill(zoom: Float, modifier: Modifier = Modifier) {
-    PillSurface(modifier) { PillText(stringResource(R.string.zoom_label, zoom)) }
+    PillSurface(modifier) {
+        PillText(stringResource(R.string.zoom_label, zoom), MaterialTheme.typography.labelLarge.withTabularFigures())
+    }
 }
 
 @Composable
@@ -440,10 +450,10 @@ private fun PillSurface(modifier: Modifier = Modifier, content: @Composable () -
 }
 
 @Composable
-private fun PillText(text: String) {
+private fun PillText(text: String, style: TextStyle = MaterialTheme.typography.labelLarge) {
     Text(
         text,
-        style = MaterialTheme.typography.labelLarge,
+        style = style,
         textAlign = TextAlign.Center,
         modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
     )

@@ -398,7 +398,7 @@ private fun FavoriteSettings() {
                                 ) {
                                     Text(
                                         rows.toString(),
-                                        style = MaterialTheme.typography.labelLarge.copy(fontFeatureSettings = "tnum"),
+                                        style = MaterialTheme.typography.labelLarge.withTabularFigures(),
                                         color = MaterialTheme.colorScheme.inverseOnSurface,
                                         textAlign = TextAlign.Center,
                                     )
@@ -420,7 +420,7 @@ private fun FavoriteSettings() {
                 Text(stringResource(R.string.settings_folded_rows), modifier = Modifier.weight(1f))
                 Text(
                     rows.toString(),
-                    style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                    style = MaterialTheme.typography.labelSmall.withTabularFigures(),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(start = SETTING_CONTROL_GAP),
                 )

@@ -125,6 +125,13 @@ internal class Pull(val key: Any, val group: Any, index: Int, val rtl: Boolean =
 @Stable
 internal class MagneticList(val scope: CoroutineScope) {
     var pull by mutableStateOf<Pull?>(null)
+
+    /**
+     * The swipes of rows swiped away and deleted, by content, kept while undoing can bring them
+     * back: a row brought back takes up its swipe again and flies back into its place from where it
+     * went, as a tile does.
+     */
+    val departed = HashMap<String, EntrySwipe>()
 }
 
 /**
@@ -426,7 +433,8 @@ internal class EntrySwipe {
  * The swipe of [entry], at [index] of [group] in [list]. Let go to act, it flies off toward the
  * side it was swiped to, aimed past the distance [flyTo] gives for that side and stopped there, so
  * the action follows as soon as it has left. A favorite swipe slides it back once done, unless
- * [leavesOnFavorite], as a favorite tile does that leaves the favorites.
+ * [leavesOnFavorite], as a favorite tile does that leaves the favorites. An entry composed again
+ * after it left goes on with the swipe it [kept].
  */
 @Composable
 internal fun rememberEntrySwipe(
@@ -438,10 +446,11 @@ internal fun rememberEntrySwipe(
     onDelete: (HistoryEntry) -> Unit,
     onFavorite: (HistoryEntry, Boolean) -> Unit,
     leavesOnFavorite: Boolean = false,
+    kept: EntrySwipe? = null,
 ): EntrySwipe {
     val haptics = rememberHaptics()
     val swipeHaptics = rememberSwipeHaptics(haptics)
-    val swipe = remember { EntrySwipe() }
+    val swipe = remember { kept ?: EntrySwipe() }
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     val density = LocalDensity.current
     val detachAt = with(density) { DETACH_AT.toPx() }

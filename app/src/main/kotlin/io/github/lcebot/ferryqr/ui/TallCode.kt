@@ -11,7 +11,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.unit.Dp
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
@@ -45,14 +44,9 @@ internal fun rememberTallCode(code: Bitmap, ratio: Float, draw: ((Float) -> Bitm
  * grow rather than a scaled picture; until that drawing is ready, [code] is scaled to fill.
  */
 @Composable
-internal fun FilledTallCode(
-    code: Bitmap,
-    draw: ((Float) -> Bitmap?)?,
-    modifier: Modifier,
-    filterQuality: FilterQuality = FilterQuality.Medium,
-) {
+internal fun FilledTallCode(code: Bitmap, draw: ((Float) -> Bitmap?)?, modifier: Modifier) {
     BoxWithConstraints(modifier) {
         val tall = rememberTallCode(code, tallRatio(maxHeight, maxWidth), draw) ?: code
-        PlainCode(tall, Modifier.fillMaxSize(), stretch = true, filterQuality = filterQuality)
+        PlainCode(tall, Modifier.fillMaxSize(), stretch = true)
     }
 }

@@ -448,11 +448,15 @@ fun GeneratorScreen(onBack: () -> Unit) {
                         // Where the code itself is drawn, which the enlarged code grows out of.
                         val bounds = Modifier.onGloballyPositioned { codeBounds = it.boundsInWindow() }
                         val bitmap = shown.code
-                        when {
-                            shown.look == CodeLook.TILTED && bitmap != null -> TiltedCode(bitmap, bounds.fillMaxSize())
-                            shown.look == CodeLook.STRETCHED && bitmap != null ->
-                                FilledTallCode(bitmap, drawTall, bounds.fillMaxSize(), FilterQuality.None)
-                            else -> CodePreview(bitmap, bounds.aspectRatio(1f, matchHeightConstraintsFirst = true))
+                        // The transition hands its content the area's exact size; inside a box the
+                        // square preview is free to be smaller, as large as the shorter side.
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            when {
+                                shown.look == CodeLook.TILTED && bitmap != null -> TiltedCode(bitmap, bounds.fillMaxSize())
+                                shown.look == CodeLook.STRETCHED && bitmap != null ->
+                                    FilledTallCode(bitmap, drawTall, bounds.fillMaxSize())
+                                else -> CodePreview(bitmap, bounds.aspectRatio(1f, matchHeightConstraintsFirst = true))
+                            }
                         }
                     }
                 }
@@ -776,16 +780,19 @@ private fun CodePreview(code: Bitmap?, modifier: Modifier = Modifier) {
         ) { code ->
             if (code != null) {
                 val image = remember(code) { code.asImageBitmap() }
-                Surface(shape = RoundedCornerShape(16.dp), color = Color.White) {
-                    Image(
-                        bitmap = image,
-                        contentDescription = null,
-                        contentScale = ContentScale.Fit,
-                        filterQuality = FilterQuality.None,
-                        modifier = Modifier
-                            .padding(8.dp)
-                            .aspectRatio(code.width.toFloat() / code.height),
-                    )
+                // Inside a box, so the white card takes the code's own shape rather than the area's size.
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Surface(shape = RoundedCornerShape(16.dp), color = Color.White) {
+                        Image(
+                            bitmap = image,
+                            contentDescription = null,
+                            contentScale = ContentScale.Fit,
+                            filterQuality = FilterQuality.None,
+                            modifier = Modifier
+                                .padding(8.dp)
+                                .aspectRatio(code.width.toFloat() / code.height),
+                        )
+                    }
                 }
             } else {
                 Column(

@@ -234,8 +234,7 @@ fun CodeOverlay(
                     // Sized to the code's own shape, so it grows from and back into the code it came from.
                     val aspect = code.width.toFloat() / code.height
                     val width = minOf(maxWidth, maxHeight * aspect)
-                    // One pixel per module, which only stays sharp unsmoothed.
-                    PlainCode(code, codeModifier.size(width, width / aspect), stretch = true, filterQuality = FilterQuality.None)
+                    PlainCode(code, codeModifier.size(width, width / aspect), stretch = true)
                 }
             }
             Text(
@@ -255,18 +254,20 @@ fun CodeOverlay(
 
 /**
  * A code drawn on white; [stretch] fills the area exactly, for a code drawn at the area's own
- * shape. A code of one pixel per module needs [FilterQuality.None] to keep its edges sharp; one
- * already scaled up reads better smoothed as it shrinks.
+ * shape. Drawn larger than its pixels, a code keeps the edges of its modules sharp only unsmoothed,
+ * since smoothing a few pixels per module across a whole screen blurs every edge; drawn smaller,
+ * smoothing keeps thin modules from dropping out.
  */
 @Composable
-internal fun PlainCode(code: Bitmap, modifier: Modifier, stretch: Boolean, filterQuality: FilterQuality = FilterQuality.Medium) {
+internal fun PlainCode(code: Bitmap, modifier: Modifier, stretch: Boolean) {
     val image = remember(code) { code.asImageBitmap() }
-    Box(modifier.clip(RoundedCornerShape(12.dp)).background(Color.White), contentAlignment = Alignment.Center) {
+    BoxWithConstraints(modifier.clip(RoundedCornerShape(12.dp)).background(Color.White), contentAlignment = Alignment.Center) {
+        val scale = minOf(constraints.maxWidth.toFloat() / code.width, constraints.maxHeight.toFloat() / code.height)
         Image(
             bitmap = image,
             contentDescription = null,
             contentScale = if (stretch) ContentScale.FillBounds else ContentScale.Fit,
-            filterQuality = filterQuality,
+            filterQuality = if (scale >= 1f) FilterQuality.None else FilterQuality.Medium,
             modifier = Modifier.fillMaxSize(),
         )
     }
