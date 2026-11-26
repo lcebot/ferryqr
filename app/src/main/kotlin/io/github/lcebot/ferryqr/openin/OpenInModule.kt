@@ -85,10 +85,12 @@ object OpenInModule {
     private val listeningSince = SystemClock.elapsedRealtime()
     private val service = MutableStateFlow<XposedService?>(null)
     private val states = ConcurrentHashMap<String, MutableStateFlow<ModuleState>>()
-    private val readies = ConcurrentHashMap<String, MutableStateFlow<Boolean>>()
     private val _readyApps = MutableStateFlow<Set<String>>(emptySet())
 
-    /** The apps that take content from FerryQR, for whatever is built from all of them at once, such as a card. */
+    /**
+     * The packages of the apps that take content from FerryQR, as [ModuleState.takesContent] says.
+     * Whatever depends on readiness is built from one value of it, so every part agrees.
+     */
     val readyApps: StateFlow<Set<String>> = _readyApps.asStateFlow()
 
     /**
@@ -113,16 +115,8 @@ object OpenInModule {
 
     private fun stateFlow(pkg: String) = states.computeIfAbsent(pkg) { MutableStateFlow(ModuleState.Unknown) }
 
-    private fun readyFlow(pkg: String) = readies.computeIfAbsent(pkg) { MutableStateFlow(false) }
-
     /** The module's state in [pkg]. Every call returns the same flow. */
     fun state(pkg: String): StateFlow<ModuleState> = stateFlow(pkg)
-
-    /**
-     * Whether [pkg] takes content from FerryQR, as [ModuleState.takesContent] says. Every call
-     * returns the same flow, so a composable collecting it is not restarted on recomposition.
-     */
-    fun ready(pkg: String): StateFlow<Boolean> = readyFlow(pkg)
 
     /**
      * Asks the framework again. The scope and the running apps change while FerryQR stays open, as
@@ -157,6 +151,7 @@ object OpenInModule {
         val waiting = BIND_GRACE_MS - (SystemClock.elapsedRealtime() - listeningSince)
         // Still within the time the framework takes to hand its service over, so ask again after it.
         if (bound == null && waiting > 0) main.postDelayed({ framework.dispatch(EmptyCoroutineContext) { update() } }, waiting)
+        val ready = HashSet<String>()
         for (app in OpenInApps.all) {
             val state = when {
                 bound == null && waiting > 0 -> ModuleState.Unknown
@@ -169,9 +164,9 @@ object OpenInModule {
                 }
             }
             stateFlow(app.pkg).value = state
-            readyFlow(app.pkg).value = state.takesContent
+            if (state.takesContent) ready += app.pkg
         }
-        _readyApps.value = OpenInApps.all.filter { readyFlow(it.pkg).value }.mapTo(HashSet()) { it.pkg }
+        _readyApps.value = ready
     }
 
     /**
@@ -206,7 +201,7 @@ object OpenInModule {
     private fun handoff(context: Context, pkg: String, content: (Intent) -> Unit) {
         // An app that does not take content only has its scanner opened, for the code to be scanned
         // again; an older module there is left alone rather than handed what it may misread.
-        if (!readyFlow(pkg).value) return
+        if (pkg !in _readyApps.value) return
         val app = context.applicationContext
         val id = SystemClock.elapsedRealtimeNanos()
         val giveUpAt = SystemClock.uptimeMillis() + HANDOFF_WINDOW_MS

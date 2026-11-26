@@ -19,15 +19,22 @@ import io.github.lcebot.ferryqr.generate.MiniCodeArt
  * What [Dispatcher.autoLaunch] works from: the apps the content goes to, in the order [Ferries.rank]
  * gives, and the picture a mini program code is handed over as. Working them out asks the package
  * manager and draws, so [Dispatcher.plan] runs off the main thread, and only starting an app is left
- * for the main thread.
+ * for the main thread. [ready] holds the packages of the apps that took content through the module
+ * when the plan was made. The launch goes by it as well, so a code goes the way its card was built for.
  */
-class LaunchPlan internal constructor(internal val ranked: List<Ferry>, internal val picture: Bitmap?)
+class LaunchPlan internal constructor(
+    internal val ranked: List<Ferry>,
+    internal val picture: Bitmap?,
+    internal val ready: Set<String>,
+)
 
 object Dispatcher {
 
-    fun plan(context: Context, payload: Payload): LaunchPlan = LaunchPlan(
-        ranked = if (payload is WebPayload || payload is SchemePayload) Ferries.rank(context, payload) else emptyList(),
+    /** [ready] holds the packages of the apps that take content through the module. */
+    fun plan(context: Context, payload: Payload, ready: Set<String>): LaunchPlan = LaunchPlan(
+        ranked = if (payload is WebPayload || payload is SchemePayload) Ferries.rank(context, payload, ready) else emptyList(),
         picture = (payload as? MiniProgramPayload)?.let { MiniCodeArt.draw(it.raw) },
+        ready = ready,
     )
 
     /**
@@ -38,30 +45,31 @@ object Dispatcher {
     fun autoLaunch(activity: Activity, payload: Payload, origin: Origin, plan: LaunchPlan): Boolean = when (payload) {
         // A link that several apps besides the browsers open goes to the system, which asks which
         // to use, unless it belongs to a general app.
-        is WebPayload -> ferry(activity, payload, origin, plan.ranked) {
+        is WebPayload -> ferry(activity, payload, origin, plan) {
             ActiveFerries.claimant(payload)?.general != true && Launch.nonBrowser(it, payload.url)
         }
         // The system also takes an app link that several apps open, or an intent URI's fallback page.
-        is SchemePayload -> ferry(activity, payload, origin, plan.ranked) { Launch.scheme(it, payload.uri, payload.scheme) }
+        is SchemePayload -> ferry(activity, payload, origin, plan) { Launch.scheme(it, payload.uri, payload.scheme) }
         is FidoPayload -> Launch.fido(activity, payload.raw)
         is EsimPayload -> Launch.esim(activity, payload.raw)
         is DppPayload -> Launch.dpp(activity, payload.raw)
         // Like any app link, it goes to the authenticator that registers the scheme.
         is OtpPayload -> Launch.scheme(activity, payload.raw, "otpauth")
         is MiniProgramPayload -> plan.picture?.let { picture ->
-            toOwner(activity, ActiveFerries.WECHAT, origin) { WeChat.openMiniProgram(it, payload.raw, picture) }
+            toOwner(activity, ActiveFerries.WECHAT, origin, plan.ready) { WeChat.openMiniProgram(it, payload.raw, picture) }
         } == true
         else -> false
     }
 
     /**
-     * Hands [payload] to the first of its apps, in the order [Ferries.rank] gives, that opens it.
-     * Only then does [system] get it, for the cases no one app stands for, and last an app that
-     * would only open its scanner, which [toOwner] limits to a code the camera still sees.
+     * Hands [payload] to the first of the [plan]'s apps, in the order [Ferries.rank] gives, that
+     * opens it. Only then does [system] get it, for the cases no one app stands for, and last an app
+     * that would only open its scanner, which [toOwner] limits to a code the camera still sees.
      */
-    private fun ferry(activity: Activity, payload: Payload, origin: Origin, ranked: List<Ferry>, system: (Activity) -> Boolean): Boolean {
-        return ranked.any { it.ready && it.open(activity, payload.raw) } || system(activity) ||
-            ranked.any { ferry -> !ferry.ready && toOwner(activity, ferry, origin) { ferry.open(it, payload.raw) } }
+    private fun ferry(activity: Activity, payload: Payload, origin: Origin, plan: LaunchPlan, system: (Activity) -> Boolean): Boolean {
+        val ready = plan.ready
+        return plan.ranked.any { it.isReady(ready) && it.open(activity, payload.raw) } || system(activity) ||
+            plan.ranked.any { ferry -> !ferry.isReady(ready) && toOwner(activity, ferry, origin, ready) { ferry.open(it, payload.raw) } }
     }
 
     /**
@@ -70,10 +78,11 @@ object Dispatcher {
      * so the card shows it with whatever can be done instead. One case still goes straight on: a
      * code the camera still sees. The app's scanner opens for a second scan, which a toast asks
      * for, since the scanner alone would not say why it is there. A handoff through the module
-     * announces itself once the app takes it.
+     * announces itself once the app takes it. [ready] holds the packages of the apps that take
+     * content through the module.
      */
-    private fun toOwner(activity: Activity, owner: Ferry, origin: Origin, open: (Activity) -> Boolean): Boolean {
-        if (owner.ready) return open(activity)
+    private fun toOwner(activity: Activity, owner: Ferry, origin: Origin, ready: Set<String>, open: (Activity) -> Boolean): Boolean {
+        if (owner.isReady(ready)) return open(activity)
         if (origin != Origin.CAMERA || !open(activity)) return false
         val app = activity.applicationContext
         // The application context, since the scanner closes as the other app opens.

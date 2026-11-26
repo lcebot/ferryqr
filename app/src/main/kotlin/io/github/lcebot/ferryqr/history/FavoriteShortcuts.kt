@@ -12,8 +12,7 @@ import androidx.core.graphics.createBitmap
 import androidx.core.graphics.drawable.IconCompat
 import io.github.lcebot.ferryqr.HistoryActivity
 import io.github.lcebot.ferryqr.MainActivity
-import io.github.lcebot.ferryqr.content.Classifier
-import io.github.lcebot.ferryqr.dispatch.Cards
+import io.github.lcebot.ferryqr.dispatch.EntryNames
 
 /** Adaptive icon canvas and the glyph inside it, sized like the launcher's own 108 by 108 dp grid. */
 private const val ICON_SIZE = 216
@@ -66,9 +65,9 @@ object FavoriteShortcuts {
     private fun idOf(text: String) = "favorite-${text.hashCode().toUInt().toString(16)}-${text.length}"
 
     private fun shortcut(context: Context, entry: HistoryEntry, rank: Int): ShortcutInfoCompat {
-        val payload = Classifier.classify(entry.text, entry.format)
-        val kind = Cards.kindOf(payload)
-        val title = entry.label ?: Cards.titleOf(context, payload) ?: context.getString(kind.label)
+        val names = EntryNames(context, entry.text, entry.format, entry.label)
+        val kind = names.kind
+        val title = names.shortTitle
         // History opens above the scanner, so going back from it leads there as usual.
         val scanner = Intent(context, MainActivity::class.java)
             .setAction(Intent.ACTION_MAIN)

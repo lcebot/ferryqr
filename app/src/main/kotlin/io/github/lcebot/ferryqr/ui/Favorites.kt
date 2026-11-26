@@ -2,7 +2,6 @@
 
 package io.github.lcebot.ferryqr.ui
 
-import android.content.Context
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedContent
@@ -45,13 +44,8 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import io.github.lcebot.ferryqr.AppSettings
 import io.github.lcebot.ferryqr.R
-import io.github.lcebot.ferryqr.content.Classifier
-import io.github.lcebot.ferryqr.content.WebPayload
-import io.github.lcebot.ferryqr.dispatch.Cards
-import io.github.lcebot.ferryqr.dispatch.Titles
-import io.github.lcebot.ferryqr.history.HistoryEntry
+import io.github.lcebot.ferryqr.dispatch.EntryNames
 import io.github.lcebot.ferryqr.history.HistoryStore
 import kotlinx.coroutines.flow.first
 
@@ -90,7 +84,7 @@ fun FavoriteToggle(
         checked = favorite,
         onCheckedChange = { on ->
             val label = entries?.find { it.text == text }?.label
-            if (on && AppSettings.of(context).namesFavorites.value && !hasTitle(context, text, format, label)) {
+            if (on && store.asksName(text, format, label)) {
                 haptics.tap()
                 naming = true
             } else {
@@ -107,7 +101,7 @@ fun FavoriteToggle(
     }
     if (naming) {
         NameFavoriteDialog(
-            current = entries?.find { it.text == text }?.label ?: defaultTitle(context, text, format),
+            current = EntryNames(context, text, format, entries?.find { it.text == text }?.label).shortTitle,
             onDismiss = { naming = false },
             onName = { name ->
                 store.setFavorite(text, format, true, name)
@@ -115,32 +109,6 @@ fun FavoriteToggle(
             },
         )
     }
-}
-
-/**
- * Whether content already has a name of its own: one the user gave it, or one it carries that tells
- * it apart from other content of its kind, as a boarding pass is named by its flight. Such content
- * is never asked for a name as it becomes a favorite. A name every code of a kind shares, such as a
- * passkey sign-in's, does not count, so such content is asked for one.
- */
-internal fun hasTitle(context: Context, text: String, format: String, label: String?): Boolean =
-    label != null || Titles.distinct(context, Classifier.classify(text, format)) != null
-
-/**
- * What a favorite tile shows: what history shows any entry as, its name or else the title its kind
- * gives it or else its content, except that a link without either shows only its host, which keeps
- * the tile short.
- */
-internal fun tileTitle(context: Context, entry: HistoryEntry): String {
-    entry.label?.let { return it }
-    val payload = Classifier.classify(entry.text, entry.format)
-    return Titles.of(context, payload) ?: (payload as? WebPayload)?.host ?: payload.raw
-}
-
-/** What a name starts from until the user gives one: the same short title a shortcut shows. */
-internal fun defaultTitle(context: Context, text: String, format: String): String {
-    val payload = Classifier.classify(text, format)
-    return Cards.titleOf(context, payload) ?: context.getString(Cards.kindOf(payload).label)
 }
 
 /**

@@ -15,7 +15,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.flow.update
 
 /** The history split the way its page shows it: favorites in their order, then the other entries. */
 class HistoryLists(val all: List<HistoryEntry>) {
@@ -27,6 +26,11 @@ class HistoryLists(val all: List<HistoryEntry>) {
     val days: Map<LocalDate, List<HistoryEntry>> = ZoneId.systemDefault().let { zone ->
         recent.groupBy { Instant.ofEpochMilli(it.time).atZone(zone).toLocalDate() }
     }
+}
+
+/** Entries deleted one after another, which one undo brings back together; [id] tells sessions apart. */
+data class UndoSession(val id: Long, val entries: List<HistoryEntry>) {
+    val texts: Set<String> = entries.mapTo(HashSet()) { it.text }
 }
 
 /** A dialog the history page shows over its list, kept across a configuration change. */
@@ -62,15 +66,15 @@ class HistoryViewModel(app: Application) : AndroidViewModel(app) {
     private val _showing = MutableStateFlow<HistoryEntry?>(null)
     val showing: StateFlow<HistoryEntry?> = _showing.asStateFlow()
 
-    /** The entries deleted since the chance to undo last passed, which one undo brings back together. */
-    private val undoable = mutableListOf<HistoryEntry>()
-    private val _pendingUndo = MutableStateFlow<Set<String>>(emptySet())
+    private var sessions = 0L
+    private val _undo = MutableStateFlow<UndoSession?>(null)
 
     /**
-     * Entries deleted while undoing can still bring them back. A tile or row swiped away waits out
-     * of sight where it flew to until then, so undoing flies it back into its place.
+     * The deletions one undo can still bring back, or null. It outlives the page's composition, so
+     * a page composed again offers the undo again. A tile or row swiped away waits out of sight
+     * where it flew to until it ends, so undoing flies it back into its place.
      */
-    val pendingUndo: StateFlow<Set<String>> = _pendingUndo.asStateFlow()
+    val undo: StateFlow<UndoSession?> = _undo.asStateFlow()
 
     /** Whether a history file that could not be read in full waits to be exported or let go. */
     val damaged: StateFlow<Boolean> = store.damaged
@@ -93,34 +97,36 @@ class HistoryViewModel(app: Application) : AndroidViewModel(app) {
         store.find(text)?.let(::open)
     }
 
-    /** How many deleted entries one undo would bring back. */
-    val undoableCount: Int get() = undoable.size
-
+    /** Deletes [entry], which joins the deletions the current undo would bring back. */
     fun delete(entry: HistoryEntry) {
         store.delete(entry)
-        undoable += entry
-        _pendingUndo.update { it + entry.text }
+        val session = _undo.value
+        _undo.value = session?.copy(entries = session.entries + entry) ?: UndoSession(++sessions, listOf(entry))
     }
 
     /** Brings back every entry deleted since the chance to undo last passed. */
     fun undoDeletes() {
-        store.restore(undoable.toList())
-        deletesDone()
+        val session = _undo.value ?: return
+        store.restore(session.entries)
+        _undo.value = null
     }
 
     /** The chance to undo the deletions so far has passed. */
     fun deletesDone() {
-        undoable.clear()
-        _pendingUndo.value = emptySet()
+        _undo.value = null
     }
 
-    /** Makes [entry] a favorite or stops it being one; making it one asks for its name first where the settings say so and it has none. */
-    fun setFavorite(entry: HistoryEntry, favorite: Boolean, hasTitle: Boolean) {
-        if (favorite && settings.namesFavorites.value && !hasTitle) {
+    /**
+     * Makes [entry] a favorite or stops it being one; making it one asks for its name first where
+     * [HistoryStore.asksName] says so. False when it asks, as nothing has changed yet.
+     */
+    fun setFavorite(entry: HistoryEntry, favorite: Boolean): Boolean {
+        if (favorite && store.asksName(entry.text, entry.format, entry.label)) {
             _dialog.value = HistoryDialog.Name(entry)
-        } else {
-            store.setFavorite(entry.text, entry.format, favorite)
+            return false
         }
+        store.setFavorite(entry.text, entry.format, favorite)
+        return true
     }
 
     fun name(entry: HistoryEntry, name: String) {

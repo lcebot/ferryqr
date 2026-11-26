@@ -138,13 +138,14 @@ object Cards {
      * A probable WeChat mini program code that could not be read, shown as [crop]. With the module
      * in WeChat the crop goes to WeChat's scanner, which then simply opens it. Without the module, a
      * code the camera saw ([live]) is scanned again in WeChat; an image FerryQR holds cannot reach
-     * WeChat's camera, so the body points to the scanner's own album button instead.
+     * WeChat's camera, so the body points to the scanner's own album button instead. [ready] holds
+     * the packages of the apps that take content through the module.
      */
-    fun miniProgram(context: Context, crop: Bitmap, live: Boolean): ResultCard {
+    fun miniProgram(context: Context, crop: Bitmap, live: Boolean, ready: Set<String>): ResultCard {
         val wechat = ActiveFerries.WECHAT
         val origin = if (live) Origin.CAMERA else Origin.IMAGE
         val body = when {
-            wechat.ready -> R.string.mini_body_module
+            wechat.isReady(ready) -> R.string.mini_body_module
             live -> R.string.mini_body_scan
             else -> R.string.mini_body_album
         }
@@ -156,7 +157,7 @@ object Cards {
             headline = context.getString(R.string.mini_headline),
             body = context.getString(body),
             notes = if (installed) emptyList() else listOf(context.getString(R.string.mini_no_wechat)),
-            actions = listOfNotNull(targetAction(context, wechat, origin) { WeChat.openScanner(it, crop) }),
+            actions = listOfNotNull(targetAction(context, wechat, origin, ready) { WeChat.openScanner(it, crop) }),
             image = crop,
         )
     }
@@ -179,21 +180,32 @@ object Cards {
      */
     fun shownText(context: Context, payload: Payload): String = Titles.of(context, payload) ?: payload.raw
 
-    /** [scannedAt] is when the code was read, which dates what a code leaves undated. */
+    /**
+     * [ready] holds the packages of the apps that take content through the module. [scannedAt] is
+     * when the code was read, which dates what a code leaves undated.
+     */
     fun build(
         context: Context,
         payload: Payload,
         format: String,
         origin: Origin,
+        ready: Set<String>,
         scannedAt: Long = System.currentTimeMillis(),
-    ): ResultCard = card(context, payload, format, origin, scannedAt).copy(format = format)
+    ): ResultCard = card(context, payload, format, origin, ready, scannedAt).copy(format = format)
 
-    private fun card(context: Context, payload: Payload, format: String, origin: Origin, scannedAt: Long): ResultCard = when (payload) {
-        is WebPayload -> web(context, payload, origin)
-        is SchemePayload -> scheme(context, payload, origin)
+    private fun card(
+        context: Context,
+        payload: Payload,
+        format: String,
+        origin: Origin,
+        ready: Set<String>,
+        scannedAt: Long,
+    ): ResultCard = when (payload) {
+        is WebPayload -> web(context, payload, origin, ready)
+        is SchemePayload -> scheme(context, payload, origin, ready)
         is FidoPayload -> passkey(context, payload, origin, scannedAt)
         is BoardingPassPayload -> boardingPass(context, payload, scannedAt)
-        is OtpPayload -> otp(context, payload, origin)
+        is OtpPayload -> otp(context, payload, origin, ready)
         // Only a code from the camera has already been offered to the system by the time its card
         // shows, so only then does the card say it was not taken; from elsewhere it offers to try.
         is EsimPayload -> ResultCard(
@@ -223,7 +235,7 @@ object Cards {
         is ContactPayload -> contact(payload)
         is EventPayload -> event(context, payload)
         is TextPayload -> text(context, payload, format)
-        is MiniProgramPayload -> miniProgramCode(context, payload, origin)
+        is MiniProgramPayload -> miniProgramCode(context, payload, origin, ready)
     }
 
     /**
@@ -231,13 +243,13 @@ object Cards {
      * shows the code drawn again from it. With the module, WeChat opens the mini program from what
      * was read, as after a scan of its own; without it, the user scans the code again in WeChat.
      */
-    private fun miniProgramCode(context: Context, payload: MiniProgramPayload, origin: Origin): ResultCard {
+    private fun miniProgramCode(context: Context, payload: MiniProgramPayload, origin: Origin, ready: Set<String>): ResultCard {
         val image = MiniCodeArt.draw(payload.raw)
         val wechat = ActiveFerries.WECHAT
         val installed = wechat.installed(context)
         val actions = buildList {
             if (image != null) {
-                targetAction(context, wechat, origin) { WeChat.openMiniProgram(it, payload.raw, image) }?.let { add(it) }
+                targetAction(context, wechat, origin, ready) { WeChat.openMiniProgram(it, payload.raw, image) }?.let { add(it) }
             }
             add(copy(payload.raw))
         }
@@ -247,7 +259,7 @@ object Cards {
             icon = R.drawable.ic_qr_code_scanner,
             headline = context.getString(R.string.mini_read_headline),
             body = context.getString(R.string.mini_read_body),
-            notes = if (installed) listOfNotNull(targetNote(context, wechat, origin))
+            notes = if (installed) listOfNotNull(targetNote(context, wechat, origin, ready))
             else listOf(context.getString(R.string.mini_no_wechat)),
             actions = actions,
             image = image,
@@ -264,11 +276,12 @@ object Cards {
         context: Context,
         target: Ferry,
         origin: Origin,
+        ready: Set<String>,
         open: (Activity) -> Boolean,
     ): CardAction? {
         if (!target.installed(context)) return null
         val label = when {
-            target.ready -> R.string.open_in_app
+            target.isReady(ready) -> R.string.open_in_app
             origin == Origin.CAMERA -> R.string.scan_again_in_app
             origin == Origin.IMAGE && target.album -> R.string.open_app_scanner
             else -> return null
@@ -279,8 +292,8 @@ object Cards {
     }
 
     /** The actions that hand [text] to each of [ferries], in their order. */
-    private fun ferryActions(context: Context, ferries: List<Ferry>, origin: Origin, text: String): List<CardAction> =
-        ferries.mapNotNull { ferry -> targetAction(context, ferry, origin) { ferry.open(it, text) } }
+    private fun ferryActions(context: Context, ferries: List<Ferry>, origin: Origin, ready: Set<String>, text: String): List<CardAction> =
+        ferries.mapNotNull { ferry -> targetAction(context, ferry, origin, ready) { ferry.open(it, text) } }
 
     /**
      * That [owner] is needed but missing, for a code only its own app opens. The other ways in stay
@@ -290,8 +303,8 @@ object Cards {
         if (owner.exclusive && !owner.installed(context)) context.getString(R.string.exclusive_not_installed, owner.label(context)) else null
 
     /** What the user has to do in an app waiting for the module, beyond what its action says. */
-    private fun targetNote(context: Context, target: Ferry, origin: Origin): String? {
-        if (target.ready || !target.installed(context)) return null
+    private fun targetNote(context: Context, target: Ferry, origin: Origin, ready: Set<String>): String? {
+        if (target.isReady(ready) || !target.installed(context)) return null
         val name = target.label(context)
         return when {
             origin == Origin.CAMERA -> null
@@ -383,11 +396,11 @@ object Cards {
      * keys by hand; otherwise adding the key leads. The link itself can be copied and shared like
      * any other, with a note on what it gives away.
      */
-    private fun otp(context: Context, payload: OtpPayload, origin: Origin): ResultCard {
+    private fun otp(context: Context, payload: OtpPayload, origin: Origin, ready: Set<String>): ResultCard {
         val key = payload.key
         val addable = Launch.canOpen(context, payload.raw)
         // The authenticator the link goes to without asking is named; among several, the system asks.
-        val authenticator = Ferries.rank(context, payload)
+        val authenticator = Ferries.rank(context, payload, ready)
         val rows = buildList {
             key.issuer?.let { add(context.getString(R.string.otp_issuer) to it) }
             key.account?.let { add(context.getString(R.string.otp_account) to it) }
@@ -404,7 +417,7 @@ object Cards {
             context.getString(R.string.otp_unhandled).takeUnless { addable },
             context.getString(R.string.otp_privacy),
         )
-        val actions = ferryActions(context, authenticator, origin, payload.raw).ifEmpty {
+        val actions = ferryActions(context, authenticator, origin, ready, payload.raw).ifEmpty {
             listOfNotNull(
                 CardAction(R.string.otp_add, R.drawable.ic_password, opens = true) {
                     if (Launch.scheme(it, payload.raw, "otpauth")) ActionResult.Handoff else ActionResult.Unavailable
@@ -445,16 +458,16 @@ object Cards {
      * FerryQR has its own way in, and the app that registers the scheme. The general apps are not
      * offered, since they open web links rather than other apps' schemes.
      */
-    private fun scheme(context: Context, payload: SchemePayload, origin: Origin): ResultCard {
+    private fun scheme(context: Context, payload: SchemePayload, origin: Origin, ready: Set<String>): ResultCard {
         val owner = ActiveFerries.claimant(payload)
-        val ranked = Ferries.rank(context, payload)
+        val ranked = Ferries.rank(context, payload, ready)
         val title = Titles.of(context, payload)
         val notes = listOfNotNull(
             context.getString(R.string.scheme_unhandled).takeUnless { Launch.opens(context, payload.uri, payload.scheme) },
-            owner?.takeIf { it in ranked }?.let { targetNote(context, it, origin) },
+            owner?.takeIf { it in ranked }?.let { targetNote(context, it, origin, ready) },
             owner?.let { missingNote(context, it) },
         )
-        val actions = ferryActions(context, ranked, origin, payload.raw) + copy(payload.raw) + share(payload.raw)
+        val actions = ferryActions(context, ranked, origin, ready, payload.raw) + copy(payload.raw) + share(payload.raw)
         return ResultCard(
             payload.raw, R.string.kind_app_link, R.drawable.ic_apps, title ?: payload.raw, payload.raw.takeIf { title != null },
             notes, actions,
@@ -465,26 +478,26 @@ object Cards {
      * A web link. The apps it goes to before any browser lead, as [Ferries.rank] orders them,
      * followed by the browser and then the general apps that open any link.
      */
-    private fun web(context: Context, payload: WebPayload, origin: Origin): ResultCard {
+    private fun web(context: Context, payload: WebPayload, origin: Origin, ready: Set<String>): ResultCard {
         val host = payload.host
         // A link printed without its scheme belongs to its app by its URL, and is handed over as printed.
         val owner = ActiveFerries.claimant(payload)
-        val ranked = Ferries.rank(context, payload)
+        val ranked = Ferries.rank(context, payload, ready)
         val notes = buildList {
             if (payload.url.startsWith("http:", ignoreCase = true)) add(context.getString(R.string.warn_http))
             if (host.split('.').any { it.startsWith("xn--") } || host.any { it.code > 127 }) add(context.getString(R.string.warn_idn))
             if (IP_LITERAL.matches(host)) add(context.getString(R.string.warn_ip))
             // Only a code that belongs to an app needs that app; for other links it is one more
             // option. Nor does it once the system opens the link in that app directly instead.
-            owner?.takeIf { it in ranked }?.let { targetNote(context, it, origin) }?.let { add(it) }
+            owner?.takeIf { it in ranked }?.let { targetNote(context, it, origin, ready) }?.let { add(it) }
             owner?.let { missingNote(context, it) }?.let { add(it) }
         }
         val general = Ferries.general(payload, ranked)
         val browser = CardAction(R.string.open, R.drawable.ic_open_in_new, opens = true) {
             if (Launch.browser(it, payload.url)) ActionResult.Handoff else ActionResult.Unavailable
         }
-        val actions = ferryActions(context, ranked, origin, payload.raw) + browser +
-            ferryActions(context, general, origin, payload.raw) + copy(payload.raw) + share(payload.raw)
+        val actions = ferryActions(context, ranked, origin, ready, payload.raw) + browser +
+            ferryActions(context, general, origin, ready, payload.raw) + copy(payload.raw) + share(payload.raw)
         val headline = Titles.link(context, payload.url) ?: host
         return ResultCard(payload.raw, R.string.kind_link, R.drawable.ic_link, headline, payload.url, notes, actions)
     }

@@ -80,7 +80,6 @@ import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -532,17 +531,6 @@ internal fun SettingsSection(
     }
 }
 
-/** A section's header, in the primary colour above its rows, as settings and history show them. */
-@Composable
-internal fun SectionHeader(text: String, modifier: Modifier = Modifier, top: Dp = SECTION_TOP) {
-    Text(
-        text,
-        style = MaterialTheme.typography.titleSmall,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = modifier.padding(start = LIST_TEXT_INSET, end = LIST_TEXT_INSET, top = top, bottom = SECTION_GAP),
-    )
-}
-
 /** A setting that is on or off; the whole item toggles it, the way the system's own settings do. */
 @Composable
 private fun SwitchItem(
@@ -576,18 +564,6 @@ private fun SwitchItem(
 /** The container colour every settings row shares, a step up from the page. */
 @Composable
 internal fun settingColors() = ListItemDefaults.segmentedColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
-
-/*
- * One set of spaces for the grouped lists of settings and history, on the 4dp grid. Text outside
- * the rows, headers and notes, runs almost as wide as the rows, just 4dp in from their edges, so it
- * does not sit flush with an edge that rounds away at its corners; indented to the rows' own text
- * it would read as a narrow column. A section starts 24dp below the one before, and its header and
- * note keep 12dp from what follows, the same as a note from its controls and controls from each
- * other.
- */
-internal val LIST_TEXT_INSET = 4.dp
-internal val SECTION_TOP = 24.dp
-internal val SECTION_GAP = 12.dp
 
 /**
  * The space between the bars and a page's first content. The space between sections separates one

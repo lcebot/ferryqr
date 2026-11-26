@@ -4,16 +4,17 @@ package io.github.lcebot.ferryqr.ui
 
 import android.text.format.DateUtils
 import androidx.activity.compose.LocalActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SizeTransform
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -34,8 +35,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -44,10 +43,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.ListItemDefaults
-import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -64,16 +62,15 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -83,12 +80,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.lcebot.ferryqr.FavoriteLayout
@@ -100,18 +95,6 @@ import io.github.lcebot.ferryqr.dispatch.Origin
 import io.github.lcebot.ferryqr.history.FavoriteShortcuts
 import io.github.lcebot.ferryqr.history.HistoryEntry
 import java.time.LocalDate
-import kotlin.math.max
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-
-/**
- * The corners of a segmented list, as the expressive list tokens give them: the group's outer
- * corners large, 16dp, and those between its rows extra small, 4dp. A pressed row rounds to the
- * large corner all round, so the outer corners stay put as it morphs.
- */
-internal val OUTER_CORNER = 16.dp
-internal val INNER_CORNER = 4.dp
 
 /** The group the favorites form for a swipe; the other rows group by day. */
 private const val FAVORITES_GROUP = "favorites"
@@ -143,7 +126,7 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
     val lists by vm.lists.collectAsStateWithLifecycle()
     val dialog by vm.dialog.collectAsStateWithLifecycle()
     val showing by vm.showing.collectAsStateWithLifecycle()
-    val pendingUndo by vm.pendingUndo.collectAsStateWithLifecycle()
+    val undo by vm.undo.collectAsStateWithLifecycle()
     val settings = vm.settings
     val folded by settings.favoritesFolded.flow.collectAsStateWithLifecycle()
     val tiles by settings.favoriteTiles.flow.collectAsStateWithLifecycle()
@@ -181,58 +164,55 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
         onOpened()
     }
 
-    // Only one snackbar shows at a time, so each deletion replaces the message with one counting
-    // every entry deleted since the chance to undo last passed, and one undo brings them all back.
-    // The message stays until it is acted on or closed with its button, as a snackbar with an
-    // action does. A message replaced, by this one or another, leaves the outcome to the newest.
-    val undoTurn = remember { intArrayOf(0) }
-    fun offerUndo() {
-        val deleted = vm.undoableCount
-        val turn = ++undoTurn[0]
-        scope.launch {
-            val result = snackbar.showLatest(
-                message = if (deleted == 1) {
-                    context.getString(R.string.history_deleted)
-                } else {
-                    context.resources.getQuantityString(R.plurals.history_deleted_count, deleted, deleted)
-                },
-                actionLabel = context.getString(R.string.undo),
-                withDismissAction = true,
-            )
-            if (turn != undoTurn[0]) return@launch
-            if (result == SnackbarResult.ActionPerformed) {
-                haptics.tap()
-                vm.undoDeletes()
-                // Rows brought back in view take up their swipes as they are laid out in the next
-                // frame; one out of view by then appears where it is once scrolled to, as any row.
-                withFrameNanos {}
-                withFrameNanos {}
-                magnetic.departed.clear()
-            } else {
-                magnetic.departed.clear()
-                vm.deletesDone()
-            }
+    // Only one snackbar shows at a time. The offer to undo follows the view model's session, so each
+    // deletion replaces it with one counting every entry since the chance to undo last passed, and a
+    // page composed again offers it again. A message takes its place while it shows, and the offer
+    // comes back once the message has gone. The offer stays until it is acted on or closed, as a
+    // snackbar with an action does; a newer offer or message cancels the one showing.
+    var note by remember { mutableStateOf<Note?>(null) }
+    LaunchedEffect(note, undo) {
+        val shown = note
+        if (shown != null) {
+            snackbar.showLatest(context.getString(shown.text))
+            note = null
+            return@LaunchedEffect
         }
+        val session = undo ?: return@LaunchedEffect
+        val count = session.entries.size
+        val result = snackbar.showLatest(
+            message = if (count == 1) {
+                context.getString(R.string.history_deleted)
+            } else {
+                context.resources.getQuantityString(R.plurals.history_deleted_count, count, count)
+            },
+            actionLabel = context.getString(R.string.undo),
+            withDismissAction = true,
+        )
+        if (result == SnackbarResult.ActionPerformed) {
+            haptics.tap()
+            vm.undoDeletes()
+        } else {
+            vm.deletesDone()
+        }
+    }
+    // Swipes kept for rows to fly back with last as long as the session: once it ends, rows brought
+    // back have taken up theirs as they were laid out, and any left belong to entries gone for good.
+    LaunchedEffect(undo == null) {
+        if (undo != null) return@LaunchedEffect
+        withFrameNanos {}
+        withFrameNanos {}
+        magnetic.departed.clear()
     }
 
     fun delete(entry: HistoryEntry) {
         haptics.confirm()
+        note = null
         vm.delete(entry)
-        offerUndo()
     }
 
-    /**
-     * Shows [message] in place of any other, after which the offer to undo comes back while there
-     * are deletions it can still undo, so a message in between never takes that chance away.
-     */
     fun showMessage(@StringRes message: Int) {
-        // With nothing left to undo, as after clearing, no row is to fly back with a swipe kept for it.
-        if (vm.undoableCount == 0) magnetic.departed.clear()
-        val turn = ++undoTurn[0]
-        scope.launch {
-            snackbar.showLatest(context.getString(message))
-            if (turn == undoTurn[0] && vm.undoableCount > 0) offerUndo()
-        }
+        note = Note(message)
+    }
     }
 
     // Made once for what they show, so rows that have not changed are not composed again.
@@ -242,10 +222,8 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
         EntryActions(
             onOpen = { haptics.tap(); vm.open(it) },
             onFavorite = { entry, on ->
-                val named = hasTitle(context, entry.text, entry.format, entry.label)
                 // Asked for a name first, the entry becomes a favorite only once it has one.
-                if (!on || !settings.namesFavorites.value || named) haptics.toggle(on)
-                vm.setFavorite(entry, on, named)
+                if (vm.setFavorite(entry, on)) haptics.toggle(on) else haptics.tap()
             },
             namesFavorites = namesFavorites,
             onNameAndFavorite = { haptics.tap(); vm.show(HistoryDialog.Name(it)) },
@@ -368,7 +346,7 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
                                         inputs = tileInputs,
                                         arrangement = tileArrangement,
                                         rowsShown = rowsShown,
-                                        pendingUndo = pendingUndo,
+                                        pendingUndo = undo?.texts.orEmpty(),
                                         list = magnetic,
                                         actions = actions,
                                         onShift = { entry, by ->
@@ -465,6 +443,9 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
     }
 }
 
+/** A message for the snackbar; each is its own, so the same message shown twice shows again. */
+private class Note(@StringRes val text: Int)
+
 /**
  * Rows and headers fade in and out and slide to their new places with the theme's motion. A row
  * [flyingBack] into its place, brought back by undo after it was swiped away, is in view as it comes
@@ -477,6 +458,13 @@ private fun LazyItemScope.animateRow(flyingBack: Boolean = false): Modifier = Mo
     fadeOutSpec = MaterialTheme.motionScheme.defaultEffectsSpec(),
 )
 
+/**
+ * The favorites' title, spaced from the list as a day's is, with its buttons at the end. The buttons
+ * are taller than the title's line and centred on it, reaching into the space above and below
+ * rather than pushing the favorites further away than the entries of a day are from theirs. Each
+ * button comes and goes growing and fading in place while the other slides aside, on the fast
+ * springs, as small parts of the page.
+ */
 @Composable
 private fun FavoritesHeader(
     foldable: Boolean,
@@ -488,47 +476,63 @@ private fun FavoritesHeader(
     onReorder: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val title = MaterialTheme.typography.titleSmall
+    val motion = MaterialTheme.motionScheme
+    val effects = motion.fastEffectsSpec<Float>()
+    val spatial = motion.fastSpatialSpec<Float>()
+    val resize = motion.fastSpatialSpec<IntSize>()
+    val enter = fadeIn(effects) + scaleIn(spatial) + expandHorizontally(resize, expandFrom = Alignment.End, clip = false)
+    val exit = fadeOut(effects) + scaleOut(spatial) + shrinkHorizontally(resize, shrinkTowards = Alignment.End, clip = false)
     Row(
-        modifier = modifier.fillMaxWidth().padding(start = LIST_TEXT_INSET, top = 12.dp, bottom = 4.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(start = LIST_TEXT_INSET, top = SECTION_TOP, bottom = SECTION_GAP),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             stringResource(R.string.favorites_title),
-            style = MaterialTheme.typography.titleSmall,
+            style = title,
             color = MaterialTheme.colorScheme.primary,
             modifier = Modifier.weight(1f),
         )
-        if (foldable) {
-            val turn by animateFloatAsState(
-                targetValue = if (folded) 0f else 180f,
-                animationSpec = MaterialTheme.motionScheme.defaultSpatialSpec(),
-                label = "favorites-chevron",
-            )
-            val fade = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
-            val resize = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
-            TextButton(onClick = onToggle, shapes = ButtonDefaults.shapes()) {
-                AnimatedContent(
-                    targetState = folded,
-                    transitionSpec = { (fadeIn(fade) togetherWith fadeOut(fade)) using SizeTransform { _, _ -> resize } },
-                    label = "favorites-toggle",
-                ) { isFolded ->
-                    Text(
-                        if (isFolded) pluralStringResource(R.plurals.favorites_show_more, hidden, hidden)
-                        else stringResource(R.string.favorites_show_less),
-                        style = LocalTextStyle.current.withTabularFigures(),
+        val line = with(LocalDensity.current) { title.lineHeight.roundToPx() }
+        Row(
+            modifier = Modifier.layout { measurable, constraints ->
+                val buttons = measurable.measure(constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity))
+                layout(buttons.width, line) { buttons.place(0, (line - buttons.height) / 2) }
+            },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            AnimatedVisibility(visible = foldable, enter = enter, exit = exit) {
+                val turn by animateFloatAsState(
+                    targetValue = if (folded) 0f else 180f,
+                    animationSpec = motion.defaultSpatialSpec(),
+                    label = "favorites-chevron",
+                )
+                TextButton(onClick = onToggle, shapes = ButtonDefaults.shapes()) {
+                    AnimatedContent(
+                        targetState = folded,
+                        transitionSpec = { (fadeIn(effects) togetherWith fadeOut(effects)) using SizeTransform { _, _ -> resize } },
+                        label = "favorites-toggle",
+                    ) { isFolded ->
+                        Text(
+                            if (isFolded) pluralStringResource(R.plurals.favorites_show_more, hidden, hidden)
+                            else stringResource(R.string.favorites_show_less),
+                            style = LocalTextStyle.current.withTabularFigures(),
+                        )
+                    }
+                    Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                    Icon(
+                        painterResource(R.drawable.ic_expand),
+                        contentDescription = null,
+                        modifier = Modifier.size(ButtonDefaults.IconSize).rotate(turn),
                     )
                 }
-                Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-                Icon(
-                    painterResource(R.drawable.ic_expand),
-                    contentDescription = null,
-                    modifier = Modifier.size(ButtonDefaults.IconSize).rotate(turn),
-                )
             }
-        }
-        if (reorderable || reordering) {
-            TextButton(onClick = onReorder, shapes = ButtonDefaults.shapes()) {
-                Text(stringResource(if (reordering) R.string.favorites_reorder_done else R.string.favorites_reorder))
+            AnimatedVisibility(visible = reorderable || reordering, enter = enter, exit = exit) {
+                TextButton(onClick = onReorder, shapes = ButtonDefaults.shapes()) {
+                    Text(stringResource(if (reordering) R.string.favorites_reorder_done else R.string.favorites_reorder))
+                }
             }
         }
     }
@@ -547,20 +551,7 @@ private fun DayHeader(day: LocalDate, sample: Long, modifier: Modifier = Modifie
             DateUtils.formatDateTime(context, sample, flags)
         }
     }
-    Text(
-        label,
-        style = MaterialTheme.typography.titleSmall,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = modifier.padding(start = LIST_TEXT_INSET, end = LIST_TEXT_INSET, top = SECTION_TOP, bottom = SECTION_GAP),
-    )
-}
-
-@Composable
-fun menuItemShape(index: Int, count: Int): Shape = when {
-    count == 1 -> MenuDefaults.standaloneItemShape
-    index == 0 -> MenuDefaults.leadingItemShape
-    index == count - 1 -> MenuDefaults.trailingItemShape
-    else -> MenuDefaults.middleItemShape
+    SectionHeader(label, modifier)
 }
 
 @Composable
@@ -591,171 +582,5 @@ private fun EmptyHistory(modifier: Modifier) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
         )
-    }
-}
-
-/**
- * Expressive grouped list: large corners outside a group, small ones between its rows. The corners
- * follow a row that becomes the first or last of its group, as when a neighbour is deleted, where
- * the list item's own segmented shapes would switch at once.
- */
-@Composable
-fun segmentShape(index: Int, count: Int): Shape = segmentShape(index, count, roundTop = 0f, roundBottom = 0f)
-
-/**
- * [roundTop] and [roundBottom], from 0 to 1, round a row's corners further toward the large corner,
- * as a swipe does to the row pulled and those around it.
- */
-@Composable
-internal fun segmentShape(index: Int, count: Int, roundTop: Float, roundBottom: Float): Shape {
-    // On the fast spatial motion the list item morphs its own shape on.
-    val spec = MaterialTheme.motionScheme.fastSpatialSpec<Dp>()
-    val top by animateDpAsState(if (index == 0) OUTER_CORNER else INNER_CORNER, spec, label = "row-top")
-    val bottom by animateDpAsState(if (index == count - 1) OUTER_CORNER else INNER_CORNER, spec, label = "row-bottom")
-    val shownTop = maxOf(top, lerp(INNER_CORNER, OUTER_CORNER, roundTop.coerceIn(0f, 1f)))
-    val shownBottom = maxOf(bottom, lerp(INNER_CORNER, OUTER_CORNER, roundBottom.coerceIn(0f, 1f)))
-    return RoundedCornerShape(topStart = shownTop, topEnd = shownTop, bottomStart = shownBottom, bottomEnd = shownBottom)
-}
-
-/** The name an exported history file is offered under. */
-private const val EXPORT_NAME = "ferryqr-history.json"
-
-/**
- * Offers to export a history file that could not be read in full, once [show] says the history is
- * read, so what it held can be recovered by hand; letting it go removes it. Closed without either,
- * it comes back the next time history opens. [message] tells how an export went.
- */
-@Composable
-private fun DamagedHistoryDialog(vm: HistoryViewModel, show: Boolean, message: (Int) -> Unit) {
-    val context = LocalContext.current
-    val haptics = rememberHaptics()
-    val scope = rememberCoroutineScope()
-    val damaged by vm.damaged.collectAsStateWithLifecycle()
-    var closed by rememberSaveable { mutableStateOf(false) }
-    val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        scope.launch {
-            val done = withContext(Dispatchers.IO) {
-                runCatching { context.contentResolver.openOutputStream(uri)?.use(vm::exportDamaged) }.getOrNull() == true
-            }
-            if (done) vm.forgetDamaged()
-            message(if (done) R.string.history_damaged_exported else R.string.history_damaged_export_failed)
-        }
-    }
-    if (!damaged || closed || !show) return
-    AlertDialog(
-        onDismissRequest = { closed = true },
-        icon = { Icon(painterResource(R.drawable.ic_warning), contentDescription = null) },
-        title = { Text(stringResource(R.string.history_damaged_title)) },
-        text = { Text(stringResource(R.string.history_damaged_body)) },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    haptics.tap()
-                    closed = true
-                    export.launch(EXPORT_NAME)
-                },
-                shapes = ButtonDefaults.shapes(),
-            ) { Text(stringResource(R.string.history_damaged_export)) }
-        },
-        dismissButton = {
-            TextButton(
-                onClick = {
-                    haptics.tap()
-                    closed = true
-                    vm.forgetDamaged()
-                },
-                shapes = ButtonDefaults.shapes(),
-            ) { Text(stringResource(R.string.history_damaged_discard)) }
-        },
-    )
-}
-
-/** The dialog the page shows over its list, if any; [message] tells how an action went. */
-@Composable
-private fun HistoryDialogs(vm: HistoryViewModel, dialog: HistoryDialog?, message: (Int) -> Unit) {
-    val context = LocalContext.current
-    val haptics = rememberHaptics()
-    when (val shown = dialog) {
-        HistoryDialog.Clear -> AlertDialog(
-            onDismissRequest = { vm.show(null) },
-            icon = { Icon(painterResource(R.drawable.ic_delete_sweep), contentDescription = null) },
-            title = { Text(stringResource(R.string.history_clear_title)) },
-            text = { Text(stringResource(R.string.history_clear_body)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        haptics.confirm()
-                        vm.clear()
-                        message(R.string.history_cleared)
-                    },
-                    shapes = ButtonDefaults.shapes(),
-                ) { Text(stringResource(R.string.clear)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { haptics.tap(); vm.show(null) }, shapes = ButtonDefaults.shapes()) {
-                    Text(stringResource(R.string.cancel))
-                }
-            },
-        )
-        HistoryDialog.SuggestTiles -> AlertDialog(
-            onDismissRequest = { vm.show(null) },
-            icon = { Icon(painterResource(R.drawable.ic_view_quilt), contentDescription = null) },
-            title = { Text(stringResource(R.string.tiles_suggest_title)) },
-            text = { Text(stringResource(R.string.tiles_suggest_body)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        haptics.confirm()
-                        vm.useTiles()
-                    },
-                    shapes = ButtonDefaults.shapes(),
-                ) { Text(stringResource(R.string.tiles_suggest_use)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { haptics.tap(); vm.show(null) }, shapes = ButtonDefaults.shapes()) {
-                    Text(stringResource(R.string.tiles_suggest_keep))
-                }
-            },
-        )
-        is HistoryDialog.Name -> NameFavoriteDialog(
-            current = shown.entry.label ?: defaultTitle(context, shown.entry.text, shown.entry.format),
-            onDismiss = { vm.show(null) },
-            onName = { name -> vm.name(shown.entry, name) },
-        )
-        is HistoryDialog.Rename -> RenameDialog(
-            current = shown.entry.label ?: defaultTitle(context, shown.entry.text, shown.entry.format),
-            onDismiss = { vm.show(null) },
-            onRename = { name -> vm.rename(shown.entry, name) },
-        )
-        null -> Unit
-    }
-}
-
-/**
- * How wide each favorite's tile is: the longer of its name and its kind, the two lines it shows,
- * with what the list item adds beside them. Each tile is measured once for what it shows, so a
- * favorite moved, renamed or added measures only itself again.
- */
-@Composable
-private fun rememberTileWidths(favorites: List<HistoryEntry>, chrome: Int): Map<String, Int> {
-    val context = LocalContext.current
-    val typography = MaterialTheme.typography
-    val measurer = rememberTextMeasurer()
-    val measured = remember(typography, measurer, chrome) { HashMap<Triple<String, String, String?>, Int>() }
-    return remember(favorites, measured) {
-        val widths = favorites.associate { entry ->
-            entry.text to measured.getOrPut(Triple(entry.text, entry.format, entry.label)) {
-                val shown = presentationOf(context, entry)
-                val name = measurer.measure(shown.tileTitle, typography.bodyLarge, maxLines = 1, softWrap = false).size.width
-                val kind = measurer.measure(context.getString(shown.kind.label), typography.bodyMedium, maxLines = 1, softWrap = false)
-                    .size.width
-                max(name, kind) + chrome
-            }
-        }
-        // Only what is still shown stays measured.
-        val kept = favorites.mapTo(HashSet()) { Triple(it.text, it.format, it.label) }
-        measured.keys.retainAll(kept)
-        widths
     }
 }

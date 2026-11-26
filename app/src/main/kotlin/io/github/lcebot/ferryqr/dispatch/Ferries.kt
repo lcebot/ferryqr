@@ -10,9 +10,6 @@ import io.github.lcebot.ferryqr.content.OtpPayload
 import io.github.lcebot.ferryqr.content.Payload
 import io.github.lcebot.ferryqr.content.SchemePayload
 import io.github.lcebot.ferryqr.content.WebPayload
-import io.github.lcebot.ferryqr.openin.OpenInModule
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 
 /**
  * A way a scanned code reaches another app. An [ActiveFerry] is one FerryQR made and tried by hand
@@ -23,8 +20,11 @@ import kotlinx.coroutines.flow.StateFlow
 internal sealed interface Ferry {
     val pkg: String
 
-    /** Whether handing content over opens it, rather than only the app's scanner. */
-    val ready: Boolean
+    /**
+     * Whether handing content over opens it, rather than only the app's scanner, when [ready] holds
+     * the packages of the apps that take content through the module.
+     */
+    fun isReady(ready: Set<String>): Boolean
 
     /** Whether the app's scanner can read a picture from the gallery, which without the module is the way in. */
     val album: Boolean
@@ -72,10 +72,7 @@ internal class ActiveFerry(
     /** Whether [text] is one of this app's own codes, which only its scanner opens properly. */
     fun claims(text: String) = KnownLink.of(text)?.owner == pkg
 
-    /** [ready] for screens that redraw once the framework reports the module. */
-    val readyFlow: StateFlow<Boolean> by lazy { if (route == Route.MODULE) OpenInModule.ready(pkg) else MutableStateFlow(true) }
-
-    override val ready: Boolean get() = readyFlow.value
+    override fun isReady(ready: Set<String>): Boolean = route != Route.MODULE || pkg in ready
 
     override fun label(context: Context): String = context.getString(name)
 
@@ -84,7 +81,7 @@ internal class ActiveFerry(
 
 /** An app the system opens a code in by itself, through the [intent] the app registered for. */
 internal class PassiveFerry(override val pkg: String, private val intent: Intent) : Ferry {
-    override val ready: Boolean get() = true
+    override fun isReady(ready: Set<String>): Boolean = true
     override val album: Boolean get() = false
 
     override fun label(context: Context): String = Launch.appLabel(context, pkg) ?: pkg
@@ -160,18 +157,19 @@ internal object Ferries {
      * A general app's links are never left to the system: one on another app's domain, such as
      * WeChat's sign-in on a Meituan page, still belongs to it. A link that is no app's own but goes
      * to a general app by the system's choice goes that app's own way while it is ready, since that
-     * way opens any link.
+     * way opens any link. [ready] holds the packages of the apps that take content through the module.
      */
-    fun rank(context: Context, payload: Payload): List<Ferry> {
+    fun rank(context: Context, payload: Payload, ready: Set<String>): List<Ferry> {
         val owner = ActiveFerries.claimant(payload)
+        val ownerReady = owner?.isReady(ready) == true
         val passive = if (payload is WebPayload && owner?.general == true) null else PassiveFerries.of(context, payload)
         val found: Ferry? = passive?.let { p ->
-            ActiveFerries.of(p.pkg)?.takeIf { payload is WebPayload && it.general && it.ready } ?: p
+            ActiveFerries.of(p.pkg)?.takeIf { payload is WebPayload && it.general && it.isReady(ready) } ?: p
         }
         return listOfNotNull(
-            owner?.takeIf { it.ready },
-            found?.takeIf { owner == null || it.pkg != owner.pkg || !owner.ready },
-            owner?.takeIf { !it.ready && it.pkg != found?.pkg },
+            owner?.takeIf { ownerReady },
+            found?.takeIf { owner == null || it.pkg != owner.pkg || !ownerReady },
+            owner?.takeIf { !ownerReady && it.pkg != found?.pkg },
         )
     }
 
@@ -188,5 +186,6 @@ internal object Ferries {
         }
 
     /** Every app offered for [payload]: the [rank]ed ones, then the [general] ones. */
-    fun offered(context: Context, payload: Payload): List<Ferry> = rank(context, payload).let { it + general(payload, it) }
+    fun offered(context: Context, payload: Payload, ready: Set<String>): List<Ferry> =
+        rank(context, payload, ready).let { it + general(payload, it) }
 }

@@ -1,46 +1,64 @@
 package io.github.lcebot.ferryqr.ui
 
+import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
-import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
-import io.github.lcebot.ferryqr.dispatch.ActiveFerries
-import io.github.lcebot.ferryqr.dispatch.ActiveFerry
 import io.github.lcebot.ferryqr.dispatch.CardFactory
 import io.github.lcebot.ferryqr.dispatch.CardSource
 import io.github.lcebot.ferryqr.dispatch.ResultCard
-import io.github.lcebot.ferryqr.dispatch.Route
 import io.github.lcebot.ferryqr.openin.OpenInModule
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.dropWhile
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.mapLatest
 
 /**
- * Whether each app takes content, read so that a screen offering apps draws again once the
- * framework reports the module, which may come after the screen first drew, as when a shortcut
+ * The result card for [source], built off the main thread for the apps that take content now and
+ * again whenever that changes, since what a card offers depends on it. A build that a newer change
+ * overtakes is dropped. [builtFor] is the readiness a card already on screen was built for, which
+ * is not built again while it still holds.
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+fun cardFlow(context: Context, source: CardSource, builtFor: Set<String>? = null): Flow<ResultCard> =
+    OpenInModule.readyApps
+        .dropWhile { it == builtFor }
+        .mapLatest { CardFactory.build(context, source, it) }
+        .flowOn(Dispatchers.Default)
+
+/**
+ * The packages of the apps that take content, read so that a screen offering apps draws again once
+ * the framework reports the module, which may come after the screen first drew, as when a shortcut
  * opens a page before the scanner ever ran. The framework is asked again as the screen appears,
  * since the scope may have changed in LSPosed since FerryQR last asked.
  */
 @Composable
-internal fun ferriesReady(): Map<ActiveFerry, Boolean> {
+internal fun readyApps(): Set<String> {
     LaunchedEffect(Unit) { OpenInModule.refresh() }
     val apps by OpenInModule.readyApps.collectAsState()
-    return remember(apps) { ActiveFerries.all.associateWith { it.route != Route.MODULE || it.pkg in apps } }
+    return apps
 }
 
 /**
- * The result card for [source], built off the main thread and again whenever an app's readiness
- * changes; the card shown stays until the next one is ready, and it is null before the first is,
- * or without a source.
+ * The result card for [source], as [cardFlow] builds it; the card shown stays until the next one is
+ * ready, and it is null before the first is, or without a source. The framework is asked again as
+ * the card appears, as [readyApps] does.
  */
 @Composable
 internal fun rememberResultCard(source: CardSource?): ResultCard? {
     val context = LocalContext.current
-    val ready = ferriesReady()
-    val card by produceState<ResultCard?>(null, source, ready) {
-        value = source?.let { withContext(Dispatchers.Default) { CardFactory.build(context, it) } }
+    LaunchedEffect(Unit) { OpenInModule.refresh() }
+    val card by produceState<ResultCard?>(null, source) {
+        if (source == null) {
+            value = null
+            return@produceState
+        }
+        cardFlow(context, source).collect { value = it }
     }
     return card
 }

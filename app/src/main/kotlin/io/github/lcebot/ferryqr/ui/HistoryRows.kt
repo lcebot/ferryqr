@@ -66,8 +66,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import io.github.lcebot.ferryqr.R
-import io.github.lcebot.ferryqr.content.Classifier
-import io.github.lcebot.ferryqr.dispatch.Cards
+import io.github.lcebot.ferryqr.dispatch.EntryNames
 import io.github.lcebot.ferryqr.dispatch.Kind
 import io.github.lcebot.ferryqr.history.FavoriteShortcuts
 import io.github.lcebot.ferryqr.history.HistoryEntry
@@ -82,8 +81,8 @@ import kotlin.math.roundToInt
 internal class EntryPresentation(val kind: Kind, val title: String, val tileTitle: String)
 
 internal fun presentationOf(context: Context, entry: HistoryEntry): EntryPresentation {
-    val payload = Classifier.classify(entry.text, entry.format)
-    return EntryPresentation(Cards.kindOf(payload), entry.label ?: Cards.shownText(context, payload), tileTitle(context, entry))
+    val names = EntryNames(context, entry.text, entry.format, entry.label)
+    return EntryPresentation(names.kind, names.rowTitle, names.tileTitle)
 }
 
 @Composable

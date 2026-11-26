@@ -5,7 +5,7 @@ import android.util.AtomicFile
 import io.github.lcebot.ferryqr.AppSettings
 import io.github.lcebot.ferryqr.content.Classifier
 import io.github.lcebot.ferryqr.content.sensitiveKind
-import io.github.lcebot.ferryqr.dispatch.Cards
+import io.github.lcebot.ferryqr.dispatch.EntryNames
 import io.github.lcebot.ferryqr.scan.Detection
 import io.github.lcebot.ferryqr.scan.isLocatedMiniCode
 import java.io.File
@@ -104,15 +104,24 @@ class HistoryStore private constructor(private val context: Context) {
             for (request in saves) {
                 val snapshot = _entries.value ?: continue
                 // One failed write leaves the next to try again, rather than ending saving for good.
-                runCatching { save(snapshot) }
+                try {
+                    save(snapshot)
+                } catch (e: Exception) {
+                    // The entries stay in memory, and the next change writes them all again.
+                }
                 val stale = synchronized(lock) { shortcutsStale.also { shortcutsStale = false } }
                 if (stale) syncShortcuts(snapshot)
             }
         }
     }
 
+    /** Shortcuts the launcher refuses leave the history and its saving untouched. */
     private fun syncShortcuts(entries: List<HistoryEntry>) {
-        runCatching { FavoriteShortcuts.update(context, favoritesOf(entries)) }
+        try {
+            FavoriteShortcuts.update(context, favoritesOf(entries))
+        } catch (e: Exception) {
+            // The shortcuts are brought in line again with the next change to the favorites.
+        }
     }
 
     /** Writes the history file that could not be read to [out], as it was; false when that fails. */
@@ -224,22 +233,19 @@ class HistoryStore private constructor(private val context: Context) {
     }
 
     /**
-     * [label] as a name the user gave the content, or null when it is none: blank, the content
-     * itself, or a title FerryQR shows for it anyway, as the naming dialog offers it to start
-     * from. Accepted unchanged, such a name changes nothing, so the content still counts as
-     * unnamed and goes on following its own title.
+     * [label] as a name the user gave the content, or null when it is none, see
+     * [EntryNames.isOwnName]. Accepted unchanged, a title FerryQR shows anyway changes nothing, so
+     * the content still counts as unnamed and goes on following its own title.
      */
-    private fun ownLabel(text: String, format: String, label: String): String? {
-        val name = label.trim()
-        if (name.isEmpty() || name == text.trim()) return null
-        val payload = Classifier.classify(text, format)
-        val automatic = setOfNotNull(
-            Cards.shownText(context, payload),
-            Cards.titleOf(context, payload),
-            context.getString(Cards.kindOf(payload).label),
-        )
-        return name.takeIf { it !in automatic }
-    }
+    private fun ownLabel(text: String, format: String, label: String): String? =
+        label.trim().takeIf { EntryNames(context, text, format, null).isOwnName(it) }
+
+    /**
+     * Whether making the content a favorite asks for its name first: the settings say so, and it
+     * has no name of its own. Everything that makes a favorite asks this.
+     */
+    fun asksName(text: String, format: String, label: String?): Boolean =
+        AppSettings.of(context).namesFavorites.value && !EntryNames(context, text, format, label).hasOwnName
 
     fun delete(entry: HistoryEntry) = update { entries -> entries.filter { it.text != entry.text } }
 
@@ -308,7 +314,13 @@ class HistoryStore private constructor(private val context: Context) {
             whole = false
             emptyList()
         }
-        if (!whole && !unreadable.exists()) runCatching { unreadable.writeBytes(bytes) }
+        if (!whole && !unreadable.exists()) {
+            try {
+                unreadable.writeBytes(bytes)
+            } catch (e: Exception) {
+                // Without the copy the file is still read as far as it can be; only exporting it is lost.
+            }
+        }
         return entries
     }
 

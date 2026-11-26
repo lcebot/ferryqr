@@ -21,15 +21,16 @@ sealed interface CardSource {
 
 /**
  * Builds the result card for a [CardSource]. It asks the package manager which apps there are and
- * may draw the code again, so it runs off the main thread; a card is built again whenever an app's
- * readiness changes, since what the card offers depends on it.
+ * may draw the code again, so it runs off the main thread. What the card offers depends on [ready],
+ * the packages of the apps that take content through the module, so a card on screen is built again
+ * whenever that changes.
  */
 object CardFactory {
-    fun build(context: Context, source: CardSource): ResultCard = when (source) {
-        is CardSource.LocatedMini -> Cards.miniProgram(context, source.crop, live = source.live)
+    fun build(context: Context, source: CardSource, ready: Set<String>): ResultCard = when (source) {
+        is CardSource.LocatedMini -> Cards.miniProgram(context, source.crop, live = source.live, ready = ready)
         is CardSource.Read -> {
             val payload = Classifier.classify(source.text, source.format)
-            val card = Cards.build(context, payload, source.format, source.origin, source.scannedAt)
+            val card = Cards.build(context, payload, source.format, source.origin, ready, source.scannedAt)
             if (source.origin != Origin.HISTORY) {
                 card
             } else {

@@ -45,7 +45,7 @@ internal fun tileNeighbours(pulled: String, arrangement: TileArrangement, rowsSh
         edges.getOrPut(b.key) { mutableListOf() } += a to pull
     }
     rows.forEach { (row, tiles) ->
-        tiles.zipWithNext { a, b -> link(a, b, 1f) }
+        for ((a, b) in tiles.zipWithNext()) link(a, b, 1f)
         rows[row + 1]?.forEach { below ->
             tiles.forEach { above ->
                 if (above.x < below.x + below.width && below.x < above.x + above.width) link(above, below, VERTICAL_SHARE)

@@ -25,16 +25,19 @@ import io.github.lcebot.ferryqr.scan.StillResult
 import io.github.lcebot.ferryqr.scan.isLocatedMiniCode
 import io.github.lcebot.ferryqr.scan.locatedCrop
 import io.github.lcebot.ferryqr.scan.readStillImage
+import io.github.lcebot.ferryqr.ui.cardFlow
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -70,9 +73,9 @@ sealed interface Phase {
 
 /**
  * A code that may go straight to its app, which only an activity can start: the screen tries
- * [plan] on its way, and shows [card] when no app takes the code.
+ * [plan] on its way, and shows [card], built for [source], when no app takes the code.
  */
-class RouteEffect(val payload: Payload, val origin: Origin, val plan: LaunchPlan, val card: ResultCard)
+class RouteEffect(val payload: Payload, val origin: Origin, val plan: LaunchPlan, val card: ResultCard, val source: CardSource)
 
 class ScanViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -116,9 +119,6 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         viewModelScope.launch { OpenInModule.refresh() }
-        // What a card offers depends on which apps take content, which the framework may report
-        // only after the card is up.
-        viewModelScope.launch { OpenInModule.readyApps.drop(1).collect { rebuildShown() } }
     }
 
     /**
@@ -172,38 +172,45 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val source = CardSource.Read(detection.text, detection.format, origin)
             val payload = Classifier.classify(detection.text, detection.format)
+            // Read once, so the way the code goes and the card shown if it goes nowhere agree.
+            val ready = OpenInModule.readyApps.value
             val (plan, card) = withContext(Dispatchers.Default) {
-                Dispatcher.plan(app, payload) to CardFactory.build(app, source)
+                Dispatcher.plan(app, payload, ready) to CardFactory.build(app, source, ready)
             }
-            shownSource = source
-            _routes.send(RouteEffect(payload, origin, plan, card))
+            _routes.send(RouteEffect(payload, origin, plan, card, source))
         }
     }
 
     /** No app took the routed code, so its card shows. */
     fun show(effect: RouteEffect) {
-        val source = shownSource ?: return
-        if (_phase.value == Phase.Routing) _phase.value = Phase.Showing(effect.card, source)
+        val showing = Phase.Showing(effect.card, effect.source)
+        if (_phase.compareAndSet(Phase.Routing, showing)) follow(showing, effect.source, builtFor = effect.plan.ready)
     }
-
-    /** The source of the card being routed or shown, for building it again. */
-    private var shownSource: CardSource? = null
 
     /** A mini program code located but not read: its card is built off the main thread, then shown. */
     private fun foundMiniCode(found: Phase.MiniCodeFound) {
         _phase.value = found
-        val source = CardSource.LocatedMini(found.crop, found.live)
-        viewModelScope.launch {
-            val card = withContext(Dispatchers.Default) { CardFactory.build(getApplication(), source) }
-            if (_phase.value == found) _phase.value = Phase.Showing(card, source)
-        }
+        follow(found, CardSource.LocatedMini(found.crop, found.live))
     }
 
-    /** Builds the card shown again for the apps ready now, keeping what it is shown for. */
-    private suspend fun rebuildShown() {
-        val showing = _phase.value as? Phase.Showing ?: return
-        val card = withContext(Dispatchers.Default) { CardFactory.build(getApplication(), showing.source) }
-        if (_phase.value === showing) _phase.value = Phase.Showing(card, showing.source)
+    /** Keeps the card on screen built for the apps that take content, while the scanner shows it. */
+    private var following: Job? = null
+
+    /**
+     * Shows the card for [source] in place of [from], and builds it again whenever an app's
+     * readiness changes, since the framework may report the module only after the card is up. Each
+     * card replaces only the phase the previous one set, so following ends once the scanner moves
+     * on. [builtFor] is the readiness the card [from] shows was built for.
+     */
+    private fun follow(from: Phase, source: CardSource, builtFor: Set<String>? = null) {
+        following?.cancel()
+        var shown = from
+        following = cardFlow(getApplication(), source, builtFor)
+            .takeWhile { card ->
+                val next = Phase.Showing(card, source)
+                _phase.compareAndSet(shown, next).also { if (it) shown = next }
+            }
+            .launchIn(viewModelScope)
     }
 
     fun resume() {

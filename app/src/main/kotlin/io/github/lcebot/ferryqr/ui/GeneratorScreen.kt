@@ -10,8 +10,6 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.ContentTransform
-import androidx.compose.animation.core.FiniteAnimationSpec
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -26,7 +24,6 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
@@ -36,7 +33,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imeAnimationTarget
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -44,7 +40,6 @@ import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.TextFieldState
@@ -53,9 +48,6 @@ import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
-import androidx.compose.material3.DropdownMenuGroup
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.DropdownMenuPopup
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilterChip
@@ -63,9 +55,7 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
-import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ScaffoldDefaults
@@ -87,14 +77,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
@@ -105,16 +93,12 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Constraints
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.PopupProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.lcebot.ferryqr.AppSettings
 import io.github.lcebot.ferryqr.LongCodeEnlarge
@@ -124,13 +108,11 @@ import io.github.lcebot.ferryqr.dispatch.ActiveFerries
 import io.github.lcebot.ferryqr.dispatch.ActiveFerry
 import io.github.lcebot.ferryqr.dispatch.Ferries
 import io.github.lcebot.ferryqr.dispatch.Ferry
-import io.github.lcebot.ferryqr.dispatch.PassiveFerry
 import io.github.lcebot.ferryqr.generate.AutoFormat
 import io.github.lcebot.ferryqr.generate.CodeGenerator
 import io.github.lcebot.ferryqr.generate.CodeProblem
 import io.github.lcebot.ferryqr.generate.CodeType
 import io.github.lcebot.ferryqr.generate.Generated
-import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -148,20 +130,7 @@ private const val LARGE_TEXT_DELAY_MS = 350L
 /** How long the format picker waits for the keyboard to start going down before it opens anyway. */
 private const val KEYBOARD_CLOSE_TIMEOUT_MS = 300L
 
-/**
- * The toolbar's fixed parts, from the floating toolbar's own tokens: its padding, one icon button,
- * the gap before the group of apps, and the gap before the FAB together with the FAB itself.
- */
-private val TOOLBAR_PADDING = 16.dp
-private val TOOLBAR_BUTTON = 48.dp
-private val GROUP_GAP = 4.dp
-private val TOOLBAR_FAB = TOOLBAR_TO_FAB_GAP + SHARE_FAB_SIZE
-
-/** Copy, save and favorite, which always stay in the toolbar. */
-private const val CODE_ACTIONS = 3
-
 private val GAP = 12.dp
-private const val MAX_FIELD_LINES = 4
 
 /** The apps offered for the text are looked up once typing has paused this long. */
 private const val OFFER_DELAY_MS = 150L
@@ -227,13 +196,13 @@ fun GeneratorScreen(onBack: () -> Unit) {
     }
     val appFade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
     val appResize = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
-    val ready = ferriesReady()
+    val ready = readyApps()
     // The apps for the text are the ones result cards offer for the same content, in the same order,
     // looked up once typing pauses rather than on every keystroke.
     val offered by produceState(emptyList<Ferry>(), text, ready) {
         delay(OFFER_DELAY_MS)
         value = withContext(Dispatchers.IO) {
-            Ferries.offered(context, Classifier.classify(text)).filter { it.installed(context) }
+            Ferries.offered(context, Classifier.classify(text), ready).filter { it.installed(context) }
         }
     }
 
@@ -347,7 +316,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
                 val name = ferry.label(context)
                 // Without the module the app could only open its scanner on nothing, so the
                 // button looks disabled but still explains why when tapped.
-                val looksEnabled = (ferry as? ActiveFerry)?.let { ready[it] } ?: ferry.ready
+                val looksEnabled = ferry.isReady(ready)
                 SendApp(context.getString(R.string.open_in_app, name), ferry.pkg, looksEnabled) {
                     when {
                         activity == null -> Unit
@@ -562,204 +531,26 @@ fun GeneratorScreen(onBack: () -> Unit) {
                     lineLimits = TextFieldLineLimits.MultiLine(minHeightInLines = 1, maxHeightInLines = 1),
                 )
             }
-            // One content for each line count, made once per composition, so measuring again with the
-            // same count does not compose the field again.
-            val fieldWith: List<@Composable () -> Unit> = List(MAX_FIELD_LINES) { index -> @Composable { textField(index + 1) } }
-            val ime = WindowInsets.ime
-            val imeTarget = WindowInsets.imeAnimationTarget
-            val navigationBars = WindowInsets.navigationBars
-            val lineHeight = MaterialTheme.typography.bodyLarge.lineHeight
-
-            // Everything fits on one screen: the text field gives up lines first, then the code shrinks.
-            // The line count follows where the keyboard is heading rather than each frame of its
-            // animation, so the field changes size once, as the keyboard starts to move, and the
-            // page settles in one motion with it. The keyboard also closes when a menu or the share
-            // sheet takes focus, and the field then grows while the keyboard leaves, rather than
-            // the code first filling the space and giving it back afterwards.
-            SubcomposeLayout(Modifier.fillMaxSize()) { constraints ->
-                val gap = GAP.roundToPx()
-                val navigation = navigationBars.getBottom(this)
-                val keyboardNow = (ime.getBottom(this) - navigation).coerceAtLeast(0)
-                val keyboardTarget = (imeTarget.getBottom(this) - navigation).coerceAtLeast(0)
-                val width = constraints.maxWidth
-                val height = constraints.maxHeight
-                val controlsWidth = if (sideBySide) (width - gap) / 2 else width
-                val controls = Constraints(maxWidth = controlsWidth)
-                val chipsRow = subcompose(GeneratorSlot.CHIPS, chips).map { it.measure(controls) }
-                val toolbarRow = subcompose(GeneratorSlot.TOOLBAR, toolbar).map { it.measure(controls) }
-                val oneLine = subcompose(GeneratorSlot.PROBE, fieldProbe).maxOfOrNull { it.measure(controls).height } ?: 0
-                val chipsHeight = chipsRow.maxOfOrNull { it.height } ?: 0
-                val toolbarHeight = toolbarRow.maxOfOrNull { it.height } ?: 0
-                // Upright, the code keeps a square as wide as the page before the field takes more lines.
-                val roomForField = height - keyboardTarget - chipsHeight - toolbarHeight - gap * 2 -
-                    if (sideBySide) 0 else gap + width
-                val perLine = lineHeight.toPx().roundToInt()
-                val lines = (MAX_FIELD_LINES downTo 1).firstOrNull { oneLine + perLine * (it - 1) <= roomForField } ?: 1
-                val fieldRow = subcompose(GeneratorSlot.FIELD, fieldWith[lines - 1]).map { it.measure(controls) }
-                val fieldHeight = fieldRow.maxOfOrNull { it.height } ?: 0
-                // The page moves up with the keyboard frame by frame, as padding for it would.
-                val available = (height - keyboardNow).coerceAtLeast(0)
-                val codeWidth = if (sideBySide) controlsWidth else width
-                val codeHeight = if (sideBySide) {
-                    available
-                } else {
-                    (available - chipsHeight - toolbarHeight - fieldHeight - gap * 3).coerceAtLeast(0)
-                }
-                val codeBox = subcompose(GeneratorSlot.CODE, codeArea).map { it.measure(Constraints.fixed(codeWidth, codeHeight)) }
-                val controlsX = if (sideBySide) codeWidth + gap else 0
-                val codeY = if (sideBySide) 0 else chipsHeight + gap
-                val toolbarY = if (sideBySide) chipsHeight + gap else codeY + codeHeight + gap
-                val fieldY = toolbarY + toolbarHeight + gap
-                snackbarLift.intValue = if (sideBySide) (available - fieldY - fieldHeight).coerceAtLeast(0) else available - toolbarY
-                layout(width, height) {
-                    chipsRow.forEach { it.placeRelative(controlsX, 0) }
-                    codeBox.forEach { it.placeRelative(0, codeY) }
-                    toolbarRow.forEach { it.placeRelative(controlsX, toolbarY) }
-                    fieldRow.forEach { it.placeRelative(controlsX, fieldY) }
-                }
-            }
+            GeneratorLayout(
+                sideBySide = sideBySide,
+                gap = GAP,
+                chips = chips,
+                code = codeArea,
+                toolbar = toolbar,
+                field = textField,
+                fieldProbe = fieldProbe,
+                onSnackbarLift = { snackbarLift.intValue = it },
+                modifier = Modifier.fillMaxSize(),
+            )
         }
     }
 }
-
-/** The parts of the create page, measured one after another since the field's lines depend on the rest. */
-private enum class GeneratorSlot { CHIPS, TOOLBAR, PROBE, FIELD, CODE }
 
 /** How the create page's preview draws a code. */
 private enum class CodeLook { SQUARE, TILTED, STRETCHED }
 
 /** The code the preview shows, null before one is made, and how it is drawn. */
 private data class ShownCode(val look: CodeLook, val code: Bitmap?)
-
-/** An app the text can be opened in. [looksEnabled] false draws it disabled while it still explains itself. */
-private class SendApp(
-    val label: String,
-    val app: String,
-    val looksEnabled: Boolean,
-    val onClick: () -> Unit,
-)
-
-/**
- * The apps shown in the toolbar, and those folded behind its overflow button. [passive] is the app
- * the system opens the text in, which has a place of its own among them.
- */
-private class SendLayout(val inline: Set<Ferry>, val folded: List<Ferry>, val passive: Ferry?)
-
-/**
- * Which of the [offered] apps fit a toolbar [room] wide. All of them when they fit; otherwise the
- * first, the one the text goes to best, stays in view beside the overflow button, which the
- * narrowest phone screen Android allows still holds, and the others fold away.
- */
-private fun sendLayout(offered: List<Ferry>, room: Dp): SendLayout {
-    fun fits(groupButtons: Int) =
-        TOOLBAR_PADDING + TOOLBAR_BUTTON * (CODE_ACTIONS + groupButtons) + GROUP_GAP + TOOLBAR_FAB <= room
-    val first = offered.firstOrNull()
-    val passive = offered.firstOrNull { it is PassiveFerry }
-    return when {
-        fits(offered.size) -> SendLayout(offered.toSet(), emptyList(), passive)
-        first != null && fits(2) -> SendLayout(setOf(first), offered - first, passive)
-        else -> SendLayout(emptySet(), offered, passive)
-    }
-}
-
-/** An app's place in the toolbar, where its button fades and resizes in and out as it is offered. */
-@Composable
-private fun RowScope.AppSlot(
-    visible: Boolean,
-    app: SendApp,
-    enabled: Boolean,
-    fade: FiniteAnimationSpec<Float>,
-    resize: FiniteAnimationSpec<IntSize>,
-) {
-    AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn(fade) + expandHorizontally(resize),
-        exit = fadeOut(fade) + shrinkHorizontally(resize),
-    ) {
-        AppButton(app, enabled = enabled)
-    }
-}
-
-
-/** The apps share one pill, which sets them apart from the actions on the code without a divider. */
-@Composable
-private fun AppGroup(content: @Composable RowScope.() -> Unit) {
-    Surface(
-        shape = CircleShape,
-        color = handoffContainer(),
-        contentColor = LocalContentColor.current,
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically, content = content)
-    }
-}
-
-/** The apps behind one overflow button, for toolbars too narrow to show each of them. */
-@Composable
-private fun SendMenu(apps: List<SendApp>, enabled: Boolean) {
-    val haptics = rememberHaptics()
-    var open by remember { mutableStateOf(false) }
-    Box {
-        Labeled(R.string.entry_more) {
-            IconButton(
-                onClick = { haptics.tap(); open = true },
-                enabled = enabled,
-                shapes = IconButtonDefaults.shapes(),
-            ) {
-                Icon(painterResource(R.drawable.ic_more_vert), stringResource(R.string.entry_more))
-            }
-        }
-        // The menu leaves focus with the text field, so the keyboard stays and the page keeps still.
-        DropdownMenuPopup(
-            expanded = open,
-            onDismissRequest = { open = false },
-            properties = PopupProperties(focusable = false),
-        ) {
-            DropdownMenuGroup(shapes = MenuDefaults.groupShape(0, 1)) {
-                apps.forEachIndexed { index, app ->
-                    val dim = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                    DropdownMenuItem(
-                        onClick = {
-                            open = false
-                            app.onClick()
-                        },
-                        text = { Text(app.label) },
-                        shape = menuItemShape(index, apps.size),
-                        leadingIcon = {
-                            AppIcon(
-                                app.app,
-                                R.drawable.ic_open_in_new,
-                                Modifier.size(MenuDefaults.LeadingIconSize).alpha(if (app.looksEnabled) 1f else 0.38f),
-                            )
-                        },
-                        colors = if (app.looksEnabled) MenuDefaults.itemColors() else MenuDefaults.itemColors(textColor = dim),
-                    )
-                }
-            }
-        }
-    }
-}
-
-
-/** Hands the text to another app, shown by that app's own icon. */
-@Composable
-private fun AppButton(app: SendApp, enabled: Boolean) {
-    val alpha by animateFloatAsState(
-        if (enabled && app.looksEnabled) 1f else 0.38f,
-        MaterialTheme.motionScheme.defaultEffectsSpec(),
-        label = "app-button",
-    )
-    val description = app.label
-    Labeled(app.label) {
-        IconButton(
-            onClick = app.onClick,
-            enabled = enabled,
-            shapes = IconButtonDefaults.shapes(),
-            modifier = Modifier.semantics { contentDescription = description },
-        ) {
-            AppIcon(app.app, R.drawable.ic_open_in_new, Modifier.size(24.dp).alpha(alpha))
-        }
-    }
-}
 
 /** The code always sits on white, whatever the theme, because readers expect dark modules on light. */
 @Composable
