@@ -115,15 +115,18 @@ class TileArrangementTest {
         val tiles = grid(listOf("a", "b", "c", "d"))
         val near = tileNeighbours("a", tiles, tiles.rows)
         assertEquals(setOf("b", "c", "d"), near.keys)
-        // Beside it leans most, below it less, and "d", two steps away either way, less again.
-        assertEquals(0.21f, near.getValue("b").share, 0.0001f)
-        assertEquals(0.21f * 0.6f, near.getValue("c").share, 0.0001f)
-        assertEquals(0.21f * 0.6f * 0.5f, near.getValue("d").share, 0.0001f)
-        // Each rounds on the sides facing "a", and only the nearest stay rounded once it is loose.
-        assertEquals(Sides.START, near.getValue("b").sides)
-        assertEquals(Sides.TOP, near.getValue("c").sides)
-        assertEquals(Sides.TOP or Sides.START, near.getValue("d").sides)
-        assertEquals(0, near.getValue("d").looseSides)
+        // Beside it leans most and below it less, either way.
+        assertEquals(0.21f, near.getValue("b").towardEnd, 0.0001f)
+        assertEquals(0.21f * 0.6f, near.getValue("c").towardStart, 0.0001f)
+        // "d", two steps away, leans less again toward the start, where "c" falls away ahead of it,
+        // but as far as "c" toward the end, so "c" does not run into it.
+        assertEquals(0.21f * 0.6f * 0.5f, near.getValue("d").towardStart, 0.0001f)
+        assertEquals(0.21f * 0.6f, near.getValue("d").towardEnd, 0.0001f)
+        // Only the corners touching "a" round: both of "b"'s on its start side, the start one of
+        // "c"'s top, as its end lies past "a", and none of "d"'s.
+        assertEquals(Corners.START, near.getValue("b").corners)
+        assertEquals(Corners.TOP_START, near.getValue("c").corners)
+        assertEquals(0, near.getValue("d").corners)
         // Folded to its first row, only "b" takes part.
         assertEquals(setOf("b"), tileNeighbours("a", tiles, 1).keys)
     }

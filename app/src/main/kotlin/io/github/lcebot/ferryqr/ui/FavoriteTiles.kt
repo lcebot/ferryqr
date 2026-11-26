@@ -3,7 +3,6 @@
 package io.github.lcebot.ferryqr.ui
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.AnimationVector4D
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.VectorConverter
@@ -49,12 +48,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
-import androidx.compose.ui.layout.Measurable
-import androidx.compose.ui.layout.MeasureResult
-import androidx.compose.ui.layout.MeasureScope
 import androidx.compose.ui.layout.Placeable
-import androidx.compose.ui.node.LayoutModifierNode
-import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -68,6 +62,7 @@ import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.lerp
@@ -310,9 +305,17 @@ internal fun gridColumns(available: Int, gap: Int, column: Int): Int = max(2, (a
  * in rows next to each other that overlap. The tiles next to the pulled one are a step from it,
  * their neighbours two, and so on to [NEIGHBOUR_STEPS]. A tile leans by [NEAR_TILE_SHARE], less by
  * [VERTICAL_SHARE] for each edge above or below crossed on the way to it, and by [NEIGHBOUR_DECAY]
- * for each step past the first, along whichever way pulls it most. It rounds on the sides facing
- * the pulled tile, as strongly as its steps from it make it, and the nearest stay rounded there
- * once it is loose. Only the first [rowsShown] rows take part.
+ * for each step past the first, along whichever way pulls it most. What the swipe shows behind the
+ * pulled tile leans as a tile beside it does.
+ *
+ * Tiles in a row lean the same way, so a tile ahead of another in the way the finger goes, leaning
+ * less, would close the gap between them and run into it. Along each row in the way the finger
+ * goes, a tile therefore leans at least as far as the one behind it: the tiles behind the nearest
+ * fall away from it, and those ahead of it move with it, so the gaps in a row only ever widen.
+ *
+ * Only the corners of the tiles next to the pulled one that touch it round, as a notification's
+ * do where it meets the one pulled, and they stay rounded once it is loose. Only the first
+ * [rowsShown] rows take part.
  */
 internal fun tileNeighbours(pulled: String, arrangement: TileArrangement, rowsShown: Int): Map<String, Relation> {
     val origin = arrangement.byKey[pulled] ?: return emptyMap()
@@ -348,21 +351,39 @@ internal fun tileNeighbours(pulled: String, arrangement: TileArrangement, rowsSh
         }
         reached = next
     }
-    return strength.mapValues { (key, value) ->
+    // What the swipe shows in the pulled tile's place counts in its row as a tile beside it.
+    fun share(tile: TileSpot) = if (tile.key == pulled) NEAR_TILE_SHARE else NEAR_TILE_SHARE * (strength[tile.key] ?: 0f)
+    val towardEnd = HashMap<String, Float>()
+    val towardStart = HashMap<String, Float>()
+    rows.values.forEach { tiles ->
+        var most = 0f
+        tiles.forEach { tile ->
+            most = maxOf(most, share(tile))
+            towardEnd[tile.key] = most
+        }
+        most = 0f
+        tiles.asReversed().forEach { tile ->
+            most = maxOf(most, share(tile))
+            towardStart[tile.key] = most
+        }
+    }
+    val slack = arrangement.gap
+    val keys = (towardEnd.keys + towardStart.keys).filter { it != pulled && ((towardEnd[it] ?: 0f) > 0f || (towardStart[it] ?: 0f) > 0f) }
+    return keys.associateWith { key ->
         val tile = arrangement.byKey.getValue(key)
-        val across = when {
-            tile.x + tile.width <= origin.x -> Sides.END
-            tile.x >= origin.x + origin.width -> Sides.START
-            else -> 0
+        val touching = if (steps[key] == 1) {
+            val end = tile.x + tile.width
+            fun along(x: Int) = x >= origin.x - slack && x <= origin.x + origin.width + slack
+            when {
+                tile.row == origin.row -> if (tile.x < origin.x) Corners.END else Corners.START
+                tile.row < origin.row ->
+                    (if (along(tile.x)) Corners.BOTTOM_START else 0) or (if (along(end)) Corners.BOTTOM_END else 0)
+                else -> (if (along(tile.x)) Corners.TOP_START else 0) or (if (along(end)) Corners.TOP_END else 0)
+            }
+        } else {
+            0
         }
-        val upDown = when {
-            tile.row < origin.row -> Sides.BOTTOM
-            tile.row > origin.row -> Sides.TOP
-            else -> 0
-        }
-        val step = steps.getValue(key)
-        val sides = upDown or across
-        Relation(NEAR_TILE_SHARE * value, NEIGHBOUR_ROUNDNESS[step - 1], sides, if (step == 1) sides else 0)
+        Relation(towardEnd[key] ?: 0f, towardStart[key] ?: 0f, NEIGHBOUR_ROUNDNESS[0], touching, touching)
     }
 }
 
@@ -437,7 +458,7 @@ internal class TileBoard(private val haptics: Haptics) {
      */
     fun relation(pull: Pull, tile: String, arrangement: TileArrangement): Relation? {
         if (pull.group != TILES_GROUP) return null
-        if (pull.key == tile) return Relation(0f, 1f, Sides.ALL, Sides.ALL)
+        if (pull.key == tile) return Relation(0f, 0f, 1f, Corners.ALL, Corners.ALL, backdrop = NEAR_TILE_SHARE)
         val worked = neighboursOf
         if (worked == null || worked.first !== pull || worked.second !== arrangement || worked.third != rowsShown) {
             neighbours = tileNeighbours(pull.key as? String ?: return null, arrangement, rowsShown)
@@ -573,43 +594,6 @@ private class TileMotion(at: Rect) {
 }
 
 /**
- * Reports the height of what it holds as it changes on [spec], while what it holds keeps its own
- * height and is drawn whole. The list then moves the rows below along with the tiles as they fold
- * and unfold, bringing rows into view and out of it as a scroll would, rather than all at once.
- */
-private class HeightAnimation(var spec: FiniteAnimationSpec<Int>) : Modifier.Node(), LayoutModifierNode {
-    private var height: Animatable<Int, AnimationVector1D>? = null
-    private var target = 0
-
-    override fun MeasureScope.measure(measurable: Measurable, constraints: Constraints): MeasureResult {
-        val placeable = measurable.measure(constraints)
-        val shown = height ?: Animatable(placeable.height, Int.VectorConverter).also {
-            height = it
-            target = placeable.height
-        }
-        if (placeable.height != target) {
-            target = placeable.height
-            coroutineScope.launch { shown.animateTo(target, spec) }
-        }
-        return layout(placeable.width, shown.value.coerceIn(constraints.minHeight, constraints.maxHeight)) {
-            placeable.place(0, 0)
-        }
-    }
-}
-
-private class HeightAnimationElement(val spec: FiniteAnimationSpec<Int>) : ModifierNodeElement<HeightAnimation>() {
-    override fun create() = HeightAnimation(spec)
-
-    override fun update(node: HeightAnimation) {
-        node.spec = spec
-    }
-
-    override fun equals(other: Any?) = other is HeightAnimationElement && other.spec == spec
-
-    override fun hashCode() = spec.hashCode()
-}
-
-/**
  * The favorites as tiles. A tap opens one, and a swipe deletes it or takes it out of the favorites
  * as a swipe on a row does, the tiles around it leaning with it. A long press lifts it and opens
  * its menu, unfolding the favorites first, and dragging it then closes the menu and moves it into
@@ -639,7 +623,7 @@ internal fun FavoriteTiles(
     val motion = MaterialTheme.motionScheme
     val settleSpec = motion.fastSpatialSpec<Rect>()
     val moveSpec = motion.defaultSpatialSpec<Rect>()
-    val heightSpec = motion.defaultSpatialSpec<Int>()
+    val heightSpec = motion.defaultSpatialSpec<IntSize>()
     val showSpec = motion.defaultEffectsSpec<Float>()
     val growSpec = motion.defaultSpatialSpec<Float>()
     val colors = MaterialTheme.colorScheme
@@ -690,7 +674,9 @@ internal fun FavoriteTiles(
     }
 
     Layout(
-        modifier = modifier.then(HeightAnimationElement(heightSpec)),
+        // The list moves the rows below along with the tiles as they fold and unfold, bringing rows
+        // into view and out of it as a scroll would, rather than all at once.
+        modifier = modifier.animateSize(heightSpec),
         content = {
             tiles.forEach { (entry, gone) ->
                 key(entry.text) {
@@ -774,7 +760,15 @@ internal fun FavoriteTiles(
                                 )
                             },
                     ) {
-                        SwipeBackground(swipe.direction, swipe.armed, swipe.becomesFavorite, shape, Modifier.matchParentSize())
+                        // What the swipe shows behind the tile leans with the tiles beside it, so they do
+                        // not slide in under it.
+                        SwipeBackground(
+                            swipe.direction,
+                            swipe.armed,
+                            swipe.becomesFavorite,
+                            shape,
+                            Modifier.matchParentSize().graphicsLayer { translationX = magnet.backdrop.value.value },
+                        )
                         val moreLabel = stringResource(R.string.entry_more)
                         val earlier = stringResource(R.string.favorite_move_earlier)
                         val later = stringResource(R.string.favorite_move_later)
@@ -820,11 +814,16 @@ internal fun FavoriteTiles(
         // keep the size they were drawn at, and a row holding only the tile in hand keeps its height.
         val placeables = arrayOfNulls<Placeable>(measurables.size)
         val tallest = IntArray(arrangement.rows)
+        // A spatial spring narrowing a tile into a row that no longer widens it overshoots past its
+        // own width before it settles, which would wrap its text for a moment. A tile is never laid
+        // out narrower than its own width, so the spring springs back only as far as that.
+        fun atLeastOwn(tile: String, width: Float): Int =
+            max(width.roundToInt(), minOf(board.widths[tile] ?: 0, board.available)).coerceAtLeast(0)
         measurables.forEachIndexed { i, measurable ->
             val (entry, gone) = tiles[i]
             if (gone || entry.text == board.key) return@forEachIndexed
             val spot = arrangement.byKey[entry.text] ?: return@forEachIndexed
-            val width = motions[entry.text]?.rect?.value?.width?.roundToInt() ?: spot.width
+            val width = atLeastOwn(entry.text, motions[entry.text]?.rect?.value?.width ?: spot.width.toFloat())
             placeables[i] = measurable.measure(Constraints(minWidth = width, maxWidth = width))
                 .also { tallest[spot.row] = max(tallest[spot.row], it.height) }
         }
@@ -856,7 +855,7 @@ internal fun FavoriteTiles(
                 }
             } ?: return@mapIndexed null
             val placeable = placeables[i] ?: measurable.measure(
-                Constraints.fixed(drawn.width.roundToInt().coerceAtLeast(0), drawn.height.roundToInt().coerceAtLeast(0)),
+                Constraints.fixed(atLeastOwn(tile, drawn.width), drawn.height.roundToInt().coerceAtLeast(0)),
             )
             placeable to drawn.topLeft
         }
@@ -969,9 +968,8 @@ private fun FavoriteTile(
 
 /**
  * The segmented corners of a tile, following it as it becomes or stops being a corner of the
- * block on the fast spatial motion the list item morphs its own shape on, and rounding further on
- * the sides [magnet] rounds as a tile nearby is swiped. A corner rounds as far as the more rounded
- * of its two sides.
+ * block on the fast spatial motion the list item morphs its own shape on, and rounding further
+ * where [magnet] rounds them as a tile nearby is swiped.
  */
 @Composable
 private fun tileShape(corners: TileCorners, magnet: Magnet): Shape {
@@ -981,15 +979,11 @@ private fun tileShape(corners: TileCorners, magnet: Magnet): Shape {
     val topEnd by animateDpAsState(size(corners.topEnd), spec, label = "tile-top-end")
     val bottomEnd by animateDpAsState(size(corners.bottomEnd), spec, label = "tile-bottom-end")
     val bottomStart by animateDpAsState(size(corners.bottomStart), spec, label = "tile-bottom-start")
-    val top = magnet.top.value.value
-    val bottom = magnet.bottom.value.value
-    val start = magnet.start.value.value
-    val end = magnet.end.value.value
-    fun rounded(base: Dp, a: Float, b: Float) = maxOf(base, lerp(INNER_CORNER, OUTER_CORNER, maxOf(a, b).coerceIn(0f, 1f)))
+    fun rounded(base: Dp, round: Follower) = maxOf(base, lerp(INNER_CORNER, OUTER_CORNER, round.value.value.coerceIn(0f, 1f)))
     return RoundedCornerShape(
-        topStart = rounded(topStart, top, start),
-        topEnd = rounded(topEnd, top, end),
-        bottomEnd = rounded(bottomEnd, bottom, end),
-        bottomStart = rounded(bottomStart, bottom, start),
+        topStart = rounded(topStart, magnet.topStart),
+        topEnd = rounded(topEnd, magnet.topEnd),
+        bottomEnd = rounded(bottomEnd, magnet.bottomEnd),
+        bottomStart = rounded(bottomStart, magnet.bottomStart),
     )
 }

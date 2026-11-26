@@ -103,9 +103,12 @@ private const val MAX_PRE_DETACH_ROUNDNESS = 0.8f
 
 internal enum class PullPhase { Pulling, Detached, Released }
 
-/** A row being swiped, as the rows around it see it. [finger] is the finger's travel in pixels, right positive. */
+/**
+ * A row being swiped, as the rows around it see it. [finger] is the finger's travel in pixels, right
+ * positive; [rtl] says whether right is toward the start.
+ */
 @Stable
-internal class Pull(val key: Any, val group: Any, index: Int) {
+internal class Pull(val key: Any, val group: Any, index: Int, val rtl: Boolean = false) {
     var index by mutableIntStateOf(index)
     var finger by mutableFloatStateOf(0f)
     var phase by mutableStateOf(PullPhase.Pulling)
@@ -187,49 +190,64 @@ internal class Follower {
 }
 
 /**
- * How an entry moves and rounds for the pull of another entry in its group, or of itself: [lean]
- * is how far it moves with the finger, and each side's value from 0 to 1 how far the corners on
- * that side round toward the large corner. A row rounds only along its top and bottom; a tile can
- * round on any side.
+ * How an entry moves and rounds for the pull of another entry in its group, or of itself: [lean] is
+ * how far it moves with the finger, [backdrop] how far what a swipe shows behind it moves, and each
+ * corner's value from 0 to 1 how far it rounds toward the large corner.
  */
 @Stable
 internal class Magnet {
     val lean = Follower()
-    val top = Follower()
-    val bottom = Follower()
-    val start = Follower()
-    val end = Follower()
+    val backdrop = Follower()
+    val topStart = Follower()
+    val topEnd = Follower()
+    val bottomStart = Follower()
+    val bottomEnd = Follower()
 }
 
-/** The sides of an entry that round, as a set of bits. */
-internal object Sides {
-    const val TOP = 1
-    const val BOTTOM = 2
-    const val START = 4
-    const val END = 8
-    const val ALL = TOP or BOTTOM or START or END
+/** The corners of an entry that round, as a set of bits, and the pairs along each side. */
+internal object Corners {
+    const val TOP_START = 1
+    const val TOP_END = 2
+    const val BOTTOM_START = 4
+    const val BOTTOM_END = 8
+    const val TOP = TOP_START or TOP_END
+    const val BOTTOM = BOTTOM_START or BOTTOM_END
+    const val START = TOP_START or BOTTOM_START
+    const val END = TOP_END or BOTTOM_END
+    const val ALL = TOP or BOTTOM
 }
 
 /**
- * How an entry stands to the one pulled: the share of the finger's travel it leans by, how
- * strongly it rounds as the pull grows, and the sides that round, while the pulled one is
- * attached and once it is loose. The pulled entry itself has a [share] of 0, as it moves on its own.
+ * How an entry stands to the one pulled: the share of the finger's travel it leans by when the
+ * finger moves toward the end and when it moves toward the start, how strongly it rounds as the
+ * pull grows, and the corners that round, while the pulled one is attached and once it is loose.
+ * The pulled entry itself leans by nothing, as it moves on its own, while what is shown behind it
+ * leans by [backdrop].
  */
-internal data class Relation(val share: Float, val roundness: Float, val sides: Int, val looseSides: Int)
+internal data class Relation(
+    val towardEnd: Float,
+    val towardStart: Float,
+    val roundness: Float,
+    val corners: Int,
+    val looseCorners: Int,
+    val backdrop: Float = 0f,
+)
 
 private data class Mode(val pull: Pull?, val phase: PullPhase?, val dismissing: Boolean)
 
 private data class Targets(
     val mode: Mode,
     val share: Float,
+    val backdropShare: Float,
     val lean: Float,
-    val top: Float,
-    val bottom: Float,
-    val start: Float,
-    val end: Float,
+    val backdrop: Float,
+    val topStart: Float,
+    val topEnd: Float,
+    val bottomStart: Float,
+    val bottomEnd: Float,
 )
 
-private val Unrelated = Targets(Mode(null, null, false), 0f, 0f, 0f, 0f, 0f, 0f)
+private val Unrelated = Targets(Mode(null, null, false), 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f)
 
 /**
  * Leans the entry with the one [list] has pulled, and rounds its corners, as the notifications
@@ -252,26 +270,30 @@ internal fun rememberMagnet(list: MagneticList, detachAt: Float, relate: (Pull) 
                 val next = goal.mode
                 if (next != mode) {
                     val rejoined = next.phase == PullPhase.Pulling && mode.phase == PullPhase.Detached && next.pull === mode.pull
-                    when {
-                        next.phase == PullPhase.Detached -> magnet.lean.animateWith(settle)
-                        next.phase == PullPhase.Released -> magnet.lean.animateWith(settle, (next.pull?.releaseVelocity ?: 0f) * goal.share)
-                        rejoined -> magnet.lean.animateWith(quick, 0f)
-                        next.pull == null -> magnet.lean.animateWith(settle)
+                    val release = next.pull?.releaseVelocity ?: 0f
+                    for ((follower, share) in listOf(magnet.lean to goal.share, magnet.backdrop to goal.backdropShare)) {
+                        when {
+                            next.phase == PullPhase.Detached -> follower.animateWith(settle)
+                            next.phase == PullPhase.Released -> follower.animateWith(settle, release * share)
+                            rejoined -> follower.animateWith(quick, 0f)
+                            next.pull == null -> follower.animateWith(settle)
+                        }
                     }
                     if (next.phase != PullPhase.Pulling || rejoined) {
-                        magnet.top.animateWith(roundness)
-                        magnet.bottom.animateWith(roundness)
-                        magnet.start.animateWith(roundness)
-                        magnet.end.animateWith(roundness)
+                        magnet.topStart.animateWith(roundness)
+                        magnet.topEnd.animateWith(roundness)
+                        magnet.bottomStart.animateWith(roundness)
+                        magnet.bottomEnd.animateWith(roundness)
                     }
                     mode = next
                 }
                 coroutineScope {
                     launch { magnet.lean.follow(goal.lean) }
-                    launch { magnet.top.follow(goal.top) }
-                    launch { magnet.bottom.follow(goal.bottom) }
-                    launch { magnet.start.follow(goal.start) }
-                    launch { magnet.end.follow(goal.end) }
+                    launch { magnet.backdrop.follow(goal.backdrop) }
+                    launch { magnet.topStart.follow(goal.topStart) }
+                    launch { magnet.topEnd.follow(goal.topEnd) }
+                    launch { magnet.bottomStart.follow(goal.bottomStart) }
+                    launch { magnet.bottomEnd.follow(goal.bottomEnd) }
                 }
             }
     }
@@ -299,18 +321,19 @@ private fun rowRelation(pull: Pull, place: Triple<Any, Any, Int>): Relation? {
     if (abs(distance) > 3) return null
     // The rows three away round only on the side facing the pulled one; loose, the pulled row rounds
     // all round and its neighbours on the side facing it.
-    val sides = when (distance) {
-        -3 -> Sides.BOTTOM
-        3 -> Sides.TOP
-        else -> Sides.TOP or Sides.BOTTOM
+    val corners = when (distance) {
+        -3 -> Corners.BOTTOM
+        3 -> Corners.TOP
+        else -> Corners.ALL
     }
     val loose = when (distance) {
-        -1 -> Sides.BOTTOM
-        0 -> Sides.TOP or Sides.BOTTOM
-        1 -> Sides.TOP
+        -1 -> Corners.BOTTOM
+        0 -> Corners.ALL
+        1 -> Corners.TOP
         else -> 0
     }
-    return Relation(leanShare(distance), ROUNDNESS_MULTIPLIERS[distance + 3], sides, loose)
+    val share = leanShare(distance)
+    return Relation(share, share, ROUNDNESS_MULTIPLIERS[distance + 3], corners, loose)
 }
 
 /**
@@ -321,26 +344,29 @@ internal val NEIGHBOUR_ROUNDNESS = floatArrayOf(ROUNDNESS_MULTIPLIERS[2], ROUNDN
 
 private fun targets(pull: Pull, relation: Relation, detachAt: Float): Targets {
     val mode = Mode(pull, pull.phase, pull.dismissing)
-    fun sides(mask: Int, value: Float) = Targets(
+    val share = if ((pull.finger >= 0f) != pull.rtl) relation.towardEnd else relation.towardStart
+    fun corners(mask: Int, value: Float, travel: Float) = Targets(
         mode,
-        relation.share,
-        0f,
-        if (mask and Sides.TOP != 0) value else 0f,
-        if (mask and Sides.BOTTOM != 0) value else 0f,
-        if (mask and Sides.START != 0) value else 0f,
-        if (mask and Sides.END != 0) value else 0f,
+        share,
+        relation.backdrop,
+        share * travel,
+        relation.backdrop * travel,
+        if (mask and Corners.TOP_START != 0) value else 0f,
+        if (mask and Corners.TOP_END != 0) value else 0f,
+        if (mask and Corners.BOTTOM_START != 0) value else 0f,
+        if (mask and Corners.BOTTOM_END != 0) value else 0f,
     )
     return when (pull.phase) {
         PullPhase.Pulling -> {
             val pulled = (abs(PULLED_SHARE * pull.finger) / detachAt).coerceAtMost(MAX_PRE_DETACH_ROUNDNESS)
-            sides(relation.sides, relation.roundness * pulled).copy(lean = relation.share * pull.finger)
+            corners(relation.corners, relation.roundness * pulled, pull.finger)
         }
         // Once the entry comes loose, its neighbours stay as far as the pull took them, where it
         // came loose, and return with the release, rather than settling back while the finger still
         // holds it, as notifications do: the entry still being held, nothing has let them go yet.
-        PullPhase.Detached -> sides(relation.looseSides, 1f).copy(lean = relation.share * sign(pull.finger) * detachAt)
+        PullPhase.Detached -> corners(relation.looseCorners, 1f, sign(pull.finger) * detachAt)
         // An entry flying off keeps the corners it came loose with until it is gone.
-        PullPhase.Released -> if (!pull.dismissing) sides(0, 0f) else sides(relation.looseSides, 1f)
+        PullPhase.Released -> if (!pull.dismissing) corners(0, 0f, 0f) else corners(relation.looseCorners, 1f, 0f)
     }
 }
 
@@ -479,7 +505,7 @@ internal fun rememberEntrySwipe(
         swipe.tracker.resetTracking()
         val from = shift.value.value
         if (from != 0f) shift.animateWith(quick, shift.value.velocity) else shift.stopAnimating()
-        val swiped = Pull(entry.text, group, place).apply { finger = from }
+        val swiped = Pull(entry.text, group, place, swipe.rtl).apply { finger = from }
         swipe.pull = swiped
         list.pull = swiped
     }

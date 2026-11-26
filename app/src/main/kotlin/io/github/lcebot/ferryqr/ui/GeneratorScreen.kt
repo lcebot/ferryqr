@@ -7,7 +7,6 @@ import android.content.Context
 import android.graphics.Bitmap
 import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandHorizontally
@@ -82,6 +81,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
@@ -515,7 +515,10 @@ fun GeneratorScreen(onBack: () -> Unit) {
                     state = field,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .animateContentSize(MaterialTheme.motionScheme.defaultSpatialSpec()),
+                        // Its lines change with the room the keyboard leaves. Shrinking, it never springs
+                        // below its new height, which would cut off its outline and supporting text.
+                        .clipToBounds()
+                        .animateSize(MaterialTheme.motionScheme.defaultSpatialSpec()),
                     label = { Text(stringResource(R.string.generate_input)) },
                     placeholder = { Text(stringResource(R.string.generate_placeholder)) },
                     isError = error != null,
