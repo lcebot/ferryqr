@@ -2,9 +2,11 @@ package io.github.lcebot.ferryqr.scan
 
 import android.graphics.Bitmap
 import android.graphics.Rect
+import android.graphics.RectF
 import android.os.SystemClock
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import org.opencv.core.Mat
 import kotlin.math.hypot
 import kotlin.math.max
 
@@ -40,8 +42,11 @@ private const val MIN_REGION_PADDING = 48
  */
 private const val MINI_CONFIRMATIONS = 2
 
-/** Looks further apart than this do not count as agreeing, and a muted code is free again after it. */
+/** Looks further apart than this do not count as agreeing. */
 private const val MINI_KEEP_MS = 1500L
+
+/** A dismissed code is ignored until it has been out of view this long. */
+private const val MUTE_KEEP_MS = 1500L
 
 /**
  * Reads every code in view, as a set. Each frame, zxing-cpp reads what it can and points out QR
@@ -53,8 +58,10 @@ private const val MINI_KEEP_MS = 1500L
  * the WeChat decoder. A result goes out when every candidate has been read or the collection
  * window has passed; mini program codes still unread then go along as located entries.
  *
- * Runs on a single analysis thread; only [paused], [reset] and [muteMiniCode] are touched from
- * elsewhere.
+ * Codes the user dismissed are muted: they are dropped as soon as they are read, before anything
+ * costly runs on them, until they have left the view.
+ *
+ * Runs on a single analysis thread; only [paused], [reset] and [resume] are touched from elsewhere.
  */
 class LiveAnalyzer(
     private val zxing: ZxingEngine,
@@ -92,6 +99,12 @@ class LiveAnalyzer(
 
     private val candidates = ArrayList<Candidate>()
     private var lastDeepAt = 0L
+
+    /**
+     * Set from the first deep read of the codes in view until none waits any longer, so a sighting
+     * tells that they are being looked at closer throughout, not only during each read.
+     */
+    private var readingDeep = false
     private var lastSurveyAt = 0L
 
     /** Idle looks alternate between the quick and the wide one; the wide one finds smaller codes. */
@@ -101,22 +114,60 @@ class LiveAnalyzer(
     private var miniSeenAt = 0L
     private var miniHits = 0
 
-    /** Set after the user dismissed a mini program code, until that code has been out of view. */
+    /** What the user dismissed last, handed over from another thread and taken up by the next frame. */
+    private class Dismissed(val texts: Set<String>, val miniCode: Boolean)
+
     @Volatile
+    private var dismissed: Dismissed? = null
+
+    /** The codes muted for now, and an unread mini program code if one was dismissed. */
+    private var mutedTexts: Set<String> = emptySet()
     private var miniMuted = false
-    private var miniMutedSeenAt = 0L
+    private var mutedSeenAt = 0L
+
+    /** Where each muted code was read last, so the regions there are not read again. */
+    private val mutedAt = HashMap<String, RectF>()
 
     /** Starts over as if the analyzer had just been created. */
     fun reset() {
+        dismissed = null
         clearRequested = true
-        miniMuted = false
         paused = false
     }
 
-    /** The mini program code just dismissed is not reported again until it leaves the view. */
-    fun muteMiniCode() {
-        miniMutedSeenAt = SystemClock.elapsedRealtime()
-        miniMuted = true
+    /**
+     * Looks for codes again. The codes in [texts] and, with [miniCode], the unread mini program code
+     * in view were just dismissed, so they are muted until they leave the view; with neither, what
+     * is muted stays so.
+     */
+    fun resume(texts: Set<String>, miniCode: Boolean) {
+        if (texts.isNotEmpty() || miniCode) dismissed = Dismissed(texts, miniCode)
+        paused = false
+    }
+
+    private fun takeDismissed(now: Long) {
+        val taken = dismissed ?: return
+        dismissed = null
+        mutedTexts = taken.texts
+        miniMuted = taken.miniCode
+        mutedSeenAt = now
+        mutedAt.clear()
+    }
+
+    private fun unmute() {
+        mutedTexts = emptySet()
+        miniMuted = false
+        mutedAt.clear()
+    }
+
+    /** Adds [read] to the collection unless it is muted, in which case it only counts as seen. */
+    private fun collect(read: Detection, now: Long) {
+        if (read.text in mutedTexts) {
+            mutedSeenAt = now
+            mutedAt[read.text] = read.bounds
+            return
+        }
+        collected.putIfAbsent(read.text, read)
     }
 
     override fun analyze(image: ImageProxy) {
@@ -133,24 +184,28 @@ class LiveAnalyzer(
         if (clearRequested) {
             clearRequested = false
             startOver()
+            unmute()
         }
         val fast = try {
             zxing.read(image)
         } catch (e: RuntimeException) {
             return
         }
+        val now = SystemClock.elapsedRealtime()
+        takeDismissed(now)
 
         // zxing-cpp positions are in the upright frame, so everything downstream works in that frame too.
         val rotation = image.imageInfo.rotationDegrees
         val frameWidth = if (rotation % 180 != 0) image.cropRect.height() else image.cropRect.width()
         val frameHeight = if (rotation % 180 != 0) image.cropRect.width() else image.cropRect.height()
-        val now = SystemClock.elapsedRealtime()
         // Only codes the screen could draw in an earlier frame count as already shown.
         val shownBefore = announced.toSet()
-        val frame = UprightFrame(image)
+        val frame = UprightFrame(image, frameWidth, frameHeight)
 
         try {
-            fast.decoded.forEach { collected[it.text] = it }
+            // The latest read of a code replaces an earlier one, so its corners are where it is now.
+            fast.decoded.forEach { collected.remove(it.text); collect(it, now) }
+            if ((mutedTexts.isNotEmpty() || miniMuted) && now - mutedSeenAt > MUTE_KEEP_MS) unmute()
             fast.suspects.forEach { addCandidate(it, Kind.QR, now) }
             dropRead()
             candidates.removeAll { now - it.seenAt > CANDIDATE_KEEP_MS }
@@ -161,10 +216,11 @@ class LiveAnalyzer(
             // code in view and not only the ones zxing-cpp read.
             if (collected.isNotEmpty() && !surveyedForHit) {
                 surveyedForHit = true
-                survey(frame.get(), Look.WIDE, now)
+                survey(frame, Look.WIDE, now)
             }
 
             if (candidates.isEmpty()) {
+                readingDeep = false
                 if (collected.isNotEmpty()) {
                     finish(frame, shownBefore)
                 } else {
@@ -177,17 +233,17 @@ class LiveAnalyzer(
 
             val waiting = candidates.map { it.region }
             autoZoom.focusOn(candidates.minBy { it.seenAt }.region, frameWidth, frameHeight, rotation)
-            onSighting(sighting(frameWidth, frameHeight, waiting.union(), deep = false))
+            onSighting(sighting(frameWidth, frameHeight, waiting.union(), deep = readingDeep))
             // Zooming in on a small code is far cheaper than a deep read, so it goes first. While
             // collecting it stays off, since zooming could push the codes already read out of view.
             if (collected.isEmpty() && autoZoom.observe(waiting, frameWidth, frameHeight)) return
 
             if (now - lastDeepAt >= DEEP_INTERVAL_MS) {
-                onSighting(sighting(frameWidth, frameHeight, waiting.union(), deep = true))
-                deepRead(frame.get(), now)
+                deepRead(frame, now)
+                readingDeep = true
                 lastDeepAt = SystemClock.elapsedRealtime()
                 onSighting(candidates.takeIf { it.isNotEmpty() }?.let {
-                    sighting(frameWidth, frameHeight, it.map { c -> c.region }.union(), deep = false)
+                    sighting(frameWidth, frameHeight, it.map { c -> c.region }.union(), deep = true)
                 })
             }
 
@@ -201,14 +257,29 @@ class LiveAnalyzer(
         }
     }
 
-    /** Converts the frame to an upright bitmap once, and only when a step needs it. */
-    private class UprightFrame(private val image: ImageProxy) {
+    /**
+     * The frame upright, as [width] by [height] pixels. Its grey image for the detector is read
+     * straight from the camera's luma plane, and the colour bitmap, which costs several conversions
+     * of the whole frame, is made only for the steps that need one; each at most once.
+     */
+    private inner class UprightFrame(private val image: ImageProxy, val width: Int, val height: Int) {
         private var bitmap: Bitmap? = null
+        private var gray: Mat? = null
+        private var grayTried = false
         var handedOn = false
 
         fun get(): Bitmap = bitmap ?: image.toUprightBitmap().also { bitmap = it }
 
+        fun survey(look: Look): Survey {
+            if (!grayTried) {
+                grayTried = true
+                gray = wechat.upright(image)
+            }
+            return gray?.let { wechat.survey(it, look) } ?: wechat.survey(get(), look)
+        }
+
         fun recycle() {
+            gray?.release()
             if (!handedOn) bitmap?.recycle()
         }
     }
@@ -221,7 +292,7 @@ class LiveAnalyzer(
             return
         }
         val look = if (surveys++ % 2 == 0) Look.QUICK else Look.WIDE
-        survey(frame.get(), look, now)
+        survey(frame, look, now)
         if (collected.isNotEmpty()) {
             // A mini program code that was read needs no second look: its error correction vouches for it.
             surveyedForHit = true
@@ -236,12 +307,17 @@ class LiveAnalyzer(
      * Runs the detector on [frame]: mini program codes it reads join the collection, and what it
      * only locates becomes a candidate, unless it is a code already read.
      */
-    private fun survey(frame: Bitmap, look: Look, now: Long) {
-        val found = wechat.survey(frame, look)
+    private fun survey(frame: UprightFrame, look: Look, now: Long) {
+        val found = frame.survey(look)
         lastSurveyAt = SystemClock.elapsedRealtime()
-        found.read.forEach { collected.putIfAbsent(it.text, it) }
-        found.located.forEach { code ->
-            addCandidate(code.bounds(frame.width, frame.height), Kind.MINI, now)?.mini = code
+        found.read.forEach { collect(it, now) }
+        if (miniMuted) {
+            // A muted mini program code would only be offered again, so it is not looked at closer.
+            if (found.located.isNotEmpty()) mutedSeenAt = now
+        } else {
+            found.located.forEach { code ->
+                addCandidate(code.bounds(frame.width, frame.height), Kind.MINI, now)?.mini = code
+            }
         }
         found.regions.forEach { addCandidate(it, Kind.QR, now) }
         dropRead()
@@ -259,10 +335,10 @@ class LiveAnalyzer(
         return Candidate(Rect(region), kind, now).also { candidates += it }
     }
 
-    /** A candidate where a code was read in the meantime is that code. */
+    /** A candidate where a code was read in the meantime, or a muted code last was, is that code. */
     private fun dropRead() {
-        if (collected.isEmpty()) return
-        val read = collected.values.map { it.bounds }
+        if (collected.isEmpty() && mutedAt.isEmpty()) return
+        val read = collected.values.map { it.bounds } + mutedAt.values
         candidates.removeAll { c -> read.any { b -> c.region.contains(b.centerX().toInt(), b.centerY().toInt()) } }
     }
 
@@ -271,16 +347,17 @@ class LiveAnalyzer(
      * their region, which costs a few milliseconds, then the WeChat decoder at most every
      * [WECHAT_INTERVAL_MS]. Mini program codes are read by looking at the frame again.
      */
-    private fun deepRead(frame: Bitmap, now: Long) {
+    private fun deepRead(frame: UprightFrame, now: Long) {
         if (candidates.any { it.kind == Kind.MINI }) survey(frame, Look.QUICK, now)
         for (candidate in candidates.filter { it.kind == Kind.QR }.sortedBy { it.seenAt }.take(DEEP_PER_PASS)) {
-            val region = candidate.region.paddedWithin(frame)
-            var read = zxing.readRegion(frame, region)
+            val bitmap = frame.get()
+            val region = candidate.region.paddedWithin(bitmap)
+            var read = zxing.readRegion(bitmap, region)
             if (read.isEmpty() && now - candidate.wechatAt >= WECHAT_INTERVAL_MS) {
                 candidate.wechatAt = now
-                read = wechat.decode(frame, region)
+                read = wechat.decode(bitmap, region)
             }
-            read.forEach { collected.putIfAbsent(it.text, it) }
+            read.forEach { collect(it, now) }
         }
         dropRead()
     }
@@ -291,11 +368,7 @@ class LiveAnalyzer(
      */
     private fun offerUnreadMiniCode(frame: UprightFrame, now: Long) {
         val found = candidates.filter { it.kind == Kind.MINI && it.seenAt == now }.mapNotNull { it.mini }.maxByOrNull { it.radius }
-        if (miniMuted) {
-            if (found != null) miniMutedSeenAt = now
-            else if (now - miniMutedSeenAt > MINI_KEEP_MS) miniMuted = false
-            return
-        }
+        if (miniMuted) return
         if (found == null) {
             if (miniSeen != null && now - miniSeenAt > MINI_KEEP_MS) forgetMiniCode()
             return
@@ -327,6 +400,7 @@ class LiveAnalyzer(
         collectingSince = 0L
         surveyedForHit = false
         lastDeepAt = 0L
+        readingDeep = false
         forgetMiniCode()
     }
 

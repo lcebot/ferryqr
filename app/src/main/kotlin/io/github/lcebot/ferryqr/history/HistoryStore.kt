@@ -5,17 +5,19 @@ import android.util.AtomicFile
 import io.github.lcebot.ferryqr.AppSettings
 import io.github.lcebot.ferryqr.content.Classifier
 import io.github.lcebot.ferryqr.content.sensitiveKind
+import io.github.lcebot.ferryqr.scan.Detection
+import io.github.lcebot.ferryqr.scan.isLocatedMiniCode
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -46,43 +48,71 @@ data class HistoryEntry(
  * Scan history kept in a single JSON file in app-private storage. Newest entries come first, and
  * scanning the same content again moves it to the top instead of adding a duplicate, keeping what
  * the user set on it. Favorites survive both the size limit and clearing the history.
+ *
+ * Every change applies at once, in the order it was made, on the thread that made it, so the next
+ * frame already shows it; the file is written afterwards, one write at a time, each with the latest
+ * entries. Changes made while the file is still being read wait for it and then apply in order.
  */
 class HistoryStore private constructor(private val context: Context) {
 
     private val file = AtomicFile(File(context.filesDir, "history.json"))
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val mutex = Mutex()
-    private var loaded = false
+    private val lock = Any()
 
-    private val _entries = MutableStateFlow<List<HistoryEntry>>(emptyList())
-    val entries: StateFlow<List<HistoryEntry>> = _entries.asStateFlow()
+    /** Changes made before the file was read, applied once it is. Guarded by [lock]. */
+    private val pending = ArrayList<(List<HistoryEntry>) -> List<HistoryEntry>>()
+
+    /** Asks the writer to save the latest entries; requests made while it writes merge into one. */
+    private val saves = Channel<Unit>(Channel.CONFLATED)
+
+    /** Whether the favorites changed since the shortcuts were last brought in line. Guarded by [lock]. */
+    private var shortcutsStale = false
+
+    private val _entries = MutableStateFlow<List<HistoryEntry>?>(null)
+
+    /** The entries, newest first, or null while the file is still being read. */
+    val entries: StateFlow<List<HistoryEntry>?> = _entries.asStateFlow()
 
     init {
-        // Shortcuts outlive the process, so they are brought in line with the file once it is read.
         scope.launch {
-            mutex.withLock {
-                ensureLoaded()
-                FavoriteShortcuts.update(context, favoritesOf(_entries.value))
+            val read = read()
+            synchronized(lock) {
+                var current = read
+                pending.forEach { current = limited(it(current)) }
+                pending.clear()
+                _entries.value = current
+                if (current != read) saves.trySend(Unit)
+            }
+            // Shortcuts outlive the process, so they are brought in line with the file once it is read.
+            FavoriteShortcuts.update(context, favoritesOf(_entries.value.orEmpty()))
+            for (request in saves) {
+                val snapshot = _entries.value ?: continue
+                save(snapshot)
+                val stale = synchronized(lock) { shortcutsStale.also { shortcutsStale = false } }
+                if (stale) FavoriteShortcuts.update(context, favoritesOf(snapshot))
             }
         }
     }
 
     /** Waits for the file to be read, so a shortcut opened at launch still finds its entry. */
-    suspend fun find(text: String): HistoryEntry? = withContext(Dispatchers.IO) {
-        mutex.withLock {
-            ensureLoaded()
-            _entries.value.find { it.text == text }
-        }
-    }
+    suspend fun find(text: String): HistoryEntry? = entries.filterNotNull().first().find { it.text == text }
 
     /**
      * Records a scan. Sensitive content is left out where the settings say so; an entry it already
      * has stays as it was, and favoriting such content still keeps it, as the user asked for that.
      */
-    fun add(text: String, format: String) {
+    private fun add(text: String, format: String) {
         val kind = Classifier.classify(text, format).sensitiveKind
-        if (kind != null && !AppSettings.keeps(context, kind)) return
+        if (kind != null && !AppSettings.of(context).keeps(kind).value) return
         addEntry(text, format)
+    }
+
+    /**
+     * Records a code that was read and shown or handed on, the one way scans enter history. A mini
+     * program code that was only located has no content to keep.
+     */
+    fun record(detection: Detection) {
+        if (!detection.isLocatedMiniCode) add(detection.text, detection.format)
     }
 
     private fun addEntry(text: String, format: String) = update { entries ->
@@ -122,11 +152,21 @@ class HistoryStore private constructor(private val context: Context) {
         entries.map { entry -> ranks[entry.text]?.takeIf { entry.favorite }?.let { entry.copy(favoriteRank = it) } ?: entry }
     }
 
-    /** Moves the favorite with [text] to [index] among the favorites. */
-    fun moveFavorite(text: String, index: Int) = update { entries ->
+    /** Moves the favorite with [text] to the top of the favorites. */
+    fun moveFavoriteToTop(text: String) = moveFavorite(text) { 0 }
+
+    /**
+     * Moves the favorite with [text] [by] places among the favorites, later for a positive count,
+     * from wherever it is when the change applies rather than where a screen last saw it.
+     */
+    fun moveFavorite(text: String, by: Int) = moveFavorite(text) { it + by }
+
+    private fun moveFavorite(text: String, to: (Int) -> Int) = update { entries ->
         val order = favoritesOf(entries).map { it.text }.toMutableList()
-        if (!order.remove(text)) return@update entries
-        order.add(index.coerceIn(0, order.size), text)
+        val from = order.indexOf(text)
+        if (from < 0) return@update entries
+        order.removeAt(from)
+        order.add(to(from).coerceIn(0, order.size), text)
         val ranks = order.withIndex().associate { (rank, value) -> value to rank }
         entries.map { entry -> ranks[entry.text]?.let { entry.copy(favoriteRank = it) } ?: entry }
     }
@@ -161,26 +201,28 @@ class HistoryStore private constructor(private val context: Context) {
     fun clear() = update { entries -> entries.filter { it.favorite } }
 
     private fun update(change: (List<HistoryEntry>) -> List<HistoryEntry>) {
-        scope.launch {
-            mutex.withLock {
-                ensureLoaded()
-                val changed = change(_entries.value)
-                val dropped = changed.filterNot { it.favorite }.drop(MAX_ENTRIES).toSet()
-                val limited = if (dropped.isEmpty()) changed else changed.filterNot { it in dropped }
-                if (limited == _entries.value) return@withLock
-                val favoritesChanged = favoritesOf(limited) != favoritesOf(_entries.value)
-                _entries.value = limited
-                save(limited)
-                if (favoritesChanged) FavoriteShortcuts.update(context, favoritesOf(limited))
+        synchronized(lock) {
+            val current = _entries.value
+            if (current == null) {
+                pending += change
+                return
             }
+            val next = limited(change(current))
+            if (next == current) return
+            if (favoritesOf(next) != favoritesOf(current)) shortcutsStale = true
+            _entries.value = next
         }
+        saves.trySend(Unit)
     }
 
+    /** Entries other than favorites past [MAX_ENTRIES] are dropped. */
+    private fun limited(entries: List<HistoryEntry>): List<HistoryEntry> {
+        val dropped = entries.filterNot { it.favorite }.drop(MAX_ENTRIES).toSet()
+        return if (dropped.isEmpty()) entries else entries.filterNot { it in dropped }
+    }
 
-    private fun ensureLoaded() {
-        if (loaded) return
-        loaded = true
-        _entries.value = try {
+    private fun read(): List<HistoryEntry> =
+        try {
             val array = JSONArray(String(file.readFully(), Charsets.UTF_8))
             List(array.length()) { i ->
                 val o = array.getJSONObject(i)
@@ -197,7 +239,6 @@ class HistoryStore private constructor(private val context: Context) {
         } catch (e: Exception) {
             emptyList()
         }
-    }
 
     private fun save(entries: List<HistoryEntry>) {
         val array = JSONArray()

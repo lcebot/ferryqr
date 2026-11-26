@@ -1,6 +1,11 @@
 // No opt-in: ToggleButton and the connected button shapes are stable APIs.
 package io.github.lcebot.ferryqr.ui
 
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.AnimatedContent
 import android.content.Context
 import android.icu.text.Collator
 import androidx.annotation.DrawableRes
@@ -47,6 +52,7 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
+import io.github.lcebot.ferryqr.AppSettings
 import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.dispatch.ActiveFerries
 import io.github.lcebot.ferryqr.dispatch.ActiveFerry
@@ -208,11 +214,20 @@ private fun AppRow(
                 SettingIcon(icon)
                 Column(Modifier.weight(1f)) {
                     Text(name, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-                    Text(
-                        status,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (working) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    // The module's state arrives after the page opens, and its status fades in over
+                    // the one shown until then, in its colour and wording together.
+                    val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+                    AnimatedContent(
+                        targetState = status to working,
+                        transitionSpec = { (fadeIn(fade) togetherWith fadeOut(fade)) using SizeTransform(clip = false) },
+                        label = "app-status",
+                    ) { (text, on) ->
+                        Text(
+                            text,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
             if (below != null) Column(
@@ -237,7 +252,8 @@ private fun AppSettingItem(app: AppSetting, shape: Shape) {
     val name = stringResource(app.name)
     val installed = remember(app.pkg) { Launch.isInstalled(context, app.pkg) }
     val state by OpenInModule.state(app.pkg).collectAsStateWithLifecycle()
-    var cameraFeed by remember(app.pkg) { mutableStateOf(OpenInModule.cameraFeed(context, app.pkg)) }
+    val cameraFeedSetting = remember(app.pkg) { AppSettings.of(context).cameraFeed(app.pkg) }
+    val cameraFeed by cameraFeedSetting.flow.collectAsStateWithLifecycle()
     val method = app.fixed ?: if (cameraFeed) Method.Camera else Method.Direct
     val working = installed && (state == ModuleState.Loaded || state == ModuleState.Enabled)
     val status = when {
@@ -256,8 +272,7 @@ private fun AppSettingItem(app: AppSetting, shape: Shape) {
             choosable = app.fixed == null,
             onSelect = { chosen ->
                 haptics.toggle(chosen == Method.Camera)
-                cameraFeed = chosen == Method.Camera
-                OpenInModule.setCameraFeed(context, app.pkg, cameraFeed)
+                cameraFeedSetting.value = chosen == Method.Camera
             },
         )
         // Only an app limited to one method says why; the methods themselves are described above.

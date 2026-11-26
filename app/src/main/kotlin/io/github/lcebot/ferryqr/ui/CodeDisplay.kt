@@ -57,7 +57,6 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import io.github.lcebot.ferryqr.R
 import kotlin.coroutines.cancellation.CancellationException
-import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
 /** Space kept clear around a code shown over the whole window, as its quiet zone and more. */
@@ -173,25 +172,32 @@ fun CodeOverlay(
         }
 
         val scope = rememberCoroutineScope()
-        val progress = remember { Animatable(0f) }
+        // Where the code is between its source and the whole window moves on a spring, and how much
+        // of the overlay shows fades on its own, so the fade never bounces with the geometry.
+        val growth = remember { Animatable(0f) }
+        val shown = remember { Animatable(0f) }
         val spatial = MaterialTheme.motionScheme.defaultSpatialSpec<Float>()
         val effects = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
         var closing by remember { mutableStateOf(false) }
-        LaunchedEffect(Unit) { progress.animateTo(1f, spatial) }
+        LaunchedEffect(Unit) {
+            launch { shown.animateTo(1f, effects) }
+            growth.animateTo(1f, spatial)
+        }
         fun close() {
             if (closing) return
             closing = true
             scope.launch {
-                progress.animateTo(0f, effects)
+                launch { growth.animateTo(0f, spatial) }
+                shown.animateTo(0f, effects)
                 onDismiss()
             }
         }
         PredictiveBackHandler { events ->
             try {
-                events.collect { event -> progress.snapTo(1f - BACK_SHRINK * event.progress) }
+                events.collect { event -> growth.snapTo(1f - BACK_SHRINK * event.progress) }
                 close()
             } catch (e: CancellationException) {
-                scope.launch { progress.animateTo(1f, spatial) }
+                scope.launch { growth.animateTo(1f, spatial) }
                 throw e
             }
         }
@@ -201,7 +207,7 @@ fun CodeOverlay(
             BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxSize()
-                    .graphicsLayer { alpha = progress.value.coerceIn(0f, 1f) }
+                    .graphicsLayer { alpha = shown.value }
                     .background(Color.White)
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = ::close)
                     .windowInsetsPadding(WindowInsets.safeDrawing)
@@ -214,7 +220,7 @@ fun CodeOverlay(
                         val from = if (turning) null else source
                         val to = target
                         if (from == null || to == null || to.width <= 0f) return@graphicsLayer
-                        val p = progress.value
+                        val p = growth.value
                         val start = from.width / to.width
                         scaleX = lerp(start, 1f, p)
                         scaleY = lerp(start, 1f, p)
@@ -223,11 +229,7 @@ fun CodeOverlay(
                     }
                 if (long) {
                     // Bars taller than the code is wide add nothing a reader needs.
-                    val height = minOf(maxHeight, maxWidth)
-                    // Rounded so a slightly different window does not draw the code again.
-                    val ratio = ((height / maxWidth) * 20).roundToInt() / 20f
-                    val tall = remember(code, ratio) { drawTall?.invoke(ratio) } ?: code
-                    PlainCode(tall, codeModifier.size(maxWidth, height), stretch = true)
+                    FilledTallCode(code, drawTall, codeModifier.size(maxWidth, minOf(maxHeight, maxWidth)))
                 } else {
                     // Sized to the code's own shape, so it grows from and back into the code it came from.
                     val aspect = code.width.toFloat() / code.height
@@ -245,7 +247,7 @@ fun CodeOverlay(
                     .align(Alignment.BottomCenter)
                     .windowInsetsPadding(WindowInsets.navigationBars)
                     .padding(bottom = 8.dp)
-                    .graphicsLayer { alpha = progress.value.coerceIn(0f, 1f) },
+                    .graphicsLayer { alpha = shown.value },
             )
         }
     }

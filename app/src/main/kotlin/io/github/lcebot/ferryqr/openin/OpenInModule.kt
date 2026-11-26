@@ -8,7 +8,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.widget.Toast
-import androidx.core.content.edit
+import io.github.lcebot.ferryqr.AppSettings
 import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.dispatch.ActiveFerries
 import io.github.lcebot.ferryqr.openin.OpenInProtocol.EXTRA_CAMERA_FEED
@@ -35,9 +35,6 @@ private const val HANDOFF_RETRY_MS = 250L
 private const val HANDOFF_WINDOW_MS = 6_000L
 
 private const val IMAGE_QUALITY = 92
-
-private const val PREFS = "open_in"
-private const val CAMERA_FEED_KEY = "camera_feed:"
 
 /** What the LSPosed framework reports about the module in one app. */
 enum class ModuleState {
@@ -163,7 +160,8 @@ object OpenInModule {
      * as a result; without it the text is shown as a QR code, which suits QR content only.
      */
     fun handoff(context: Context, pkg: String, text: String, type: String? = null, picture: Bitmap? = null) {
-        val cameraFeed = cameraFeed(context, pkg)
+        // Only apps whose result is replaced read it.
+        val cameraFeed = AppSettings.of(context).cameraFeed(pkg).value
         val jpeg = picture?.let(::jpeg)
         handoff(context, pkg) { intent ->
             intent.putExtra(EXTRA_TEXT, text).putExtra(EXTRA_CAMERA_FEED, cameraFeed)
@@ -182,20 +180,6 @@ object OpenInModule {
         image.compress(Bitmap.CompressFormat.JPEG, IMAGE_QUALITY, out)
         out.toByteArray()
     }
-
-    /**
-     * Whether text for [pkg] is shown to its camera instead of replacing its decoder's result.
-     * Slower, but it works when the result cannot be replaced in that app's version. Only apps
-     * whose result is replaced read it.
-     */
-    fun cameraFeed(context: Context, pkg: String): Boolean =
-        prefs(context).getBoolean(CAMERA_FEED_KEY + pkg, false)
-
-    fun setCameraFeed(context: Context, pkg: String, enabled: Boolean) {
-        prefs(context).edit { putBoolean(CAMERA_FEED_KEY + pkg, enabled) }
-    }
-
-    private fun prefs(context: Context) = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     private fun handoff(context: Context, pkg: String, content: (Intent) -> Unit) {
         // An app that does not take content only has its scanner opened, for the code to be scanned

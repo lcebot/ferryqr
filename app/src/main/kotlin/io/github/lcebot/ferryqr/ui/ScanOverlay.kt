@@ -2,7 +2,12 @@
 
 package io.github.lcebot.ferryqr.ui
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animateFloatAsState
@@ -76,6 +81,7 @@ private const val HIDE_DELAY_MS = 250L
 @Composable
 fun ScanOverlay(
     sighting: Sighting?,
+    lookingCloser: Boolean,
     confirming: Phase.Confirming?,
     onConfirmed: (Detection) -> Unit,
     modifier: Modifier = Modifier,
@@ -154,12 +160,15 @@ fun ScanOverlay(
             )
         }
 
-        if (confirming == null && sighting?.deep == true) {
-            LoadingIndicator(
-                Modifier
-                    .centeredOn(LOADING_SIZE) { rect.value.center }
-                    .size(LOADING_SIZE)
-            )
+        AnimatedVisibility(
+            visible = confirming == null && sighting != null && lookingCloser,
+            enter = fadeIn(MaterialTheme.motionScheme.defaultEffectsSpec()) +
+                scaleIn(MaterialTheme.motionScheme.defaultSpatialSpec()),
+            exit = fadeOut(MaterialTheme.motionScheme.defaultEffectsSpec()) +
+                scaleOut(MaterialTheme.motionScheme.defaultSpatialSpec()),
+            modifier = Modifier.centeredOn(LOADING_SIZE) { rect.value.center },
+        ) {
+            LoadingIndicator(Modifier.size(LOADING_SIZE))
         }
 
         // Codes decoded while the rest of a multi-code frame is awaited get a marker as each one arrives.

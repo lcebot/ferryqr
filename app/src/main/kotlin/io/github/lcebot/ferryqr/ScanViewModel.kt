@@ -1,36 +1,37 @@
 package io.github.lcebot.ferryqr
 
+import android.app.Activity
 import android.app.Application
 import android.graphics.Bitmap
 import android.net.Uri
-import android.os.SystemClock
 import androidx.annotation.StringRes
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import io.github.lcebot.ferryqr.content.Classifier
+import io.github.lcebot.ferryqr.dispatch.Cards
+import io.github.lcebot.ferryqr.dispatch.Dispatcher
 import io.github.lcebot.ferryqr.dispatch.Origin
 import io.github.lcebot.ferryqr.dispatch.ResultCard
 import io.github.lcebot.ferryqr.history.HistoryStore
 import io.github.lcebot.ferryqr.openin.OpenInModule
 import io.github.lcebot.ferryqr.scan.AutoZoom
 import io.github.lcebot.ferryqr.scan.Detection
+import io.github.lcebot.ferryqr.scan.Engines
 import io.github.lcebot.ferryqr.scan.isLocatedMiniCode
 import io.github.lcebot.ferryqr.scan.locatedCrop
 import io.github.lcebot.ferryqr.scan.LiveAnalyzer
 import io.github.lcebot.ferryqr.scan.Sighting
-import io.github.lcebot.ferryqr.scan.WeChatEngine
-import io.github.lcebot.ferryqr.scan.ZxingEngine
 import io.github.lcebot.ferryqr.scan.StillResult
 import io.github.lcebot.ferryqr.scan.readStillImage
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-
-/** A code that was just dismissed is ignored until it has been out of view this long. */
-private const val SUPPRESS_MS = 1500L
+import kotlinx.coroutines.withContext
 
 sealed interface Phase {
     data object Scanning : Phase
@@ -62,8 +63,8 @@ sealed interface Phase {
 
 class ScanViewModel(app: Application) : AndroidViewModel(app) {
 
-    private val zxing = ZxingEngine()
-    private val wechat = WeChatEngine(app)
+    private val zxing = Engines.zxing
+    private val wechat = Engines.wechat(app)
     private val history = HistoryStore.get(app)
 
     private val _phase = MutableStateFlow<Phase>(Phase.Scanning)
@@ -99,20 +100,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { OpenInModule.refresh() }
     }
 
-    @Volatile
-    private var suppressed: Set<String> = emptySet()
-
-    @Volatile
-    private var suppressedSeenAt = 0L
-
     private fun onLiveHit(frame: Bitmap, detections: List<Detection>, alreadyShown: Set<String>) {
-        val now = SystemClock.elapsedRealtime()
-        if (detections.all { it.text in suppressed } && now - suppressedSeenAt < SUPPRESS_MS) {
-            suppressedSeenAt = now
-            analyzer.paused = false
-            return
-        }
-        suppressed = emptySet()
         _phase.value = if (detections.size == 1) {
             val single = detections.single()
             Phase.Confirming(single, frame.width, frame.height, single.text in alreadyShown).also { frame.recycle() }
@@ -137,28 +125,39 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         _phase.value = Phase.Routing(detection, origin)
     }
 
-    fun record(detection: Detection) {
-        history.add(detection.text, detection.format)
+    /**
+     * Takes a code that was read where it goes: it is kept in history, handed straight to the app
+     * it belongs to when one takes it, and otherwise shown as a card, built off the main thread since
+     * it asks the package manager which apps there are. True when another app took the code, so the
+     * scanner can close. [activity] starts the other app and is not kept.
+     */
+    suspend fun route(activity: Activity, routing: Phase.Routing): Boolean {
+        val detection = routing.detection
+        history.record(detection)
+        val payload = Classifier.classify(detection.text, detection.format)
+        if (Dispatcher.autoLaunch(activity, payload, routing.origin)) return true
+        val card = withContext(Dispatchers.Default) { Cards.build(activity, payload, detection.format, routing.origin) }
+        if (_phase.value == routing) _phase.value = Phase.Showing(card)
+        return false
     }
 
-    fun show(card: ResultCard) {
-        _phase.value = Phase.Showing(card)
+    /** Shows the card for a mini program code that was located but not read. */
+    suspend fun showMiniCode(activity: Activity, found: Phase.MiniCodeFound) {
+        val card = withContext(Dispatchers.Default) { Cards.miniProgram(activity, found.crop, live = found.live) }
+        if (_phase.value == found) _phase.value = Phase.Showing(card)
     }
 
     fun resume() {
-        suppressed = when (val current = _phase.value) {
+        val dismissed = when (val current = _phase.value) {
             is Phase.Showing -> setOf(current.card.raw)
             is Phase.Picking -> current.detections.mapTo(HashSet()) { it.text }
-            else -> suppressed
+            else -> emptySet()
         }
-        suppressedSeenAt = SystemClock.elapsedRealtime()
-        if (showingLiveMiniCode) {
-            showingLiveMiniCode = false
-            analyzer.muteMiniCode()
-        }
+        val miniCode = showingLiveMiniCode
+        showingLiveMiniCode = false
         autoZoom.reset()
         _phase.value = Phase.Scanning
-        analyzer.paused = false
+        analyzer.resume(dismissed, miniCode)
     }
 
     /**
@@ -166,8 +165,6 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
      * codes that were just dismissed, and bind the camera again.
      */
     fun manualReset() {
-        suppressed = emptySet()
-        suppressedSeenAt = 0L
         autoZoom.forceReset()
         wechat.retryIfFailed()
         analyzer.reset()

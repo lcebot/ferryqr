@@ -6,13 +6,17 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Bitmap
 import androidx.activity.compose.LocalActivity
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -28,13 +32,12 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.exclude
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imeAnimationTarget
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
@@ -44,6 +47,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.clearText
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
@@ -73,7 +77,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -88,6 +94,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
@@ -102,10 +109,13 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.PopupProperties
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.lcebot.ferryqr.AppSettings
 import io.github.lcebot.ferryqr.LongCodeEnlarge
 import io.github.lcebot.ferryqr.R
@@ -150,14 +160,11 @@ private val TOOLBAR_FAB = TOOLBAR_TO_FAB_GAP + SHARE_FAB_SIZE
 /** Copy, save and favorite, which always stay in the toolbar. */
 private const val CODE_ACTIONS = 3
 
-/** Layout estimates used only to decide how many lines the text field can keep. */
 private val GAP = 12.dp
-private val CHIPS_HEIGHT = 48.dp
-/** The floating toolbar's own height, which the share FAB beside it does not exceed. */
-private val TOOLBAR_HEIGHT = 64.dp
-private val FIELD_ONE_LINE = 64.dp
-private val SUPPORTING_HEIGHT = 24.dp
 private const val MAX_FIELD_LINES = 4
+
+/** The apps offered for the text are looked up once typing has paused this long. */
+private const val OFFER_DELAY_MS = 150L
 
 @Composable
 fun GeneratorScreen(onBack: () -> Unit) {
@@ -171,14 +178,15 @@ fun GeneratorScreen(onBack: () -> Unit) {
     val text = field.text.toString()
     // The format is chosen from the content unless one is picked; the last pick is kept only when
     // the settings ask for it, as the page keeps nothing else between visits.
-    val keepFormat = remember { AppSettings.rememberFormat(context) }
-    var choice by rememberSaveable { mutableStateOf(if (keepFormat) AppSettings.lastFormat(context) ?: AUTO else AUTO) }
+    val settings = remember { AppSettings.of(context) }
+    val keepFormat by settings.rememberFormat.flow.collectAsStateWithLifecycle()
+    var choice by rememberSaveable { mutableStateOf(if (settings.rememberFormat.value) settings.lastFormat.value ?: AUTO else AUTO) }
     val chosen = remember(choice) { CodeType.entries.firstOrNull { it.name == choice } }
     val automatic = remember(text) { AutoFormat.pick(text) }
     val type = chosen ?: automatic
     fun choose(next: String) {
         choice = next
-        if (keepFormat) AppSettings.setLastFormat(context, next)
+        if (keepFormat) settings.lastFormat.value = next
     }
     var picking by remember { mutableStateOf(false) }
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -208,15 +216,26 @@ fun GeneratorScreen(onBack: () -> Unit) {
             picking = true
         }
     }
-    val enlarge = remember { AppSettings.longCodeEnlarge(context) }
+    val enlarge by settings.longCodeEnlarge.flow.collectAsStateWithLifecycle()
     var prefilled by rememberSaveable { mutableStateOf(false) }
     var result by remember { mutableStateOf<Generated?>(null) }
     // Every installed app FerryQR reaches its own way, each in a place of its own in the toolbar so
     // it can fade in and out there: the apps for their own codes first, the general ones last.
-    val candidates = remember { ActiveFerries.all.filter { it.installed(context) }.sortedBy { it.general } }
+    // Asking the package manager is a call into another process, so it stays off the main thread.
+    val candidates by produceState(emptyList<ActiveFerry>()) {
+        value = withContext(Dispatchers.IO) { ActiveFerries.all.filter { it.installed(context) }.sortedBy { it.general } }
+    }
     val appFade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
     val appResize = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
     val ready = ferriesReady()
+    // The apps for the text are the ones result cards offer for the same content, in the same order,
+    // looked up once typing pauses rather than on every keystroke.
+    val offered by produceState(emptyList<Ferry>(), text, ready) {
+        delay(OFFER_DELAY_MS)
+        value = withContext(Dispatchers.IO) {
+            Ferries.offered(context, Classifier.classify(text)).filter { it.installed(context) }
+        }
+    }
 
     // Android only lets the focused app read the clipboard, so wait for focus before reading it.
     LaunchedEffect(Unit) {
@@ -238,6 +257,12 @@ fun GeneratorScreen(onBack: () -> Unit) {
     }
 
     val code = (result as? Generated.Code)?.bitmap
+    // A long code is drawn again at the shape it is shown in, so its bars fill it without a scaled picture.
+    val drawTall: ((Float) -> Bitmap?)? = if (type.long) {
+        { ratio -> (CodeGenerator.generate(text, type, ratio) as? Generated.Code)?.bitmap }
+    } else {
+        null
+    }
     val unfit = result as? Generated.Unfit
     val typeLabel = stringResource(type.label)
     val separator = stringResource(R.string.list_separator)
@@ -256,7 +281,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
     }
     val trailingIcon: (@Composable () -> Unit)? = if (text.isNotEmpty()) {
         {
-            IconButton(onClick = { haptics.tap(); field.clearText() }) {
+            IconButton(onClick = { haptics.tap(); field.clearText() }, shapes = IconButtonDefaults.shapes()) {
                 Icon(painterResource(R.drawable.ic_close), stringResource(R.string.generate_clear))
             }
         }
@@ -278,17 +303,25 @@ fun GeneratorScreen(onBack: () -> Unit) {
         )
     }
 
+    // How far the snackbar rises above the bottom of the page so it stays clear of the toolbar and
+    // the text field, which the layout below works out as it places them.
+    val snackbarLift = remember { mutableIntStateOf(0) }
     Scaffold(
         // The scaffold lifts the snackbar only above the system bars, and the keyboard would cover it.
         snackbarHost = {
-            SnackbarHost(snackbar, Modifier.windowInsetsPadding(WindowInsets.ime.exclude(ScaffoldDefaults.contentWindowInsets)))
+            SnackbarHost(
+                snackbar,
+                Modifier
+                    .windowInsetsPadding(WindowInsets.ime.exclude(ScaffoldDefaults.contentWindowInsets))
+                    .offset { IntOffset(0, -snackbarLift.intValue) },
+            )
         },
         topBar = {
             // The page never scrolls, so a collapsing app bar would only take space away from the code.
             TopAppBar(
                 title = { Text(stringResource(R.string.generate_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigationIcon = {
-                    IconButton(onClick = { haptics.tap(); onBack() }) {
+                    IconButton(onClick = { haptics.tap(); onBack() }, shapes = IconButtonDefaults.shapes()) {
                         Icon(painterResource(R.drawable.ic_arrow_back), stringResource(R.string.back))
                     }
                 },
@@ -303,33 +336,13 @@ fun GeneratorScreen(onBack: () -> Unit) {
                 .padding(horizontal = 16.dp)
                 .padding(bottom = 16.dp),
         ) {
-            // Everything fits on one screen: the text field gives up lines first, then the code shrinks.
-            // The line count follows where the keyboard is heading rather than each frame of its
-            // animation, so the field changes size once, as the keyboard starts to move, and the
-            // page settles in one motion with it. The keyboard also closes when a menu or the share
-            // sheet takes focus, and the field then grows while the keyboard leaves, rather than
-            // the code first filling the space and giving it back afterwards.
-            val density = LocalDensity.current
-            val navigationBar = WindowInsets.navigationBars.getBottom(density)
-            val keyboardPx = WindowInsets.imeAnimationTarget.getBottom(density) - navigationBar
-            val keyboard = with(density) { keyboardPx.coerceAtLeast(0).toDp() }
-            val lineHeight = with(density) { MaterialTheme.typography.bodyLarge.lineHeight.toDp() }
             // Turned sideways, the screen has too little height for the code above the controls, so the
             // code takes one half of the width, as tall as the screen lets it be, and the controls the other.
             val sideBySide = maxWidth > maxHeight
-            val roomForField = if (sideBySide) {
-                maxHeight - keyboard - CHIPS_HEIGHT - TOOLBAR_HEIGHT - GAP * 2
-            } else {
-                maxHeight - keyboard - CHIPS_HEIGHT - TOOLBAR_HEIGHT - GAP * 3 - maxWidth
-            }
             val toolbarRoom = if (sideBySide) (maxWidth - GAP) / 2 else maxWidth
-            val fieldLines = (MAX_FIELD_LINES downTo 1).firstOrNull { lines ->
-                FIELD_ONE_LINE + lineHeight * (lines - 1) + SUPPORTING_HEIGHT <= roomForField
-            } ?: 1
 
             // What is done with the code sits in one toolbar under it: actions on the code itself,
-            // then the apps that can open the text, with sharing as the main way out. The apps are
-            // the ones result cards offer for the same content, in the same order.
+            // then the apps that can open the text, with sharing as the main way out.
             val sendApp: (Ferry) -> SendApp = { ferry ->
                 val name = ferry.label(context)
                 // Without the module the app could only open its scanner on nothing, so the
@@ -349,37 +362,14 @@ fun GeneratorScreen(onBack: () -> Unit) {
                     }
                 }
             }
-            val payload = remember(text) { Classifier.classify(text) }
-            val offered = remember(payload, ready) { Ferries.offered(context, payload).filter { it.installed(context) } }
-            // The app the system opens the text in has a place of its own, between the apps for
-            // their own codes and the general ones, and keeps it while it fades out.
-            val passive = offered.firstOrNull { it is PassiveFerry }
-            var lastPassive by remember { mutableStateOf<Ferry?>(null) }
-            LaunchedEffect(passive) { if (passive != null) lastPassive = passive }
-            // While the whole group of apps fades out, each app inside keeps its place, so the group
-            // shrinks as one instead of its apps shrinking inside it at the same time, two animations
-            // that drift apart and jerk when the group comes back before the second has ended.
-            val lastLayout = remember { arrayOf(SendLayout(emptySet(), emptyList())) }
-            if (offered.isNotEmpty()) lastLayout[0] = sendLayout(offered, toolbarRoom)
-            val layout = lastLayout[0]
+            val layout = if (offered.isEmpty()) null else sendLayout(offered, toolbarRoom)
 
             // The code opens over the whole window when tapped, as large as the window lets it be.
             var enlarged by rememberSaveable { mutableStateOf(false) }
             var codeBounds by remember { mutableStateOf<Rect?>(null) }
-            val brighten = remember { AppSettings.fullBrightness(context) }
+            val brighten by settings.fullBrightness.flow.collectAsStateWithLifecycle()
             if (enlarged && code != null) {
-                CodeOverlay(
-                    code,
-                    brighten,
-                    codeBounds,
-                    onDismiss = { enlarged = false },
-                    drawTall = if (type.long) {
-                        { ratio -> (CodeGenerator.generate(text, type, ratio) as? Generated.Code)?.bitmap }
-                    } else {
-                        null
-                    },
-                    long = type.long,
-                )
+                CodeOverlay(code, brighten, codeBounds, onDismiss = { enlarged = false }, drawTall = drawTall, long = type.long)
             }
 
             val chips: @Composable () -> Unit = {
@@ -425,9 +415,10 @@ fun GeneratorScreen(onBack: () -> Unit) {
                     )
                 }
             }
-            val codeArea: @Composable (Modifier) -> Unit = { modifier ->
+            val codeFade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+            val codeArea: @Composable () -> Unit = {
                 Box(
-                    modifier = modifier.then(
+                    modifier = Modifier.fillMaxSize().then(
                         if (code == null) {
                             Modifier
                         } else {
@@ -439,23 +430,36 @@ fun GeneratorScreen(onBack: () -> Unit) {
                     ),
                     contentAlignment = Alignment.Center,
                 ) {
-                    // Where the code itself is drawn, which the enlarged code grows out of.
-                    val bounds = Modifier.onGloballyPositioned { codeBounds = it.boundsInWindow() }
-                    if (code != null && type.long && enlarge == LongCodeEnlarge.TILT) {
-                        TiltedCode(code, bounds.fillMaxSize())
-                    } else if (code != null && type.long) {
-                        // Drawn again at the preview's own shape, so its bars fill it without a scaled picture.
-                        BoxWithConstraints(bounds.fillMaxSize()) {
-                            val ratio = ((maxHeight / maxWidth) * 20).roundToInt() / 20f
-                            val tall = remember(text, type, ratio) {
-                                (CodeGenerator.generate(text, type, ratio) as? Generated.Code)?.bitmap
-                            } ?: code
-                            PlainCode(tall, Modifier.fillMaxSize(), stretch = true, filterQuality = FilterQuality.None)
+                    val look = when {
+                        code == null || !type.long -> CodeLook.SQUARE
+                        enlarge == LongCodeEnlarge.TILT -> CodeLook.TILTED
+                        else -> CodeLook.STRETCHED
+                    }
+                    // A code drawn another way crossfades into the new one; drawn the same way, it is
+                    // simply drawn again.
+                    AnimatedContent(
+                        targetState = ShownCode(look, code),
+                        contentKey = { it.look },
+                        transitionSpec = { fadeIn(codeFade) togetherWith fadeOut(codeFade) },
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.fillMaxSize(),
+                        label = "code",
+                    ) { shown ->
+                        // Where the code itself is drawn, which the enlarged code grows out of.
+                        val bounds = Modifier.onGloballyPositioned { codeBounds = it.boundsInWindow() }
+                        val bitmap = shown.code
+                        when {
+                            shown.look == CodeLook.TILTED && bitmap != null -> TiltedCode(bitmap, bounds.fillMaxSize())
+                            shown.look == CodeLook.STRETCHED && bitmap != null ->
+                                FilledTallCode(bitmap, drawTall, bounds.fillMaxSize(), FilterQuality.None)
+                            else -> CodePreview(bitmap, bounds.aspectRatio(1f, matchHeightConstraintsFirst = true))
                         }
-                    } else {
-                        CodePreview(code, bounds.aspectRatio(1f, matchHeightConstraintsFirst = true))
                     }
                 }
+            }
+            val appsMotion: AnimatedContentTransitionScope<*>.() -> ContentTransform = {
+                (fadeIn(appFade) + expandHorizontally(appResize)) togetherWith
+                    (fadeOut(appFade) + shrinkHorizontally(appResize)) using null
             }
             val toolbar: @Composable () -> Unit = {
                 CodeToolbar(
@@ -478,39 +482,52 @@ fun GeneratorScreen(onBack: () -> Unit) {
                         }
                     },
                 ) {
-                    AnimatedVisibility(
-                        visible = offered.isNotEmpty(),
-                        enter = fadeIn(appFade) + expandHorizontally(appResize),
-                        exit = fadeOut(appFade) + shrinkHorizontally(appResize),
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                    // While the whole group of apps fades out, it keeps showing the apps it held, each in
+                    // its place, so the group shrinks as one instead of its apps shrinking inside it at
+                    // the same time, two animations that drift apart and jerk when the group comes back.
+                    AnimatedContent(
+                        targetState = layout,
+                        contentKey = { it != null },
+                        transitionSpec = appsMotion,
+                        contentAlignment = Alignment.CenterStart,
+                        label = "apps",
+                    ) { shown ->
+                        if (shown != null) Row(verticalAlignment = Alignment.CenterVertically) {
                             Spacer(Modifier.width(GROUP_GAP))
                             // Folding apps away or bringing them back resizes the pill a button at a
                             // time, the same way as when an app appears for the text.
                             AppGroup {
                                 val enabled = text.isNotEmpty()
                                 for (ferry in candidates.filterNot { it.general }) {
-                                    AppSlot(ferry in layout.inline, sendApp(ferry), enabled, appFade, appResize)
+                                    AppSlot(ferry in shown.inline, sendApp(ferry), enabled, appFade, appResize)
                                 }
-                                (passive ?: lastPassive)?.let { ferry ->
-                                    AppSlot(ferry in layout.inline, sendApp(ferry), enabled, appFade, appResize)
+                                // The app the system opens the text in has a place of its own, between the
+                                // apps for their own codes and the general ones, and keeps it while it fades out.
+                                AnimatedContent(
+                                    targetState = shown.passive?.takeIf { it in shown.inline },
+                                    contentKey = { it?.pkg },
+                                    transitionSpec = appsMotion,
+                                    contentAlignment = Alignment.Center,
+                                    label = "passive-app",
+                                ) { ferry ->
+                                    if (ferry != null) AppButton(sendApp(ferry), enabled)
                                 }
                                 for (ferry in candidates.filter { it.general }) {
-                                    AppSlot(ferry in layout.inline, sendApp(ferry), enabled, appFade, appResize)
+                                    AppSlot(ferry in shown.inline, sendApp(ferry), enabled, appFade, appResize)
                                 }
                                 AnimatedVisibility(
-                                    visible = layout.folded.isNotEmpty(),
+                                    visible = shown.folded.isNotEmpty(),
                                     enter = fadeIn(appFade) + expandHorizontally(appResize),
                                     exit = fadeOut(appFade) + shrinkHorizontally(appResize),
                                 ) {
-                                    SendMenu(layout.folded.map(sendApp), enabled = enabled)
+                                    SendMenu(shown.folded.map(sendApp), enabled = enabled)
                                 }
                             }
                         }
                     }
                 }
             }
-            val textField: @Composable () -> Unit = {
+            val textField: @Composable (lines: Int) -> Unit = { lines ->
                 OutlinedTextField(
                     state = field,
                     modifier = Modifier
@@ -524,39 +541,91 @@ fun GeneratorScreen(onBack: () -> Unit) {
                     isError = error != null,
                     supportingText = { Text(error.orEmpty()) },
                     trailingIcon = trailingIcon,
-                    lineLimits = TextFieldLineLimits.MultiLine(minHeightInLines = fieldLines, maxHeightInLines = fieldLines),
+                    lineLimits = TextFieldLineLimits.MultiLine(minHeightInLines = lines, maxHeightInLines = lines),
                 )
             }
+            // The text field one line tall, with the same supporting text, measured but never shown,
+            // which tells how much room the field takes at the current font size.
+            val probeState = remember { TextFieldState() }
+            val fieldProbe: @Composable () -> Unit = {
+                OutlinedTextField(
+                    state = probeState,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text(stringResource(R.string.generate_input)) },
+                    isError = error != null,
+                    supportingText = { Text(error.orEmpty()) },
+                    trailingIcon = trailingIcon,
+                    lineLimits = TextFieldLineLimits.MultiLine(minHeightInLines = 1, maxHeightInLines = 1),
+                )
+            }
+            // One content for each line count, made once per composition, so measuring again with the
+            // same count does not compose the field again.
+            val fieldWith: List<@Composable () -> Unit> = List(MAX_FIELD_LINES) { index -> @Composable { textField(index + 1) } }
+            val ime = WindowInsets.ime
+            val imeTarget = WindowInsets.imeAnimationTarget
+            val navigationBars = WindowInsets.navigationBars
+            val lineHeight = MaterialTheme.typography.bodyLarge.lineHeight
 
-            if (sideBySide) {
-                Row(
-                    modifier = Modifier.fillMaxSize().imePadding(),
-                    horizontalArrangement = Arrangement.spacedBy(GAP),
-                ) {
-                    codeArea(Modifier.weight(1f).fillMaxHeight())
-                    Column(
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
-                        verticalArrangement = Arrangement.spacedBy(GAP),
-                    ) {
-                        chips()
-                        toolbar()
-                        textField()
-                    }
+            // Everything fits on one screen: the text field gives up lines first, then the code shrinks.
+            // The line count follows where the keyboard is heading rather than each frame of its
+            // animation, so the field changes size once, as the keyboard starts to move, and the
+            // page settles in one motion with it. The keyboard also closes when a menu or the share
+            // sheet takes focus, and the field then grows while the keyboard leaves, rather than
+            // the code first filling the space and giving it back afterwards.
+            SubcomposeLayout(Modifier.fillMaxSize()) { constraints ->
+                val gap = GAP.roundToPx()
+                val navigation = navigationBars.getBottom(this)
+                val keyboardNow = (ime.getBottom(this) - navigation).coerceAtLeast(0)
+                val keyboardTarget = (imeTarget.getBottom(this) - navigation).coerceAtLeast(0)
+                val width = constraints.maxWidth
+                val height = constraints.maxHeight
+                val controlsWidth = if (sideBySide) (width - gap) / 2 else width
+                val controls = Constraints(maxWidth = controlsWidth)
+                val chipsRow = subcompose(GeneratorSlot.CHIPS, chips).map { it.measure(controls) }
+                val toolbarRow = subcompose(GeneratorSlot.TOOLBAR, toolbar).map { it.measure(controls) }
+                val oneLine = subcompose(GeneratorSlot.PROBE, fieldProbe).maxOfOrNull { it.measure(controls).height } ?: 0
+                val chipsHeight = chipsRow.maxOfOrNull { it.height } ?: 0
+                val toolbarHeight = toolbarRow.maxOfOrNull { it.height } ?: 0
+                // Upright, the code keeps a square as wide as the page before the field takes more lines.
+                val roomForField = height - keyboardTarget - chipsHeight - toolbarHeight - gap * 2 -
+                    if (sideBySide) 0 else gap + width
+                val perLine = lineHeight.toPx().roundToInt()
+                val lines = (MAX_FIELD_LINES downTo 1).firstOrNull { oneLine + perLine * (it - 1) <= roomForField } ?: 1
+                val fieldRow = subcompose(GeneratorSlot.FIELD, fieldWith[lines - 1]).map { it.measure(controls) }
+                val fieldHeight = fieldRow.maxOfOrNull { it.height } ?: 0
+                // The page moves up with the keyboard frame by frame, as padding for it would.
+                val available = (height - keyboardNow).coerceAtLeast(0)
+                val codeWidth = if (sideBySide) controlsWidth else width
+                val codeHeight = if (sideBySide) {
+                    available
+                } else {
+                    (available - chipsHeight - toolbarHeight - fieldHeight - gap * 3).coerceAtLeast(0)
                 }
-            } else {
-                Column(
-                    modifier = Modifier.fillMaxSize().imePadding(),
-                    verticalArrangement = Arrangement.spacedBy(GAP),
-                ) {
-                    chips()
-                    codeArea(Modifier.weight(1f).fillMaxWidth())
-                    toolbar()
-                    textField()
+                val codeBox = subcompose(GeneratorSlot.CODE, codeArea).map { it.measure(Constraints.fixed(codeWidth, codeHeight)) }
+                val controlsX = if (sideBySide) codeWidth + gap else 0
+                val codeY = if (sideBySide) 0 else chipsHeight + gap
+                val toolbarY = if (sideBySide) chipsHeight + gap else codeY + codeHeight + gap
+                val fieldY = toolbarY + toolbarHeight + gap
+                snackbarLift.intValue = if (sideBySide) (available - fieldY - fieldHeight).coerceAtLeast(0) else available - toolbarY
+                layout(width, height) {
+                    chipsRow.forEach { it.placeRelative(controlsX, 0) }
+                    codeBox.forEach { it.placeRelative(0, codeY) }
+                    toolbarRow.forEach { it.placeRelative(controlsX, toolbarY) }
+                    fieldRow.forEach { it.placeRelative(controlsX, fieldY) }
                 }
             }
         }
     }
 }
+
+/** The parts of the create page, measured one after another since the field's lines depend on the rest. */
+private enum class GeneratorSlot { CHIPS, TOOLBAR, PROBE, FIELD, CODE }
+
+/** How the create page's preview draws a code. */
+private enum class CodeLook { SQUARE, TILTED, STRETCHED }
+
+/** The code the preview shows, null before one is made, and how it is drawn. */
+private data class ShownCode(val look: CodeLook, val code: Bitmap?)
 
 /** An app the text can be opened in. [looksEnabled] false draws it disabled while it still explains itself. */
 private class SendApp(
@@ -566,8 +635,11 @@ private class SendApp(
     val onClick: () -> Unit,
 )
 
-/** The apps shown in the toolbar, and those folded behind its overflow button. */
-private class SendLayout(val inline: Set<Ferry>, val folded: List<Ferry>)
+/**
+ * The apps shown in the toolbar, and those folded behind its overflow button. [passive] is the app
+ * the system opens the text in, which has a place of its own among them.
+ */
+private class SendLayout(val inline: Set<Ferry>, val folded: List<Ferry>, val passive: Ferry?)
 
 /**
  * Which of the [offered] apps fit a toolbar [room] wide. All of them when they fit; otherwise the
@@ -578,10 +650,11 @@ private fun sendLayout(offered: List<Ferry>, room: Dp): SendLayout {
     fun fits(groupButtons: Int) =
         TOOLBAR_PADDING + TOOLBAR_BUTTON * (CODE_ACTIONS + groupButtons) + GROUP_GAP + TOOLBAR_FAB <= room
     val first = offered.firstOrNull()
+    val passive = offered.firstOrNull { it is PassiveFerry }
     return when {
-        fits(offered.size) -> SendLayout(offered.toSet(), emptyList())
-        first != null && fits(2) -> SendLayout(setOf(first), offered - first)
-        else -> SendLayout(emptySet(), offered)
+        fits(offered.size) -> SendLayout(offered.toSet(), emptyList(), passive)
+        first != null && fits(2) -> SendLayout(setOf(first), offered - first, passive)
+        else -> SendLayout(emptySet(), offered, passive)
     }
 }
 
@@ -692,7 +765,15 @@ private fun CodePreview(code: Bitmap?, modifier: Modifier = Modifier) {
         shape = RoundedCornerShape(28.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
     ) {
-        Box(Modifier.fillMaxSize().padding(20.dp), contentAlignment = Alignment.Center) {
+        val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+        AnimatedContent(
+            targetState = code,
+            contentKey = { it != null },
+            transitionSpec = { fadeIn(fade) togetherWith fadeOut(fade) },
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.fillMaxSize().padding(20.dp),
+            label = "code-preview",
+        ) { code ->
             if (code != null) {
                 val image = remember(code) { code.asImageBitmap() }
                 Surface(shape = RoundedCornerShape(16.dp), color = Color.White) {

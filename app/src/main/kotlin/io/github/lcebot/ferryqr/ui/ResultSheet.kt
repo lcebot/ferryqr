@@ -20,10 +20,12 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.font.FontFamily
 import io.github.lcebot.ferryqr.AppSettings
 import io.github.lcebot.ferryqr.LongCodeEnlarge
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.lcebot.ferryqr.dispatch.CardSection
 import io.github.lcebot.ferryqr.generate.CodeGenerator
 import io.github.lcebot.ferryqr.generate.CodeRules
-import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import io.github.lcebot.ferryqr.generate.CodeType
 import io.github.lcebot.ferryqr.scan.MINI_PROGRAM_FORMAT
 import androidx.compose.animation.core.animateDpAsState
@@ -64,6 +66,7 @@ import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -114,14 +117,22 @@ fun ResultSheet(card: ResultCard, onDismiss: () -> Unit, onAction: (CardAction) 
 @Composable
 fun ResultCardContent(card: ResultCard, onAction: (CardAction) -> Unit, modifier: Modifier = Modifier) {
     val original = remember(card.format) { CodeType.ofReaderName(card.format) }
-    var shown by remember(card) { mutableStateOf<CodeType?>(null) }
+    // Keyed on the content rather than the card, which is built again whenever an app's readiness
+    // changes, so the format picked stays until another code is shown.
+    var shown by rememberSaveable(card.raw, card.format) { mutableStateOf<CodeType?>(null) }
     var picking by remember { mutableStateOf(false) }
     // A mini program code means something only as one; its content drawn in another format would not.
     val switchable = card.exportable && card.raw.isNotEmpty() && card.format.isNotEmpty() && card.format != MINI_PROGRAM_FORMAT
-    val image = shown?.let { type -> remember(card.raw, type) { CodeGenerator.draw(card.raw, type) } } ?: card.image
+    // Drawn off the main thread; the code shown stays until the new drawing is ready.
+    val redrawn by produceState<Bitmap?>(null, card.raw, shown) {
+        value = shown?.let { type -> withContext(Dispatchers.Default) { CodeGenerator.draw(card.raw, type) } }
+    }
+    val image = if (shown == null) card.image else redrawn ?: card.image
     // What the code is drawn as: the picked format, else the original when the content fits it, as
     // history redraws it, else the QR code it falls back to.
-    val displayed = shown ?: original?.takeIf { CodeRules.problem(card.raw, it) == null } ?: CodeType.QR
+    val displayed = shown ?: remember(card.raw, original) {
+        original?.takeIf { CodeRules.problem(card.raw, it) == null } ?: CodeType.QR
+    }
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -434,8 +445,9 @@ private fun CodeImage(
     val context = LocalContext.current
     val haptics = rememberHaptics()
     val density = LocalDensity.current
-    val mode = remember { AppSettings.longCodeEnlarge(context) }
-    val brighten = remember { AppSettings.fullBrightness(context) }
+    val settings = remember { AppSettings.of(context) }
+    val mode by settings.longCodeEnlarge.flow.collectAsStateWithLifecycle()
+    val brighten by settings.fullBrightness.flow.collectAsStateWithLifecycle()
     val image = remember(bitmap) { bitmap.asImageBitmap() }
     val aspect = bitmap.width.toFloat() / bitmap.height
     var enlarged by rememberSaveable { mutableStateOf(false) }
@@ -456,10 +468,9 @@ private fun CodeImage(
             stretched -> minOf(room, maxWidth)
             else -> bigWidth / aspect
         }
-        // Rounded so a slightly different window does not draw the code again.
-        val tallRatio = (bigHeight / bigWidth * 20).roundToInt() / 20f
-        // Keyed on the drawing too, which changes with the format, so a switch shows at once.
-        val tall = if (stretched && enlarged && drawTall != null) remember(bitmap, tallRatio) { drawTall(tallRatio) } else null
+        // Drawn for the size the code grows to rather than each size on the way, and again for a new
+        // drawing, which changes with the format.
+        val tall = rememberTallCode(bitmap, tallRatio(bigHeight, bigWidth), drawTall.takeIf { stretched && enlarged })
         val spatial = MaterialTheme.motionScheme.defaultSpatialSpec<Dp>()
         val width by animateDpAsState(if (enlarged) bigWidth else small, spatial, label = "code-width")
         val height by animateDpAsState(

@@ -231,7 +231,7 @@
     <string name="favorite_layout_tiles_desc">以磁贴显示收藏，宽度随内容长短变化。</string>
     <string name="favorite_layout_list_desc">收藏与其他历史记录一样逐行显示。</string>
     <string name="settings_tile_grid">对齐到网格</string>
-    <string name="settings_tile_grid_desc">以磁贴显示收藏，宽度随内容长短对齐到固定网格，占一列或多列。</string>
+    <string name="settings_tile_grid_desc">将磁贴宽度对齐到固定网格。</string>
     <string name="settings_folded_rows">收起时显示的行数</string>
     <string name="settings_name_favorites">收藏时询问名称</string>
     <string name="keep_wifi_password">Wi-Fi 密码</string>
@@ -254,6 +254,7 @@
     <string name="favorite">收藏</string>
     <string name="favorite_remove">取消收藏</string>
     <string name="rename">重命名</string>
+    <string name="rename_and_favorite">重命名并收藏</string>
     <string name="rename_label">名称</string>
     <plurals name="favorites_show_more">
         <item quantity="other">展开其余 %1$d 条</item>

@@ -6,6 +6,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.Composable
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.ViewModelProvider
 import io.github.lcebot.ferryqr.history.FavoriteShortcuts
 import io.github.lcebot.ferryqr.ui.FerrySettingsScreen
 import io.github.lcebot.ferryqr.ui.FerryTheme
@@ -39,6 +40,8 @@ abstract class PageActivity : ComponentActivity() {
  * content to show, so going back still leads to the scanner.
  */
 class HistoryActivity : PageActivity() {
+    private val vm by lazy { ViewModelProvider(this)[HistoryViewModel::class.java] }
+
     /** Shown once; after a configuration change it has already been handled. */
     private var openText: String? = null
 
@@ -50,7 +53,7 @@ class HistoryActivity : PageActivity() {
     }
 
     @Composable
-    override fun Page() = HistoryScreen(onBack = ::finish, openText = openText, onOpened = { openText = null })
+    override fun Page() = HistoryScreen(vm, onBack = ::finish, openText = openText, onOpened = { openText = null })
 }
 
 class GeneratorActivity : PageActivity() {

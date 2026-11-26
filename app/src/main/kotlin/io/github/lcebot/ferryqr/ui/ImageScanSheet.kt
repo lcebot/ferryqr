@@ -4,8 +4,6 @@ package io.github.lcebot.ferryqr.ui
 
 import android.graphics.Bitmap
 import android.graphics.Rect
-import android.os.Build
-import android.widget.Toast
 import androidx.activity.compose.LocalActivity
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
@@ -51,6 +49,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -73,18 +72,19 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.lcebot.ferryqr.ImageScanViewModel
 import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.content.Classifier
-import io.github.lcebot.ferryqr.dispatch.ActionResult
 import io.github.lcebot.ferryqr.dispatch.Cards
 import io.github.lcebot.ferryqr.dispatch.Kind
 import io.github.lcebot.ferryqr.dispatch.Origin
-import io.github.lcebot.ferryqr.history.HistoryStore
+import io.github.lcebot.ferryqr.dispatch.ResultCard
 import io.github.lcebot.ferryqr.scan.Detection
 import io.github.lcebot.ferryqr.scan.isLocatedMiniCode
 import io.github.lcebot.ferryqr.scan.locatedCrop
 import io.github.lcebot.ferryqr.scan.StillResult
 import kotlin.math.max
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private val TILE_WIDTH = 96.dp
 private val THUMBNAIL_SIZE = 80.dp
@@ -137,7 +137,7 @@ fun ImageScanSheet(vm: ImageScanViewModel, onClose: () -> Unit) {
         ) { read ->
             when {
                 read == null -> Reading()
-                read is StillResult.Read && read.detections.isNotEmpty() -> Found(read, onHandoff = onClose)
+                read is StillResult.Read && read.detections.isNotEmpty() -> Found(read, onShown = vm::shown, onHandoff = onClose)
                 read is StillResult.Read && read.miniCodes.isNotEmpty() -> MiniFound(read, onHandoff = onClose)
                 read is StillResult.Read -> SheetMessage(
                     icon = R.drawable.ic_search_off,
@@ -217,45 +217,28 @@ private fun SheetMessage(@DrawableRes icon: Int, @StringRes title: Int, @StringR
 }
 
 @Composable
-private fun Found(read: StillResult.Read, onHandoff: () -> Unit) {
+private fun Found(read: StillResult.Read, onShown: (Detection) -> Unit, onHandoff: () -> Unit) {
     val activity = LocalActivity.current ?: return
     val context = LocalContext.current
     val haptics = rememberHaptics()
     var selected by rememberSaveable { mutableIntStateOf(0) }
     val detection = read.detections[selected.coerceIn(read.detections.indices)]
     val ready = ferriesReady()
-    val card = remember(detection, ready) {
-        // A mini program code that could not be read has no content to route; WeChat gets its picture.
-        val crop = if (detection.isLocatedMiniCode) detection.locatedCrop(read.frame) else null
-        if (crop != null) Cards.miniProgram(activity, crop, live = false)
-        else Cards.build(activity, Classifier.classify(detection.text, detection.format), detection.format, Origin.IMAGE)
-    }
-
-    LaunchedEffect(detection) {
-        if (!detection.isLocatedMiniCode) HistoryStore.get(context).add(detection.text, detection.format)
-    }
-
-    // The sheet has no snackbar host, so the few messages it needs are toasts.
-    fun onResult(result: ActionResult) {
-        when (result) {
-            ActionResult.Handoff -> {
-                haptics.tap()
-                onHandoff()
-            }
-            ActionResult.Copied -> {
-                haptics.confirm()
-                // Android 13 and later confirm clipboard writes with their own overlay.
-                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-                    Toast.makeText(context, R.string.copied, Toast.LENGTH_SHORT).show()
-                }
-            }
-            ActionResult.Unavailable -> {
-                haptics.reject()
-                Toast.makeText(context, R.string.no_app, Toast.LENGTH_SHORT).show()
-            }
-            ActionResult.Done -> haptics.tap()
+    // Built off the main thread, as it asks the package manager which apps there are. The card shown
+    // stays until the next one is ready, and the sheet keeps reading until the first is.
+    val card by produceState<ResultCard?>(null, detection, ready) {
+        value = withContext(Dispatchers.Default) {
+            // A mini program code that could not be read has no content to route; WeChat gets its picture.
+            val crop = if (detection.isLocatedMiniCode) detection.locatedCrop(read.frame) else null
+            if (crop != null) Cards.miniProgram(activity, crop, live = false)
+            else Cards.build(activity, Classifier.classify(detection.text, detection.format), detection.format, Origin.IMAGE)
         }
     }
+
+    LaunchedEffect(detection) { onShown(detection) }
+
+    // The sheet has no snackbar host, so the few messages it needs are toasts.
+    val onResult = rememberActionResultHandler(onHandoff, context::toast)
 
     val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
     Column(
@@ -275,11 +258,15 @@ private fun Found(read: StillResult.Read, onHandoff: () -> Unit) {
             transitionSpec = { (fadeIn(fade) togetherWith fadeOut(fade)).using(SizeTransform(clip = false)) },
             label = "image-card",
         ) { shown ->
-            ResultCardContent(
-                card = shown,
-                onAction = { action -> onResult(action.run(activity)) },
-                modifier = Modifier.padding(horizontal = 24.dp),
-            )
+            if (shown == null) {
+                Reading()
+            } else {
+                ResultCardContent(
+                    card = shown,
+                    onAction = { action -> onResult(action.run(activity)) },
+                    modifier = Modifier.padding(horizontal = 24.dp),
+                )
+            }
         }
     }
 }
@@ -289,25 +276,20 @@ private fun Found(read: StillResult.Read, onHandoff: () -> Unit) {
 private fun MiniFound(read: StillResult.Read, onHandoff: () -> Unit) {
     val activity = LocalActivity.current ?: return
     val context = LocalContext.current
-    val haptics = rememberHaptics()
     val crop = remember(read) { read.miniCodes.first().crop(read.frame) } ?: return
     val ready = ferriesReady()
-    val card = remember(crop, ready) { Cards.miniProgram(activity, crop, live = false) }
+    val card by produceState<ResultCard?>(null, crop, ready) {
+        value = withContext(Dispatchers.Default) { Cards.miniProgram(activity, crop, live = false) }
+    }
+    val onResult = rememberActionResultHandler(onHandoff, context::toast)
+    val shown = card
+    if (shown == null) {
+        Reading()
+        return
+    }
     ResultCardContent(
-        card = card,
-        onAction = { action ->
-            when (action.run(activity)) {
-                ActionResult.Handoff -> {
-                    haptics.tap()
-                    onHandoff()
-                }
-                ActionResult.Unavailable -> {
-                    haptics.reject()
-                    Toast.makeText(context, R.string.no_app, Toast.LENGTH_SHORT).show()
-                }
-                else -> haptics.tap()
-            }
-        },
+        card = shown,
+        onAction = { action -> onResult(action.run(activity)) },
         modifier = Modifier
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp)

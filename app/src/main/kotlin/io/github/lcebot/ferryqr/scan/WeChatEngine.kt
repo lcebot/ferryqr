@@ -4,10 +4,13 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.PointF
 import android.graphics.Rect
+import androidx.camera.core.ImageProxy
 import com.king.wechat.qrcode.WeChatQRCodeDetector
 import io.github.lcebot.wxcode.LumaImage
 import org.opencv.OpenCV
 import org.opencv.android.Utils
+import org.opencv.core.Core
+import org.opencv.core.CvType
 import org.opencv.core.Mat
 import org.opencv.core.MatOfByte
 import org.opencv.core.Scalar
@@ -88,7 +91,44 @@ class WeChatEngine(context: Context) {
     /** Lets the next decode try loading OpenCV and the models again after a failed first attempt. */
     fun retryIfFailed() {
         if (ready == false) ready = null
-        detectorFailed = false
+        synchronized(lock) { detectorFailed = false }
+    }
+
+    /**
+     * The luma plane of [image], cropped and turned upright the way zxing-cpp reads the frame, so
+     * positions in it match the upright frame; null until OpenCV is loaded. Read straight from the
+     * camera's plane, it saves turning the frame into colour and back into grey. [image] must still
+     * be open, and the caller releases what this returns.
+     */
+    fun upright(image: ImageProxy): Mat? {
+        if (!ensureReady()) return null
+        return try {
+            val plane = image.planes[0]
+            val crop = image.cropRect
+            val width = crop.width()
+            val height = crop.height()
+            // The luma plane always has a pixel stride of one, but its rows may be padded.
+            val buffer = plane.buffer.duplicate()
+            val bytes = ByteArray(width * height)
+            for (row in 0 until height) {
+                buffer.position((crop.top + row) * plane.rowStride + crop.left)
+                buffer.get(bytes, row * width, width)
+            }
+            val cropped = Mat(height, width, CvType.CV_8UC1)
+            cropped.put(0, 0, bytes)
+            val turn = when (image.imageInfo.rotationDegrees) {
+                90 -> Core.ROTATE_90_CLOCKWISE
+                180 -> Core.ROTATE_180
+                270 -> Core.ROTATE_90_COUNTERCLOCKWISE
+                else -> return cropped
+            }
+            Mat().also {
+                Core.rotate(cropped, it, turn)
+                cropped.release()
+            }
+        } catch (t: Throwable) {
+            null
+        }
     }
 
     /** Called under [lock]. The model files ship in the WeChatQRCode assets. */
@@ -116,6 +156,19 @@ class WeChatEngine(context: Context) {
         return try {
             Utils.bitmapToMat(bitmap, rgba)
             Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY)
+            survey(gray, look)
+        } catch (t: Throwable) {
+            Survey.NONE
+        } finally {
+            rgba.release()
+            gray.release()
+        }
+    }
+
+    /** [survey] on a grey image, such as one from [upright]; [gray] stays the caller's to release. */
+    fun survey(gray: Mat, look: Look): Survey {
+        if (!ensureReady()) return Survey.NONE
+        return try {
             val boxes = synchronized(lock) { proposals(gray, look.detectorArea) }
             val proposed = boxes.mapNotNull { MiniCodeCheck.inRegion(gray, it.second) }.distinctBy(::cellOf)
             val searched = if (look.wholeImageSearch) MiniCodeCheck.inImage(gray)?.takeIf { code -> proposed.none { it.overlaps(code) } } else null
@@ -131,9 +184,6 @@ class WeChatEngine(context: Context) {
             Survey(read.values.filterNotNull(), read.filterValues { it == null }.keys.toList(), regions)
         } catch (t: Throwable) {
             Survey.NONE
-        } finally {
-            rgba.release()
-            gray.release()
         }
     }
 

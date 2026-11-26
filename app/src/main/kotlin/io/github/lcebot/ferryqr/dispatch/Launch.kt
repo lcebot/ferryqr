@@ -65,9 +65,23 @@ internal object Launch {
         }
     }
 
+    /** The browsers as last asked, kept until [forgetApps], since every link card asks for them. */
+    @Volatile
+    private var knownBrowsers: Set<String>? = null
+
     /** The apps that open any web link, which is what makes an app a browser. */
-    private fun browsers(context: Context): Set<String> =
-        query(context, browsable(ANY_WEB_LINK), PackageManager.MATCH_DEFAULT_ONLY).mapTo(HashSet()) { it.activityInfo.packageName }
+    private fun browsers(context: Context): Set<String> = knownBrowsers
+        ?: query(context, browsable(ANY_WEB_LINK), PackageManager.MATCH_DEFAULT_ONLY)
+            .mapTo(HashSet()) { it.activityInfo.packageName }
+            .also { knownBrowsers = it }
+
+    /**
+     * Forgets what was learned about the installed apps, for when FerryQR comes back to the screen,
+     * since apps may have been installed or removed, or a default browser chosen, in the meantime.
+     */
+    fun forgetApps() {
+        knownBrowsers = null
+    }
 
     /**
      * The default browser, or the only one. Without either, the system asks which app to use, and

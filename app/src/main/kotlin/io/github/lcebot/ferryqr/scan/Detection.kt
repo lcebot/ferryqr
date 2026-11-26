@@ -29,7 +29,7 @@ data class Detection(
 
 /**
  * Codes located in a live frame but not decoded yet. [bounds] covers all of them in the pixel space
- * of the upright frame; [deep] is set while a deep read works on them. [found] holds the codes
+ * of the upright frame; [deep] is set once deep reads work on them. [found] holds the codes
  * already decoded while the rest of a multi-code frame is still awaited.
  */
 data class Sighting(

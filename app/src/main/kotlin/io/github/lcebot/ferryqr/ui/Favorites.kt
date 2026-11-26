@@ -22,6 +22,8 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.IconToggleButtonColors
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -75,13 +77,20 @@ fun FavoriteToggle(
     val haptics = rememberHaptics()
     val store = remember { HistoryStore.get(context) }
     val entries by store.entries.collectAsStateWithLifecycle()
-    val favorite = entries.any { it.text == text && it.favorite }
+    val favorite = entries?.any { it.text == text && it.favorite } == true
     var naming by remember { mutableStateOf(false) }
+    // Until the history is read it is not known whether the content is a favorite, so the toggle
+    // keeps its place unseen and fades in once it is, rather than showing an empty star that fills.
+    val shown by animateFloatAsState(
+        if (entries != null) 1f else 0f,
+        MaterialTheme.motionScheme.defaultEffectsSpec(),
+        label = "favorite-toggle",
+    )
     IconToggleButton(
         checked = favorite,
         onCheckedChange = { on ->
-            val label = entries.find { it.text == text }?.label
-            if (on && AppSettings.namesFavorites(context) && !hasTitle(context, text, format, label)) {
+            val label = entries?.find { it.text == text }?.label
+            if (on && AppSettings.of(context).namesFavorites.value && !hasTitle(context, text, format, label)) {
                 haptics.tap()
                 naming = true
             } else {
@@ -90,15 +99,15 @@ fun FavoriteToggle(
             }
         },
         shapes = IconButtonDefaults.toggleableShapes(),
-        modifier = modifier,
-        enabled = enabled,
+        modifier = modifier.graphicsLayer { alpha = shown },
+        enabled = enabled && entries != null,
         colors = colors,
     ) {
         FavoriteIcon(favorite, stringResource(R.string.favorite))
     }
     if (naming) {
         NameFavoriteDialog(
-            current = entries.find { it.text == text }?.label ?: defaultTitle(context, text, format),
+            current = entries?.find { it.text == text }?.label ?: defaultTitle(context, text, format),
             onDismiss = { naming = false },
             onName = { name ->
                 store.setFavorite(text, format, true, name)
@@ -109,12 +118,13 @@ fun FavoriteToggle(
 }
 
 /**
- * Whether content shows under a title rather than as itself: a name the user gave it, or one its
- * kind gives it, as a boarding pass is shown by its flight. Such content is never asked for a name
- * as it becomes a favorite.
+ * Whether content already has a name of its own: one the user gave it, or one it carries that tells
+ * it apart from other content of its kind, as a boarding pass is named by its flight. Such content
+ * is never asked for a name as it becomes a favorite. A name every code of a kind shares, such as a
+ * passkey sign-in's, does not count, so such content is asked for one.
  */
 internal fun hasTitle(context: Context, text: String, format: String, label: String?): Boolean =
-    label != null || Titles.of(context, Classifier.classify(text, format)) != null
+    label != null || Titles.distinct(context, Classifier.classify(text, format)) != null
 
 /**
  * What a favorite tile shows: what history shows any entry as, its name or else the title its kind

@@ -3,6 +3,13 @@
 
 package io.github.lcebot.ferryqr.ui
 
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.AnimatedContent
 import android.graphics.Bitmap
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
@@ -91,13 +98,15 @@ fun FormatPickerSheet(
     onDismiss: () -> Unit,
 ) {
     val haptics = rememberHaptics()
-    var options by remember(text) { mutableStateOf<List<FormatOption>?>(null) }
+    // Every tile is there from the start at its full size, and each preview fades in as it is drawn,
+    // so the sheet opens at its height rather than growing once the previews are ready.
+    val options = remember(text) { mutableStateMapOf<CodeType, FormatOption>() }
     LaunchedEffect(text) {
-        options = withContext(Dispatchers.Default) {
-            CodeType.entries.map { type ->
+        for (type in CodeType.entries) {
+            options[type] = withContext(Dispatchers.Default) {
                 // With nothing typed yet, every format can still be chosen; there is just nothing to preview.
-                if (text.isEmpty()) return@map FormatOption(type, null, null)
-                when (val result = CodeGenerator.generate(text, type, quietZone = false)) {
+                if (text.isEmpty()) return@withContext FormatOption(type, null, null)
+                when (val result = CodeGenerator.generate(text, type, quietZone = false, withAlternatives = false)) {
                     is Generated.Code -> FormatOption(type, result.bitmap, null)
                     is Generated.Unfit -> FormatOption(type, null, result.problem)
                 }
@@ -111,7 +120,6 @@ fun FormatPickerSheet(
             style = MaterialTheme.typography.titleLarge,
             modifier = Modifier.padding(horizontal = 24.dp),
         )
-        val shown = options ?: return@ModalSheet
         LazyVerticalGrid(
             columns = GridCells.Fixed(2),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
@@ -127,14 +135,15 @@ fun FormatPickerSheet(
                         modifier = Modifier.padding(start = 8.dp, top = 12.dp, bottom = 4.dp),
                     )
                 }
-                items(shown.filter { it.type.family == family }, key = { it.type.name }) { option ->
+                items(CodeType.entries.filter { it.family == family }, key = { it.name }) { type ->
                     FormatTile(
-                        option = option,
-                        selected = option.type == selected,
-                        original = option.type == original,
+                        type = type,
+                        option = options[type],
+                        selected = type == selected,
+                        original = type == original,
                         onClick = {
                             haptics.step()
-                            onPick(option.type)
+                            onPick(type)
                         },
                     )
                 }
@@ -143,13 +152,20 @@ fun FormatPickerSheet(
     }
 }
 
+/** [option] is null until the preview of [type] is drawn; the tile can be picked once the format is known to fit. */
 @Composable
-private fun FormatTile(option: FormatOption, selected: Boolean, original: Boolean, onClick: () -> Unit) {
-    val available = option.problem == null
+private fun FormatTile(type: CodeType, option: FormatOption?, selected: Boolean, original: Boolean, onClick: () -> Unit) {
+    val available = option?.problem == null
     val colors = MaterialTheme.colorScheme
+    val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+    val previewColor by animateColorAsState(
+        if (available) Color.White else colors.surfaceContainerHighest,
+        MaterialTheme.motionScheme.defaultEffectsSpec(),
+        label = "format-preview-color",
+    )
     Surface(
         onClick = onClick,
-        enabled = available,
+        enabled = option != null && available,
         shape = RoundedCornerShape(TILE_CORNER),
         color = colors.surfaceContainerHigh,
         border = if (selected) BorderStroke(2.dp, colors.primary) else null,
@@ -161,36 +177,14 @@ private fun FormatTile(option: FormatOption, selected: Boolean, original: Boolea
                     .fillMaxWidth()
                     .height(PREVIEW_HEIGHT)
                     .clip(RoundedCornerShape(PREVIEW_CORNER))
-                    .background(if (available) Color.White else colors.surfaceContainerHighest),
+                    .background(previewColor),
                 contentAlignment = Alignment.Center,
             ) {
-                val preview = option.preview
-                if (preview != null) {
-                    val image = remember(preview) { preview.asImageBitmap() }
-                    Image(
-                        bitmap = image,
-                        contentDescription = null,
-                        contentScale = ContentScale.Fit,
-                        filterQuality = FilterQuality.None,
-                        // Filling the box in both directions lets Fit scale the code up; with only the
-                        // width fixed, the image keeps its height of one pixel per module.
-                        modifier = Modifier.fillMaxSize().padding(PREVIEW_PADDING),
-                    )
-                } else if (available) {
-                    Icon(painterResource(R.drawable.ic_qr_code_2), contentDescription = null, tint = Color.Black.copy(alpha = 0.38f))
-                } else {
-                    Text(
-                        problemText(option.problem),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = colors.onSurfaceVariant,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(horizontal = 8.dp),
-                    )
-                }
+                FormatPreview(option, fade)
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
-                    stringResource(option.type.label),
+                    stringResource(type.label),
                     style = MaterialTheme.typography.titleSmall,
                     modifier = Modifier.weight(1f, fill = false).alpha(if (available) 1f else 0.38f),
                 )
@@ -210,11 +204,56 @@ private fun FormatTile(option: FormatOption, selected: Boolean, original: Boolea
                 }
             }
             Text(
-                stringResource(option.type.note),
+                stringResource(type.note),
                 style = MaterialTheme.typography.bodySmall,
                 color = colors.onSurfaceVariant,
                 modifier = Modifier.alpha(if (available) 1f else 0.38f),
             )
+        }
+    }
+}
+
+/**
+ * What a format's tile shows above its name: nothing while [option] is still drawn, then the code
+ * in it, or a placeholder with nothing typed, or why the text does not fit, fading in on [fade].
+ */
+@Composable
+private fun FormatPreview(option: FormatOption?, fade: FiniteAnimationSpec<Float>) {
+    AnimatedContent(
+        targetState = option,
+        transitionSpec = { fadeIn(fade) togetherWith fadeOut(fade) },
+        contentAlignment = Alignment.Center,
+        modifier = Modifier.fillMaxSize(),
+        label = "format-preview",
+    ) { shown ->
+        val preview = shown?.preview
+        val problem = shown?.problem
+        when {
+            shown == null -> Box(Modifier.fillMaxSize())
+            preview != null -> {
+                val image = remember(preview) { preview.asImageBitmap() }
+                Image(
+                    bitmap = image,
+                    contentDescription = null,
+                    contentScale = ContentScale.Fit,
+                    filterQuality = FilterQuality.None,
+                    // Filling the box in both directions lets Fit scale the code up; with only the
+                    // width fixed, the image keeps its height of one pixel per module.
+                    modifier = Modifier.fillMaxSize().padding(PREVIEW_PADDING),
+                )
+            }
+            problem == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Icon(painterResource(R.drawable.ic_qr_code_2), contentDescription = null, tint = Color.Black.copy(alpha = 0.38f))
+            }
+            else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    problemText(problem),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                )
+            }
         }
     }
 }

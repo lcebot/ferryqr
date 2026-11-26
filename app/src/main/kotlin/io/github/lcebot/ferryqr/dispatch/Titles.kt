@@ -65,6 +65,29 @@ internal object Titles {
     }
 
     /**
+     * The name [payload] carries when it tells this content apart from other content of its kind:
+     * a contact's name, an event's title, a network's name, a vehicle's number, a flight, the
+     * account a two-factor key is for, or whom a message goes to. Null where the only name is one
+     * every code of the kind shares, such as a passkey sign-in or a WeChat merchant's payment code,
+     * or one that is only part of the content, such as an eSIM's server; such a name says what the
+     * content is, but not which.
+     */
+    fun distinct(context: Context, payload: Payload): String? = when (payload) {
+        is WebPayload -> numberedLink(context, payload.url)
+        is SchemePayload -> numberedLink(context, payload.raw) ?: schemeTarget(payload)
+        is WifiPayload -> payload.ssid.takeIf { it.isNotBlank() }
+        is ContactPayload, is EventPayload -> of(context, payload)
+        is OtpPayload -> otpName(context, payload).takeIf { payload.key.issuer != null || payload.key.account != null }
+        is BoardingPassPayload -> payload.pass.legs.firstOrNull()?.flight?.ifEmpty { null }
+            ?.let { context.getString(R.string.title_boarding_pass, it) }
+        else -> null
+    }
+
+    /** The name of a known link that carries a vehicle's number, which tells one vehicle from another. */
+    private fun numberedLink(context: Context, uri: String): String? =
+        KnownLink.of(uri)?.takeIf { it.numbering != Numbering.NONE }?.let { link(context, uri) }
+
+    /**
      * Who a message, call or email goes to, or the place a location names, which is what such a
      * link is about. A location without a name is its coordinates.
      */

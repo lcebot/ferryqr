@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.ViewModelProvider
+import io.github.lcebot.ferryqr.dispatch.Launch
 import io.github.lcebot.ferryqr.ui.FerryApp
 import io.github.lcebot.ferryqr.ui.FerryTheme
 
@@ -21,5 +22,10 @@ class MainActivity : ComponentActivity() {
                 FerryApp(vm)
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        Launch.forgetApps()
     }
 }

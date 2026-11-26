@@ -137,6 +137,7 @@ fun PickOverlay(
         )
         FilledTonalIconButton(
             onClick = { haptics.tap(); onClose() },
+            shapes = IconButtonDefaults.shapes(),
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()

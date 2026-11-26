@@ -87,16 +87,28 @@ object CodeGenerator {
      * [heightRatio], for a long code, is the height wanted for every unit of width, quiet zone
      * included: a barcode gets bars that tall and a PDF417 rows that tall, so a code drawn to fill
      * a taller area keeps every module sharp and in proportion. Without [quietZone] the code has no
-     * margin at all, for a preview that gives every format the same margin of its own.
+     * margin at all, for a preview that gives every format the same margin of its own. Without
+     * [withAlternatives], content that does not fit comes back with no alternatives, which saves
+     * encoding it in every common format where they are not shown.
      */
-    fun generate(text: String, type: CodeType, heightRatio: Float? = null, quietZone: Boolean = true): Generated {
+    fun generate(
+        text: String,
+        type: CodeType,
+        heightRatio: Float? = null,
+        quietZone: Boolean = true,
+        withAlternatives: Boolean = true,
+    ): Generated {
         val problem = CodeRules.problem(text, type)
         val matrix = if (problem == null) encode(text, type.format) else null
         if (matrix != null) {
             val margin = if (quietZone) type.quietZone else 0
             return Generated.Code(render(matrix, margin, linear = type.linear, heightRatio = heightRatio.takeIf { type.long }))
         }
-        val alternatives = CodeType.COMMON.filter { it != type && CodeRules.problem(text, it) == null && encode(text, it.format) != null }
+        val alternatives = if (!withAlternatives) {
+            emptyList()
+        } else {
+            CodeType.COMMON.filter { it != type && CodeRules.problem(text, it) == null && encode(text, it.format) != null }
+        }
         return Generated.Unfit(problem ?: CodeRules.unencodable(type), alternatives)
     }
 

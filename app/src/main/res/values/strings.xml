@@ -236,7 +236,7 @@
     <string name="favorite_layout_tiles_desc">Shows favorites as tiles whose width follows their content.</string>
     <string name="favorite_layout_list_desc">Shows favorites as rows, like the rest of the history.</string>
     <string name="settings_tile_grid">Align to grid</string>
-    <string name="settings_tile_grid_desc">Shows favorites as tiles whose width follows their content, snapped to a fixed grid one or more columns wide.</string>
+    <string name="settings_tile_grid_desc">Snaps the width of tiles to a fixed grid.</string>
     <string name="settings_folded_rows">Rows shown when folded</string>
     <string name="settings_name_favorites">Ask for a name</string>
     <string name="keep_wifi_password">Wi-Fi password</string>
@@ -260,6 +260,7 @@
     <string name="favorite">Favorite</string>
     <string name="favorite_remove">Remove from favorites</string>
     <string name="rename">Rename</string>
+    <string name="rename_and_favorite">Rename and favorite</string>
     <string name="rename_label">Name</string>
     <plurals name="favorites_show_more">
         <item quantity="one">Show %1$d more</item>

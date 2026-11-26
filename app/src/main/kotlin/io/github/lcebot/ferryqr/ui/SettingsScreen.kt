@@ -1,9 +1,11 @@
-// The top bar's scroll behavior is an experimental Material 3 API; the expressive components here
-// are stable.
-@file:OptIn(ExperimentalMaterial3Api::class)
+// The top bar's scroll behavior is an experimental Material 3 API, and so are the press shapes of
+// the back button; the other expressive components here are stable.
+@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 
 package io.github.lcebot.ferryqr.ui
 
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Spacer
 import androidx.annotation.StringRes
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.animation.shrinkVertically
@@ -40,8 +42,10 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.LocalContentColor
@@ -82,6 +86,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.lcebot.ferryqr.AppSettings
 import io.github.lcebot.ferryqr.LongCodeEnlarge
 import io.github.lcebot.ferryqr.R
@@ -169,7 +174,7 @@ private fun SettingsScaffold(
                 LargeFlexibleTopAppBar(
                     title = { Text(stringResource(title)) },
                     navigationIcon = {
-                        IconButton(onClick = { haptics.tap(); onBack() }) {
+                        IconButton(onClick = { haptics.tap(); onBack() }, shapes = IconButtonDefaults.shapes()) {
                             Icon(painterResource(R.drawable.ic_arrow_back), stringResource(R.string.back))
                         }
                     },
@@ -248,15 +253,15 @@ private fun HistorySettings() {
     // Named for what the switches do, so on reads as kept.
     SettingsSection(R.string.settings_keep_title, intro = R.string.settings_keep_intro) {
         kinds.forEachIndexed { index, kind ->
-            var keep by remember(kind) { mutableStateOf(AppSettings.keeps(context, kind)) }
+            val setting = remember(kind) { AppSettings.of(context).keeps(kind) }
+            val keep by setting.flow.collectAsStateWithLifecycle()
             SwitchItem(
                 title = keptLabel(kind),
                 checked = keep,
                 shape = segmentShape(index, kinds.size),
                 onChange = { on ->
                     haptics.toggle(on)
-                    keep = on
-                    AppSettings.setKeeps(context, kind, on)
+                    setting.value = on
                 },
             )
         }
@@ -264,87 +269,103 @@ private fun HistorySettings() {
 }
 
 /**
- * How history lays out favorites, how many rows they fold down to, and whether a new favorite is
- * named before it is kept. Favorites show as a list or as tiles; only tiles can line up in a grid,
- * so that choice opens under the layout while tiles are chosen.
+ * Favorites in the order they come into use: whether a new favorite is named before it is kept, how
+ * history lays them out, and how many rows they fold down to. Favorites show as a list or as tiles;
+ * only tiles can line up in a grid, so that choice opens under the layout while tiles are chosen.
  */
 @Composable
 private fun FavoriteSettings() {
     val context = LocalContext.current
     val haptics = rememberHaptics()
-    var tiles by remember { mutableStateOf(AppSettings.favoriteTiles(context)) }
-    var grid by remember { mutableStateOf(AppSettings.tileGrid(context)) }
-    var naming by remember { mutableStateOf(AppSettings.namesFavorites(context)) }
-    var rows by remember { mutableIntStateOf(AppSettings.foldedRows(context)) }
+    val settings = remember { AppSettings.of(context) }
+    val tiles by settings.favoriteTiles.flow.collectAsStateWithLifecycle()
+    val grid by settings.tileGrid.flow.collectAsStateWithLifecycle()
+    val naming by settings.namesFavorites.flow.collectAsStateWithLifecycle()
+    val rows by settings.foldedRows.flow.collectAsStateWithLifecycle()
     val count = if (tiles) 4 else 3
     val spatial = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
     val effects = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
     SettingsSection(R.string.favorites_title) {
-        SegmentedListItem(
-            shapes = ListItemDefaults.shapes(shape = segmentShape(0, count)),
-            colors = settingColors(),
-            contentPadding = SETTING_ROW_PADDING,
-            supportingContent = {
-                // The buttons keep the space from the title that controls keep from a description.
-                Column(
-                    modifier = Modifier.padding(top = SETTING_CONTROL_GAP),
-                    verticalArrangement = Arrangement.spacedBy(SETTING_CONTROL_GAP),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().selectableGroup(),
-                        horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
+        SwitchItem(
+            title = R.string.settings_name_favorites,
+            checked = naming,
+            shape = segmentShape(0, count),
+            onChange = { on ->
+                haptics.toggle(on)
+                settings.namesFavorites.value = on
+            },
+        )
+        // The layout and the grid choice under it are one item of the section, and the grid choice
+        // brings its own gap above it, so the gap opens and closes with it rather than staying
+        // behind, doubled around an empty item, until the choice has left.
+        Column {
+            SegmentedListItem(
+                shapes = ListItemDefaults.shapes(shape = segmentShape(1, count)),
+                colors = settingColors(),
+                contentPadding = SETTING_ROW_PADDING,
+                supportingContent = {
+                    // The buttons keep the space from the title that controls keep from a description.
+                    Column(
+                        modifier = Modifier.padding(top = SETTING_CONTROL_GAP),
+                        verticalArrangement = Arrangement.spacedBy(SETTING_CONTROL_GAP),
                     ) {
-                        listOf(false, true).forEachIndexed { index, option ->
-                            ToggleButton(
-                                checked = option == tiles,
-                                colors = settingToggleColors(),
-                                onCheckedChange = {
-                                    if (it) {
-                                        haptics.step()
-                                        tiles = option
-                                        AppSettings.setFavoriteTiles(context, option)
-                                    }
-                                },
-                                shapes = if (index == 0) {
-                                    ButtonGroupDefaults.connectedLeadingButtonShapes()
-                                } else {
-                                    ButtonGroupDefaults.connectedTrailingButtonShapes()
-                                },
-                                modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
-                            ) {
-                                Text(
-                                    stringResource(if (option) R.string.favorite_layout_tiles else R.string.favorite_layout_list),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
+                        Row(
+                            modifier = Modifier.fillMaxWidth().selectableGroup(),
+                            horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
+                        ) {
+                            listOf(false, true).forEachIndexed { index, option ->
+                                ToggleButton(
+                                    checked = option == tiles,
+                                    colors = settingToggleColors(),
+                                    onCheckedChange = {
+                                        if (it) {
+                                            haptics.step()
+                                            settings.favoriteTiles.value = option
+                                        }
+                                    },
+                                    shapes = if (index == 0) {
+                                        ButtonGroupDefaults.connectedLeadingButtonShapes()
+                                    } else {
+                                        ButtonGroupDefaults.connectedTrailingButtonShapes()
+                                    },
+                                    modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
+                                ) {
+                                    Text(
+                                        stringResource(if (option) R.string.favorite_layout_tiles else R.string.favorite_layout_list),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
                             }
                         }
+                        Text(stringResource(if (tiles) R.string.favorite_layout_tiles_desc else R.string.favorite_layout_list_desc))
                     }
-                    Text(stringResource(if (tiles) R.string.favorite_layout_tiles_desc else R.string.favorite_layout_list_desc))
-                }
-            },
-        ) {
-            Text(stringResource(R.string.settings_favorite_layout))
-        }
-        AnimatedVisibility(
-            visible = tiles,
-            enter = fadeIn(effects) + expandVertically(spatial),
-            exit = fadeOut(effects) + shrinkVertically(spatial),
-        ) {
-            SwitchItem(
-                title = R.string.settings_tile_grid,
-                description = R.string.settings_tile_grid_desc,
-                checked = grid,
-                shape = segmentShape(1, count),
-                onChange = { on ->
-                    haptics.toggle(on)
-                    grid = on
-                    AppSettings.setTileGrid(context, on)
                 },
-            )
+            ) {
+                Text(stringResource(R.string.settings_favorite_layout))
+            }
+            AnimatedVisibility(
+                visible = tiles,
+                enter = fadeIn(effects) + expandVertically(spatial),
+                exit = fadeOut(effects) + shrinkVertically(spatial),
+            ) {
+                Column {
+                    Spacer(Modifier.height(ListItemDefaults.SegmentedGap))
+                    SwitchItem(
+                        title = R.string.settings_tile_grid,
+                        description = R.string.settings_tile_grid_desc,
+                        checked = grid,
+                        shape = segmentShape(2, count),
+                        onChange = { on ->
+                            haptics.toggle(on)
+                            settings.tileGrid.value = on
+                        },
+                    )
+                }
+            }
         }
         SegmentedListItem(
-            shapes = ListItemDefaults.shapes(shape = segmentShape(count - 2, count)),
+            shapes = ListItemDefaults.shapes(shape = segmentShape(count - 1, count)),
             colors = settingColors(),
             contentPadding = SETTING_ROW_PADDING,
             supportingContent = {
@@ -362,8 +383,7 @@ private fun FavoriteSettings() {
                         val picked = first + (value * span).roundToInt()
                         if (picked != rows) {
                             haptics.step()
-                            rows = picked
-                            AppSettings.setFoldedRows(context, picked)
+                            settings.foldedRows.value = picked
                         }
                     },
                     interactionSource = interactions,
@@ -407,16 +427,6 @@ private fun FavoriteSettings() {
                 )
             }
         }
-        SwitchItem(
-            title = R.string.settings_name_favorites,
-            checked = naming,
-            shape = segmentShape(count - 1, count),
-            onChange = { on ->
-                haptics.toggle(on)
-                naming = on
-                AppSettings.setNamesFavorites(context, on)
-            },
-        )
     }
 }
 
@@ -425,8 +435,9 @@ private fun FavoriteSettings() {
 private fun DisplaySettings() {
     val context = LocalContext.current
     val haptics = rememberHaptics()
-    var mode by remember { mutableStateOf(AppSettings.longCodeEnlarge(context)) }
-    var bright by remember { mutableStateOf(AppSettings.fullBrightness(context)) }
+    val settings = remember { AppSettings.of(context) }
+    val mode by settings.longCodeEnlarge.flow.collectAsStateWithLifecycle()
+    val bright by settings.fullBrightness.flow.collectAsStateWithLifecycle()
     SettingsSection(R.string.settings_display_title) {
         SegmentedListItem(
             shapes = ListItemDefaults.shapes(shape = segmentShape(0, 2)),
@@ -446,8 +457,7 @@ private fun DisplaySettings() {
                                 onCheckedChange = {
                                     if (it) {
                                         haptics.step()
-                                        mode = option
-                                        AppSettings.setLongCodeEnlarge(context, option)
+                                        settings.longCodeEnlarge.value = option
                                     }
                                 },
                                 shapes = when (index) {
@@ -474,8 +484,7 @@ private fun DisplaySettings() {
             shape = segmentShape(1, 2),
             onChange = { on ->
                 haptics.toggle(on)
-                bright = on
-                AppSettings.setFullBrightness(context, on)
+                settings.fullBrightness.value = on
             },
         )
     }
@@ -486,7 +495,8 @@ private fun DisplaySettings() {
 private fun CreateSettings() {
     val context = LocalContext.current
     val haptics = rememberHaptics()
-    var keepFormat by remember { mutableStateOf(AppSettings.rememberFormat(context)) }
+    val setting = remember { AppSettings.of(context).rememberFormat }
+    val keepFormat by setting.flow.collectAsStateWithLifecycle()
     SettingsSection(R.string.generate_title) {
         SwitchItem(
             title = R.string.settings_remember_format,
@@ -495,8 +505,7 @@ private fun CreateSettings() {
             shape = segmentShape(0, 1),
             onChange = { on ->
                 haptics.toggle(on)
-                keepFormat = on
-                AppSettings.setRememberFormat(context, on)
+                setting.value = on
             },
         )
     }

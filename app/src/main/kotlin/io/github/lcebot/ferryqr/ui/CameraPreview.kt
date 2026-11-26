@@ -11,6 +11,7 @@ import androidx.camera.core.Preview
 import androidx.camera.core.SessionConfig
 import androidx.camera.core.SurfaceOrientedMeteringPointFactory
 import androidx.camera.core.SurfaceRequest
+import androidx.camera.core.TorchState
 import androidx.camera.core.ZoomState
 import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
@@ -30,6 +31,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -52,6 +54,7 @@ import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.ln
 import kotlin.math.roundToInt
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.launch
 
@@ -82,14 +85,34 @@ private fun sessionReporting(autoZoom: AutoZoom, preview: Preview, analysis: Ima
         .camera2Interop { repeatingCaptureCallback = autoZoom.captureCallback }
         .build()
 
+/**
+ * The bound camera's torch. [on] follows the camera's own torch state rather than the last request,
+ * since the camera turns the torch off by itself when it closes, as it does whenever the scanner
+ * leaves the screen.
+ */
+@Stable
+class Torch {
+    /** Whether the bound camera has a flash unit to light. */
+    var available by mutableStateOf(false)
+        internal set
+
+    var on by mutableStateOf(false)
+        internal set
+
+    internal var camera: Camera? = null
+
+    fun set(on: Boolean) {
+        camera?.cameraControl?.enableTorch(on)
+    }
+}
+
 @Composable
 fun CameraPreview(
     analyzer: ImageAnalysis.Analyzer,
     executor: Executor,
     autoZoom: AutoZoom,
     session: Int,
-    torch: Boolean,
-    onFlashUnit: (Boolean) -> Unit,
+    torch: Torch,
     onZoom: (Float) -> Unit,
     onUnavailable: () -> Unit,
     scanning: Boolean,
@@ -102,7 +125,16 @@ fun CameraPreview(
     val haptics = rememberHaptics()
 
     LaunchedEffect(owner, session) {
-        val provider = ProcessCameraProvider.awaitInstance(context)
+        // Besides a device without a back camera, CameraX fails here when the camera service or
+        // another app holds the camera in a way it cannot recover from; either way there is no preview.
+        val provider = try {
+            ProcessCameraProvider.awaitInstance(context)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            onUnavailable()
+            return@LaunchedEffect
+        }
         val selector = ResolutionSelector.Builder()
             .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
             .setResolutionStrategy(
@@ -122,13 +154,12 @@ fun CameraPreview(
             provider.unbindAll()
             val bound = try {
                 provider.bindToLifecycle(owner, provider.preferredBackCamera(), config)
-            } catch (e: IllegalArgumentException) {
+            } catch (e: Exception) {
                 onUnavailable()
                 return@LaunchedEffect
             }
             camera = bound
             autoZoom.camera = bound
-            onFlashUnit(bound.cameraInfo.hasFlashUnit())
             awaitCancellation()
         } finally {
             autoZoom.camera = null
@@ -138,15 +169,20 @@ fun CameraPreview(
         }
     }
 
-    LaunchedEffect(camera, torch) {
-        camera?.cameraControl?.enableTorch(torch)
-    }
-
     DisposableEffect(camera, owner) {
-        val zoomState = camera?.cameraInfo?.zoomState ?: return@DisposableEffect onDispose { }
-        val observer = Observer<ZoomState> { onZoom(it.zoomRatio) }
-        zoomState.observe(owner, observer)
-        onDispose { zoomState.removeObserver(observer) }
+        val bound = camera ?: return@DisposableEffect onDispose { }
+        val zoomObserver = Observer<ZoomState> { onZoom(it.zoomRatio) }
+        val torchObserver = Observer<Int> { torch.on = it == TorchState.ON }
+        bound.cameraInfo.zoomState.observe(owner, zoomObserver)
+        bound.cameraInfo.torchState.observe(owner, torchObserver)
+        torch.camera = bound
+        torch.available = bound.cameraInfo.hasFlashUnit()
+        onDispose {
+            bound.cameraInfo.zoomState.removeObserver(zoomObserver)
+            bound.cameraInfo.torchState.removeObserver(torchObserver)
+            torch.camera = null
+            torch.on = false
+        }
     }
 
     // Once the scan has an outcome, the tapped point no longer matters.

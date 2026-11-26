@@ -69,8 +69,10 @@ class ZxingEngine {
     /**
      * Reads [region] of [frame] at full resolution, which the fast read loses once it downscales,
      * enlarged when small, with each deep reader in turn. It costs a few milliseconds, far less than
-     * the WeChat decoder, so it is tried first. Positions come back in [frame]'s pixels.
+     * the WeChat decoder, so it is tried first. Positions come back in [frame]'s pixels. The
+     * scanner and the image sheet share one engine and these readers with it, so one reads at a time.
      */
+    @Synchronized
     fun readRegion(frame: Bitmap, region: Rect): List<Detection> {
         val r = Rect(region)
         if (!r.intersect(0, 0, frame.width, frame.height) || r.width() < 8 || r.height() < 8) return emptyList()
