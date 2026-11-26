@@ -20,7 +20,8 @@ object AppSettings {
     private const val KEY_FULL_BRIGHTNESS = "full_brightness"
     private const val KEY_REMEMBER_FORMAT = "remember_format"
     private const val KEY_LAST_FORMAT = "last_format"
-    private const val KEY_FAVORITE_LAYOUT = "favorite_layout"
+    private const val KEY_FAVORITE_TILES = "favorite_tiles"
+    private const val KEY_TILE_GRID = "tile_grid"
     private const val KEY_NAME_FAVORITES = "name_favorites"
     private const val KEY_FOLDED_ROWS = "folded_rows"
 
@@ -45,11 +46,22 @@ object AppSettings {
 
     fun setRememberFormat(context: Context, on: Boolean) = prefs(context).edit { putBoolean(KEY_REMEMBER_FORMAT, on) }
 
-    fun favoriteLayout(context: Context): FavoriteLayout =
-        prefs(context).getString(KEY_FAVORITE_LAYOUT, null)?.let { saved -> FavoriteLayout.entries.firstOrNull { it.name == saved } }
-            ?: FavoriteLayout.LIST
+    /** The layout the two choices below come to. */
+    fun favoriteLayout(context: Context): FavoriteLayout = when {
+        !favoriteTiles(context) -> FavoriteLayout.LIST
+        tileGrid(context) -> FavoriteLayout.GRID
+        else -> FavoriteLayout.COMPACT
+    }
 
-    fun setFavoriteLayout(context: Context, value: FavoriteLayout) = prefs(context).edit { putString(KEY_FAVORITE_LAYOUT, value.name) }
+    /** Whether favorites show as tiles rather than rows. */
+    fun favoriteTiles(context: Context): Boolean = prefs(context).getBoolean(KEY_FAVORITE_TILES, false)
+
+    fun setFavoriteTiles(context: Context, on: Boolean) = prefs(context).edit { putBoolean(KEY_FAVORITE_TILES, on) }
+
+    /** Whether tiles line up in columns; kept while favorites show as rows, for when they turn back to tiles. */
+    fun tileGrid(context: Context): Boolean = prefs(context).getBoolean(KEY_TILE_GRID, false)
+
+    fun setTileGrid(context: Context, on: Boolean) = prefs(context).edit { putBoolean(KEY_TILE_GRID, on) }
 
     fun foldedRows(context: Context): Int =
         prefs(context).getInt(KEY_FOLDED_ROWS, DEFAULT_FOLDED_ROWS).coerceIn(FOLDED_ROWS)

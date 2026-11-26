@@ -684,8 +684,8 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
                 TextButton(
                     onClick = {
                         haptics.confirm()
-                        layout = FavoriteLayout.COMPACT
-                        AppSettings.setFavoriteLayout(context, FavoriteLayout.COMPACT)
+                        AppSettings.setFavoriteTiles(context, true)
+                        layout = AppSettings.favoriteLayout(context)
                         suggestTiles = false
                     },
                     shapes = ButtonDefaults.shapes(),

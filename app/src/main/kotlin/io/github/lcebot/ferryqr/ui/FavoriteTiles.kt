@@ -225,12 +225,19 @@ internal class RowHeights(private val heights: IntArray, private val gap: Int) {
 internal class TileCorners(val topStart: Boolean, val topEnd: Boolean, val bottomStart: Boolean, val bottomEnd: Boolean)
 
 /**
- * Lays out tiles of the widths [widthOf] gives, in rows [available] wide. Without [columns], each
- * row takes as many tiles as fit, and every row but the last shares what it has left over evenly
- * among its tiles, so it is filled; the last keeps its tiles at their own widths, as the last line
- * of justified text does, rather than stretching a few tiles across the whole width. With
- * [columns], each tile spans as many columns as its width needs, so tiles line up in columns, and
- * a row ends where the next tile no longer fits.
+ * Lays out tiles of the widths [widthOf] gives, in rows [available] wide.
+ *
+ * Without [columns], the tiles take as few rows as packing each row as full as it goes needs, but
+ * break between rows where the rows come out most alike, as justified text chooses its line breaks
+ * rather than filling each line in turn. Each row but the last then widens its tiles in proportion
+ * to their widths until it is full, so all of a row's tiles look stretched alike. The last row is
+ * filled the same way unless that would stretch its tiles more than [LAST_ROW_FILL] does, or more
+ * than the most stretched row above if that is more; else it widens its tiles as much as the tiles
+ * above are widened on average and ends short, so they look like the rest rather than either
+ * stretched or narrow beside them.
+ *
+ * With [columns], each tile spans as many columns as its width needs, so tiles line up in columns,
+ * and a row ends where the next tile no longer fits.
  */
 internal fun arrangeTiles(
     keys: List<String>,
@@ -251,29 +258,30 @@ internal fun arrangeTiles(
     }
     var row = mutableListOf<Pair<String, IntRange>>()
     if (columns == null) {
-        val rows = mutableListOf<MutableList<Pair<String, Int>>>()
-        var used = 0
-        keys.forEach { key ->
-            val width = widthOf(key).coerceIn(1, available)
-            val last = rows.lastOrNull()
-            if (last != null && used + gap + width <= available) {
-                last += key to width
-                used += gap + width
-            } else {
-                rows += mutableListOf(key to width)
-                used = width
-            }
-        }
+        val widths = IntArray(keys.size) { widthOf(keys[it]).coerceIn(1, available) }
+        val rows = balancedRows(widths, available, gap)
+        fun room(tiles: IntRange) = available - gap * (tiles.last - tiles.first)
+        fun fill(tiles: IntRange) = room(tiles).toFloat() / tiles.sumOf { widths[it] }
+        val full = rows.dropLast(1)
+        val most = full.maxOfOrNull(::fill) ?: 1f
+        val above = full.sumOf { it.count() }
+        val mean = if (above == 0) 1f else full.sumOf { fill(it).toDouble() * it.count() }.toFloat() / above
         rows.forEachIndexed { index, tiles ->
-            val spare = if (index == rows.lastIndex) 0 else available - tiles.sumOf { it.second } - gap * (tiles.size - 1)
-            var x = 0
+            val filled = fill(tiles)
+            val stretch = when {
+                index < rows.lastIndex -> filled
+                filled <= maxOf(most, LAST_ROW_FILL) -> filled
+                else -> minOf(mean, filled)
+            }
+            // Placed by the running sum of the widths, so the rounding never adds up and a filled
+            // row ends exactly at its edge.
+            var before = 0
             addRow(
-                tiles.mapIndexed { i, (key, width) ->
-                    // The pixels that do not divide evenly go to the first tiles, one each.
-                    val share = spare / tiles.size + if (i < spare % tiles.size) 1 else 0
-                    val start = x
-                    x += width + share + gap
-                    key to (start..start + width + share)
+                tiles.mapIndexed { i, tile ->
+                    val start = (before * stretch).roundToInt() + i * gap
+                    before += widths[tile]
+                    val end = if (stretch == filled && i == tiles.count() - 1) available else (before * stretch).roundToInt() + i * gap
+                    keys[tile] to (start..end)
                 },
             )
         }
@@ -294,6 +302,72 @@ internal fun arrangeTiles(
         if (row.isNotEmpty()) addRow(row)
     }
     return TileArrangement(spots, rowEnds.size, rowEnds.toIntArray(), gap)
+}
+
+/**
+ * How much the last row of tiles may be stretched to fill it, as a factor of the tiles' own widths,
+ * when the rows above are stretched less: by half again, which a last row of a few tiles of middling
+ * width comes to, while a lone short tile would be stretched far more and is left short instead.
+ */
+internal const val LAST_ROW_FILL = 1.5f
+
+/**
+ * Where tiles of [widths] break into rows [available] wide with [gap] between them, as index ranges.
+ * They take as many rows as packing each row in turn needs, the fewest there can be; of the ways to
+ * break into that many, the one chosen stretches the rows but the last most alike, by the sum of the
+ * squares of how much each would be stretched to fill it, as justified text weighs its line breaks.
+ * The last row costs nothing, as it need not be filled.
+ */
+internal fun balancedRows(widths: IntArray, available: Int, gap: Int): List<IntRange> {
+    val n = widths.size
+    if (n == 0) return emptyList()
+    val sums = LongArray(n + 1)
+    for (i in 0 until n) sums[i + 1] = sums[i] + widths[i]
+    // Whether the tiles from [from] until [until] fit in a row.
+    fun fits(from: Int, until: Int) = until > from && sums[until] - sums[from] + gap.toLong() * (until - from - 1) <= available
+    var count = 0
+    var at = 0
+    while (at < n) {
+        var end = at + 1
+        while (end < n && fits(at, end + 1)) end++
+        count++
+        at = end
+    }
+    if (count == 1) return listOf(0 until n)
+    fun cost(from: Int, until: Int): Double {
+        val stretch = (available - gap * (until - from - 1)).toDouble() / (sums[until] - sums[from])
+        return (stretch - 1) * (stretch - 1)
+    }
+    // The least cost of the first tiles in the rows so far, and where the last of those rows began.
+    var least = DoubleArray(n + 1) { Double.POSITIVE_INFINITY }.also { it[0] = 0.0 }
+    val began = Array(count) { IntArray(n + 1) { -1 } }
+    for (row in 1 until count) {
+        val next = DoubleArray(n + 1) { Double.POSITIVE_INFINITY }
+        for (until in 1..n) {
+            for (from in 0 until until) {
+                if (least[from] == Double.POSITIVE_INFINITY || !fits(from, until)) continue
+                val total = least[from] + cost(from, until)
+                if (total < next[until]) {
+                    next[until] = total
+                    began[row][until] = from
+                }
+            }
+        }
+        least = next
+    }
+    var last = -1
+    for (from in 0 until n) {
+        if (fits(from, n) && least[from] != Double.POSITIVE_INFINITY && (last < 0 || least[from] < least[last])) last = from
+    }
+    val rows = ArrayList<IntRange>(count)
+    rows += last until n
+    var end = last
+    for (row in count - 1 downTo 1) {
+        val start = began[row][end]
+        rows += start until end
+        end = start
+    }
+    return rows.asReversed()
 }
 
 /** How many grid columns fit across [available], with at least two. */

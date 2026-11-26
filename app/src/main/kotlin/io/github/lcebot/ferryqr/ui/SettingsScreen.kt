@@ -5,6 +5,12 @@
 package io.github.lcebot.ferryqr.ui
 
 import androidx.annotation.StringRes
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material3.Label
 import androidx.compose.material3.Slider
@@ -77,7 +83,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import io.github.lcebot.ferryqr.AppSettings
-import io.github.lcebot.ferryqr.FavoriteLayout
 import io.github.lcebot.ferryqr.LongCodeEnlarge
 import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.content.SensitiveKind
@@ -260,18 +265,23 @@ private fun HistorySettings() {
 
 /**
  * How history lays out favorites, how many rows they fold down to, and whether a new favorite is
- * named before it is kept.
+ * named before it is kept. Favorites show as a list or as tiles; only tiles can line up in a grid,
+ * so that choice opens under the layout while tiles are chosen.
  */
 @Composable
 private fun FavoriteSettings() {
     val context = LocalContext.current
     val haptics = rememberHaptics()
-    var layout by remember { mutableStateOf(AppSettings.favoriteLayout(context)) }
+    var tiles by remember { mutableStateOf(AppSettings.favoriteTiles(context)) }
+    var grid by remember { mutableStateOf(AppSettings.tileGrid(context)) }
     var naming by remember { mutableStateOf(AppSettings.namesFavorites(context)) }
     var rows by remember { mutableIntStateOf(AppSettings.foldedRows(context)) }
+    val count = if (tiles) 4 else 3
+    val spatial = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
+    val effects = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
     SettingsSection(R.string.favorites_title) {
         SegmentedListItem(
-            shapes = ListItemDefaults.shapes(shape = segmentShape(0, 3)),
+            shapes = ListItemDefaults.shapes(shape = segmentShape(0, count)),
             colors = settingColors(),
             contentPadding = SETTING_ROW_PADDING,
             supportingContent = {
@@ -284,36 +294,57 @@ private fun FavoriteSettings() {
                         modifier = Modifier.fillMaxWidth().selectableGroup(),
                         horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
                     ) {
-                        FavoriteLayout.entries.forEachIndexed { index, option ->
+                        listOf(false, true).forEachIndexed { index, option ->
                             ToggleButton(
-                                checked = option == layout,
+                                checked = option == tiles,
                                 colors = settingToggleColors(),
                                 onCheckedChange = {
                                     if (it) {
                                         haptics.step()
-                                        layout = option
-                                        AppSettings.setFavoriteLayout(context, option)
+                                        tiles = option
+                                        AppSettings.setFavoriteTiles(context, option)
                                     }
                                 },
-                                shapes = when (index) {
-                                    0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
-                                    FavoriteLayout.entries.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
-                                    else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+                                shapes = if (index == 0) {
+                                    ButtonGroupDefaults.connectedLeadingButtonShapes()
+                                } else {
+                                    ButtonGroupDefaults.connectedTrailingButtonShapes()
                                 },
                                 modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
                             ) {
-                                Text(stringResource(layoutLabel(option)), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(
+                                    stringResource(if (option) R.string.favorite_layout_tiles else R.string.favorite_layout_list),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
                             }
                         }
                     }
-                    Text(stringResource(layoutDescription(layout)))
+                    Text(stringResource(if (tiles) R.string.favorite_layout_tiles_desc else R.string.favorite_layout_list_desc))
                 }
             },
         ) {
             Text(stringResource(R.string.settings_favorite_layout))
         }
+        AnimatedVisibility(
+            visible = tiles,
+            enter = fadeIn(effects) + expandVertically(spatial),
+            exit = fadeOut(effects) + shrinkVertically(spatial),
+        ) {
+            SwitchItem(
+                title = R.string.settings_tile_grid,
+                description = R.string.settings_tile_grid_desc,
+                checked = grid,
+                shape = segmentShape(1, count),
+                onChange = { on ->
+                    haptics.toggle(on)
+                    grid = on
+                    AppSettings.setTileGrid(context, on)
+                },
+            )
+        }
         SegmentedListItem(
-            shapes = ListItemDefaults.shapes(shape = segmentShape(1, 3)),
+            shapes = ListItemDefaults.shapes(shape = segmentShape(count - 2, count)),
             colors = settingColors(),
             contentPadding = SETTING_ROW_PADDING,
             supportingContent = {
@@ -379,7 +410,7 @@ private fun FavoriteSettings() {
         SwitchItem(
             title = R.string.settings_name_favorites,
             checked = naming,
-            shape = segmentShape(2, 3),
+            shape = segmentShape(count - 1, count),
             onChange = { on ->
                 haptics.toggle(on)
                 naming = on
@@ -603,20 +634,6 @@ private fun keptLabel(kind: SensitiveKind): Int = when (kind) {
     SensitiveKind.ESIM -> R.string.kind_esim
     SensitiveKind.PASSKEY -> R.string.kind_fido
     SensitiveKind.OTP -> R.string.kind_otp
-}
-
-@StringRes
-private fun layoutLabel(layout: FavoriteLayout): Int = when (layout) {
-    FavoriteLayout.LIST -> R.string.favorite_layout_list
-    FavoriteLayout.COMPACT -> R.string.favorite_layout_compact
-    FavoriteLayout.GRID -> R.string.favorite_layout_grid
-}
-
-@StringRes
-private fun layoutDescription(layout: FavoriteLayout): Int = when (layout) {
-    FavoriteLayout.LIST -> R.string.favorite_layout_list_desc
-    FavoriteLayout.COMPACT -> R.string.favorite_layout_compact_desc
-    FavoriteLayout.GRID -> R.string.favorite_layout_grid_desc
 }
 
 @StringRes
