@@ -164,15 +164,18 @@ fun CodeOverlay(
         val turning = remember { long && configuration.orientation == Configuration.ORIENTATION_PORTRAIT }
         // Saved with the overlay, so an activity recreated while it shows gives back the orientation
         // it had before the overlay, rather than the landscape the overlay asked for.
-        val original = rememberSaveable { if (long) view.context.activity()?.requestedOrientation else null }
+        val original by rememberSaveable {
+            mutableStateOf(if (long) view.context.activity()?.requestedOrientation else null)
+        }
         DisposableEffect(view) {
             if (!long) return@DisposableEffect onDispose {}
             val activity = view.context.activity()
+            val restore = original
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
             onDispose {
                 // An activity being recreated shows the overlay again, which keeps the screen turned.
-                if (activity != null && original != null && !activity.isChangingConfigurations) {
-                    activity.requestedOrientation = original
+                if (activity != null && restore != null && !activity.isChangingConfigurations) {
+                    activity.requestedOrientation = restore
                 }
             }
         }
