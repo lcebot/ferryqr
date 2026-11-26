@@ -5,6 +5,9 @@
 package io.github.lcebot.ferryqr.ui
 
 import androidx.annotation.StringRes
+import androidx.compose.material3.Slider
+import androidx.compose.runtime.mutableIntStateOf
+import kotlin.math.roundToInt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -68,6 +71,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import io.github.lcebot.ferryqr.AppSettings
+import io.github.lcebot.ferryqr.FavoriteLayout
 import io.github.lcebot.ferryqr.LongCodeEnlarge
 import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.content.SensitiveKind
@@ -78,6 +82,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenFerry: () -> Unit) {
     SettingsPage(title = R.string.settings_title, onBack = onBack) {
         item(key = "ferry") { SettingsSection(R.string.settings_ferry_title, first = true) { FerryEntry(onOpenFerry) } }
         item(key = "history") { HistorySettings() }
+        item(key = "favorites") { FavoriteSettings() }
         item(key = "display") { DisplaySettings() }
         item(key = "create") { CreateSettings() }
     }
@@ -244,6 +249,94 @@ private fun HistorySettings() {
                 },
             )
         }
+    }
+}
+
+/**
+ * How history lays out favorites, how many rows they fold down to, and whether a new favorite is
+ * named before it is kept.
+ */
+@Composable
+private fun FavoriteSettings() {
+    val context = LocalContext.current
+    val haptics = rememberHaptics()
+    var layout by remember { mutableStateOf(AppSettings.favoriteLayout(context)) }
+    var naming by remember { mutableStateOf(AppSettings.namesFavorites(context)) }
+    var rows by remember { mutableIntStateOf(AppSettings.foldedRows(context)) }
+    SettingsSection(R.string.favorites_title) {
+        SegmentedListItem(
+            shapes = ListItemDefaults.shapes(shape = segmentShape(0, 3)),
+            colors = settingColors(),
+            contentPadding = SETTING_ROW_PADDING,
+            supportingContent = {
+                Column(verticalArrangement = Arrangement.spacedBy(SETTING_CONTROL_GAP)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().selectableGroup(),
+                        horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
+                    ) {
+                        FavoriteLayout.entries.forEachIndexed { index, option ->
+                            ToggleButton(
+                                checked = option == layout,
+                                colors = settingToggleColors(),
+                                onCheckedChange = {
+                                    if (it) {
+                                        haptics.step()
+                                        layout = option
+                                        AppSettings.setFavoriteLayout(context, option)
+                                    }
+                                },
+                                shapes = when (index) {
+                                    0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
+                                    FavoriteLayout.entries.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
+                                    else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+                                },
+                                modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
+                            ) {
+                                Text(stringResource(layoutLabel(option)), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
+                    Text(stringResource(layoutDescription(layout)))
+                }
+            },
+        ) {
+            Text(stringResource(R.string.settings_favorite_layout))
+        }
+        SegmentedListItem(
+            shapes = ListItemDefaults.shapes(shape = segmentShape(1, 3)),
+            colors = settingColors(),
+            contentPadding = SETTING_ROW_PADDING,
+            trailingContent = { Text(rows.toString(), style = MaterialTheme.typography.labelLarge) },
+            supportingContent = {
+                // Five values, so three stops between the ends.
+                Slider(
+                    value = rows.toFloat(),
+                    onValueChange = { value ->
+                        val picked = value.roundToInt()
+                        if (picked != rows) {
+                            haptics.step()
+                            rows = picked
+                            AppSettings.setFoldedRows(context, picked)
+                        }
+                    },
+                    valueRange = AppSettings.FOLDED_ROWS.first.toFloat()..AppSettings.FOLDED_ROWS.last.toFloat(),
+                    steps = AppSettings.FOLDED_ROWS.last - AppSettings.FOLDED_ROWS.first - 1,
+                    modifier = Modifier.padding(top = SETTING_CONTROL_GAP),
+                )
+            },
+        ) {
+            Text(stringResource(R.string.settings_folded_rows))
+        }
+        SwitchItem(
+            title = R.string.settings_name_favorites,
+            checked = naming,
+            shape = segmentShape(2, 3),
+            onChange = { on ->
+                haptics.toggle(on)
+                naming = on
+                AppSettings.setNamesFavorites(context, on)
+            },
+        )
     }
 }
 
@@ -453,6 +546,20 @@ private fun keptLabel(kind: SensitiveKind): Int = when (kind) {
     SensitiveKind.ESIM -> R.string.kind_esim
     SensitiveKind.PASSKEY -> R.string.kind_fido
     SensitiveKind.OTP -> R.string.kind_otp
+}
+
+@StringRes
+private fun layoutLabel(layout: FavoriteLayout): Int = when (layout) {
+    FavoriteLayout.LIST -> R.string.favorite_layout_list
+    FavoriteLayout.COMPACT -> R.string.favorite_layout_compact
+    FavoriteLayout.GRID -> R.string.favorite_layout_grid
+}
+
+@StringRes
+private fun layoutDescription(layout: FavoriteLayout): Int = when (layout) {
+    FavoriteLayout.LIST -> R.string.favorite_layout_list_desc
+    FavoriteLayout.COMPACT -> R.string.favorite_layout_compact_desc
+    FavoriteLayout.GRID -> R.string.favorite_layout_grid_desc
 }
 
 @StringRes

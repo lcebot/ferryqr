@@ -29,6 +29,12 @@ class Haptics(private val feedback: HapticFeedback) {
     /** The lightest feedback, for selections and for passing a step while dragging. */
     fun step() = feedback.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
 
+    /**
+     * A long press caught by a gesture of the app's own rather than by a long-clickable control,
+     * which gives this same feedback itself.
+     */
+    fun longPress() = feedback.performHapticFeedback(HapticFeedbackType.LongPress)
+
     /** A drag crossed the point where letting go acts, either way, as a notification swiped feels the same both ways. */
     fun threshold() = feedback.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
 }

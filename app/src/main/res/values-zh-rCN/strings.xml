@@ -225,6 +225,15 @@
     <string name="settings_remember_format_desc">生成二维码时使用上次选择的码制。关闭时自动选择。</string>
     <string name="settings_keep_title">保存到历史记录</string>
     <string name="settings_keep_intro">以下内容可能含有敏感信息。开启的项目会在扫描后保存到历史记录。</string>
+    <string name="settings_favorite_layout">布局</string>
+    <string name="favorite_layout_list">列表</string>
+    <string name="favorite_layout_compact">紧凑</string>
+    <string name="favorite_layout_grid">网格</string>
+    <string name="favorite_layout_list_desc">收藏与其他历史记录一样逐行显示。</string>
+    <string name="favorite_layout_compact_desc">以磁贴显示收藏，宽度随文字长短而定，每行放下尽可能多的磁贴并排满。</string>
+    <string name="favorite_layout_grid_desc">以磁贴显示收藏，按列对齐，每个磁贴按文字长短占一列或多列。</string>
+    <string name="settings_folded_rows">收起时显示的行数</string>
+    <string name="settings_name_favorites">收藏时询问名称</string>
     <string name="keep_wifi_password">Wi-Fi 密码</string>
     <string name="history_title">历史记录</string>
     <plurals name="history_count">
@@ -245,7 +254,6 @@
     <string name="favorite">收藏</string>
     <string name="favorite_remove">取消收藏</string>
     <string name="rename">重命名</string>
-    <string name="rename_title">重命名收藏</string>
     <string name="rename_label">名称</string>
     <plurals name="favorites_show_more">
         <item quantity="other">展开其余 %1$d 条</item>
@@ -257,6 +265,13 @@
     <string name="favorite_move_down">下移</string>
     <string name="favorite_move_top">移到最前</string>
     <string name="favorite_drag">拖动以排序</string>
+    <string name="favorite_name_title">加入收藏</string>
+    <string name="favorite_move_earlier">前移</string>
+    <string name="favorite_move_later">后移</string>
+    <string name="tiles_suggest_title">建议将收藏布局改为磁贴</string>
+    <string name="tiles_suggest_body">磁贴布局可在同一行中显示更多收藏条目。可在设置中更改布局。</string>
+    <string name="tiles_suggest_use">使用磁贴</string>
+    <string name="tiles_suggest_keep">保留列表</string>
     <string name="shortcut_add">添加到快捷方式</string>
     <string name="shortcut_remove">从快捷方式中移除</string>
     <string name="shortcut_full">最多 %1$d 个</string>

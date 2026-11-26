@@ -230,6 +230,15 @@
     <string name="settings_remember_format_desc">The create page starts with the format chosen last time. When off, it picks one automatically.</string>
     <string name="settings_keep_title">Keep in history</string>
     <string name="settings_keep_intro">These may hold sensitive information. Those switched on are kept in history after a scan.</string>
+    <string name="settings_favorite_layout">Layout</string>
+    <string name="favorite_layout_list">List</string>
+    <string name="favorite_layout_compact">Compact</string>
+    <string name="favorite_layout_grid">Grid</string>
+    <string name="favorite_layout_list_desc">Shows favorites as rows, like the rest of the history.</string>
+    <string name="favorite_layout_compact_desc">Shows favorites as tiles as wide as their text, as many to a row as fit, each row filled.</string>
+    <string name="favorite_layout_grid_desc">Shows favorites as tiles lined up in columns, each spanning as many columns as its text needs.</string>
+    <string name="settings_folded_rows">Rows shown when folded</string>
+    <string name="settings_name_favorites">Ask for a name</string>
     <string name="keep_wifi_password">Wi-Fi password</string>
     <string name="history_title">History</string>
     <plurals name="history_count">
@@ -251,7 +260,6 @@
     <string name="favorite">Favorite</string>
     <string name="favorite_remove">Remove from favorites</string>
     <string name="rename">Rename</string>
-    <string name="rename_title">Rename favorite</string>
     <string name="rename_label">Name</string>
     <plurals name="favorites_show_more">
         <item quantity="one">Show %1$d more</item>
@@ -264,6 +272,13 @@
     <string name="favorite_move_down">Move down</string>
     <string name="favorite_move_top">Move to top</string>
     <string name="favorite_drag">Drag to reorder</string>
+    <string name="favorite_name_title">Add to favorites</string>
+    <string name="favorite_move_earlier">Move earlier</string>
+    <string name="favorite_move_later">Move later</string>
+    <string name="tiles_suggest_title">Try tiles for favorites</string>
+    <string name="tiles_suggest_body">The tile layout shows more favorites in each row. The layout can be changed in settings.</string>
+    <string name="tiles_suggest_use">Use tiles</string>
+    <string name="tiles_suggest_keep">Keep list</string>
     <string name="shortcut_add">Add to app shortcuts</string>
     <string name="shortcut_remove">Remove from app shortcuts</string>
     <string name="shortcut_full">Up to %1$d shortcuts</string>

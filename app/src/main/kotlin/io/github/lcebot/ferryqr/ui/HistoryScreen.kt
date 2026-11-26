@@ -66,7 +66,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListLayoutInfo
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import io.github.lcebot.ferryqr.AppSettings
+import io.github.lcebot.ferryqr.FavoriteLayout
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -144,11 +150,8 @@ import kotlinx.coroutines.launch
  * corners large, 16dp, and those between its rows extra small, 4dp. A pressed row rounds to the
  * large corner all round, so the outer corners stay put as it morphs.
  */
-private val OUTER_CORNER = 16.dp
-private val INNER_CORNER = 4.dp
-
-/** With more favorites than this, the section can fold down to its first few. */
-private const val FOLDED_FAVORITES = 4
+internal val OUTER_CORNER = 16.dp
+internal val INNER_CORNER = 4.dp
 
 /**
  * How close to the top or bottom of the visible list a favorite being dragged makes the list scroll
@@ -174,8 +177,24 @@ private const val REORDER_SCROLL_EASE = 10f
 /** The group the favorites form for a swipe; the other rows group by day. */
 private const val FAVORITES_GROUP = "favorites"
 
+/** The list item holding the favorites as tiles. */
+private const val TILES_KEY = "favorites:tiles"
+
+/**
+ * From this many favorites, where tiles would take at most half the rows the list does, history
+ * suggests tiles once.
+ */
+private const val SUGGEST_TILES_AT = 6
+
 private const val PREFS = "history"
 private const val PREF_FAVORITES_FOLDED = "favorites_folded"
+private const val PREF_TILES_SUGGESTED = "tiles_suggested"
+
+/**
+ * Where a favorite being dragged is drawn and how far the favorites reach past the top and bottom
+ * edges of the visible list, in the list's pixels.
+ */
+private class HeldReach(val top: Float, val bottom: Float, val above: Float, val below: Float)
 
 /**
  * [openText] is content to show at once, from a favorite's app shortcut; [onOpened] is called once
@@ -199,6 +218,27 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val layoutDirection = LocalLayoutDirection.current
     val favorites = remember(entries) { HistoryStore.favoritesOf(entries) }
+    val favoritesByKey = remember(favorites) { favorites.associateBy { it.text } }
+    var layout by remember { mutableStateOf(AppSettings.favoriteLayout(context)) }
+    var namesFavorites by remember { mutableStateOf(AppSettings.namesFavorites(context)) }
+    var foldedRows by remember { mutableIntStateOf(AppSettings.foldedRows(context)) }
+    // The settings can change while history waits behind another page.
+    LifecycleResumeEffect(Unit) {
+        layout = AppSettings.favoriteLayout(context)
+        namesFavorites = AppSettings.namesFavorites(context)
+        foldedRows = AppSettings.foldedRows(context)
+        onPauseOrDispose {}
+    }
+    val tiled = layout != FavoriteLayout.LIST
+    var naming by remember { mutableStateOf<HistoryEntry?>(null) }
+    var suggestTiles by remember { mutableStateOf(false) }
+    var tilesSuggested by remember { mutableStateOf(prefs.getBoolean(PREF_TILES_SUGGESTED, false)) }
+    val swipeHaptics = rememberSwipeHaptics(haptics)
+    val board = remember(haptics, swipeHaptics) { TileBoard(haptics, swipeHaptics) }
+    // A tile let go of to leave shows as leaving until the history no longer counts it a favorite.
+    LaunchedEffect(favorites) {
+        board.removing.retainAll { text -> text in favoritesByKey }
+    }
     // While reordering, the favorites follow [order], the contents in their new order, which is saved when done.
     var reordering by remember { mutableStateOf(false) }
     val order = remember { mutableStateListOf<String>() }
@@ -278,15 +318,53 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
     ) { padding ->
         if (entries.isEmpty()) {
             EmptyHistory(Modifier.fillMaxSize().padding(padding))
-        } else {
+        } else BoxWithConstraints(Modifier.fillMaxSize()) {
             val zone = remember { ZoneId.systemDefault() }
             val density = LocalDensity.current
             val groups = remember(recent) {
                 recent.groupBy { Instant.ofEpochMilli(it.time).atZone(zone).toLocalDate() }
             }
-            val foldable = favorites.size > FOLDED_FAVORITES && !reordering
+            // Folded, the favorites show their first few rows, which in the list are favorites.
+            val foldable = favorites.size > foldedRows && !reordering
             val ordered = if (reordering) order.mapNotNull { text -> favorites.find { it.text == text } } else favorites
-            val shownFavorites = if (foldable && folded) ordered.take(FOLDED_FAVORITES) else ordered
+            val shownFavorites = if (foldable && folded) ordered.take(foldedRows) else ordered
+
+            // Tiles are as wide as their names, measured here so the rows they fill are known
+            // before they are laid out, for folding them and for suggesting them.
+            val gap = with(density) { ListItemDefaults.SegmentedGap.roundToPx() }
+            val typography = MaterialTheme.typography
+            val available = constraints.maxWidth - with(density) {
+                (padding.calculateStartPadding(layoutDirection) + padding.calculateEndPadding(layoutDirection) + 32.dp).roundToPx()
+            }
+            val measurer = rememberTextMeasurer()
+            val chrome = with(density) { tileChrome(layoutDirection).roundToPx() }
+            // A tile is as wide as the longer of its name and its kind, the two lines it shows.
+            val tileTexts = remember(favorites) {
+                favorites.associate {
+                    val kind = context.getString(Cards.kindOf(Classifier.classify(it.text, it.format)).label)
+                    it.text to (tileTitle(context, it) to kind)
+                }
+            }
+            val tileWidths = remember(tileTexts, typography, measurer, chrome) {
+                tileTexts.mapValues { (_, texts) ->
+                    val name = measurer.measure(texts.first, typography.bodyLarge, maxLines = 1, softWrap = false).size.width
+                    val kind = measurer.measure(texts.second, typography.bodyMedium, maxLines = 1, softWrap = false).size.width
+                    max(name, kind) + chrome
+                }
+            }
+            board.keys = if (board.key != null) {
+                board.order.filter { it in favoritesByKey && it !in board.removing }
+            } else {
+                favorites.map { it.text }.filter { it !in board.removing }
+            }
+            board.widths = tileWidths
+            board.available = available
+            board.gap = gap
+            board.columns = if (layout == FavoriteLayout.GRID) gridColumns(available, gap, with(density) { GRID_COLUMN.roundToPx() }) else null
+            board.outMargin = with(density) { TILE_OUT_MARGIN.toPx() }
+            val tileArrangement = board.arrange()
+            val tilesFoldable = tiled && tileArrangement.rows > foldedRows
+            board.rowsShown = if (tilesFoldable && folded) foldedRows else tileArrangement.rows
 
             /**
              * Moves the row being dragged past a neighbour once its middle crosses the neighbour's,
@@ -346,15 +424,38 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
 
             // While a favorite is held near the top or bottom of the visible list, and favorites
             // reach past that edge, the list scrolls toward them. Only the list's content moves: the
-            // held row stays under the finger, taking each scroll off its drag offset, the top bar
+            // held row or tile stays under the finger, taking each scroll off its drag, the top bar
             // keeps its size since the scroll does not pass through it, and the list goes no further
             // than the first or last favorite plus [REORDER_EDGE]. It stops as the finger lifts.
             val edge = with(density) { REORDER_EDGE.toPx() }
             val fastest = with(density) { REORDER_SCROLL_SPEED.toPx() }
             // The list is drawn behind the navigation bar, so its edge for scrolling is the top of the bar.
             val barHeight = with(density) { padding.calculateBottomPadding().toPx() }
-            val held = dragging.takeIf { reordering && settling == null }
-            LaunchedEffect(held, edge, fastest, barHeight) {
+            fun rowReach(info: LazyListLayoutInfo, held: String, bottom: Float): HeldReach? {
+                val rows = info.visibleItemsInfo
+                val row = rows.firstOrNull { it.key == "entry:$held" } ?: return null
+                if (order.isEmpty()) return null
+                val top = row.offset + dragOffset
+                // The held row is a favorite in view, so the first one out of view lies above and the
+                // last one below.
+                val first = rows.firstOrNull { it.key == "entry:${order.first()}" }
+                val lastRow = rows.firstOrNull { it.key == "entry:${order.last()}" }
+                return HeldReach(
+                    top = top,
+                    bottom = top + row.size,
+                    above = first?.let { -it.offset.toFloat() } ?: Float.POSITIVE_INFINITY,
+                    below = lastRow?.let { it.offset + it.size - bottom } ?: Float.POSITIVE_INFINITY,
+                )
+            }
+            fun tileReach(info: LazyListLayoutInfo, bottom: Float): HeldReach? {
+                val block = info.visibleItemsInfo.firstOrNull { it.key == TILES_KEY } ?: return null
+                val top = block.offset + board.at.y
+                return HeldReach(top, top + board.size.height, -block.offset.toFloat(), block.offset + block.size - bottom)
+            }
+            val listHeld = dragging.takeIf { reordering && settling == null }
+            val tileHeld = board.key.takeIf { tiled && board.lifted && board.moved }
+            val held = listHeld ?: tileHeld
+            LaunchedEffect(held, tiled, edge, fastest, barHeight) {
                 if (held == null) return@LaunchedEffect
                 // The way the list has been scrolling, which it keeps up until the margin even once
                 // the favorites no longer reach past the edge.
@@ -365,48 +466,49 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
                     val seconds = if (last == 0L) 0f else (now - last) / 1_000_000_000f
                     last = now
                     val info = listState.layoutInfo
-                    val rows = info.visibleItemsInfo
-                    val row = rows.firstOrNull { it.key == "entry:$held" }
-                    if (row == null || order.isEmpty()) {
-                        going = 0
-                        continue
-                    }
                     // Offset 0 is the top of the visible list, just below the top bar; the bottom is
                     // where the navigation bar starts covering the list, which runs on behind it.
                     val bottom = info.viewportEndOffset - barHeight
-                    val rowTop = row.offset + dragOffset
-                    // How far the favorites reach past each edge. The held row is a favorite in view,
-                    // so the first one out of view lies above and the last one below.
-                    val first = rows.firstOrNull { it.key == "entry:${order.first()}" }
-                    val lastRow = rows.firstOrNull { it.key == "entry:${order.last()}" }
-                    val above = first?.let { -it.offset.toFloat() } ?: Float.POSITIVE_INFINITY
-                    val below = lastRow?.let { it.offset + it.size - bottom } ?: Float.POSITIVE_INFINITY
-                    val upDepth = (edge - rowTop) / edge
-                    val downDepth = (rowTop + row.size - (bottom - edge)) / edge
+                    // How far the favorites reach past each edge.
+                    val reach = if (tiled) tileReach(info, bottom) else rowReach(info, held, bottom)
+                    if (reach == null) {
+                        going = 0
+                        continue
+                    }
+                    val upDepth = (edge - reach.top) / edge
+                    val downDepth = (reach.bottom - (bottom - edge)) / edge
                     val way = when {
-                        upDepth > 0f && (above > 0f || (going < 0 && above > -edge)) -> -1
-                        downDepth > 0f && (below > 0f || (going > 0 && below > -edge)) -> 1
+                        upDepth > 0f && (reach.above > 0f || (going < 0 && reach.above > -edge)) -> -1
+                        downDepth > 0f && (reach.below > 0f || (going > 0 && reach.below > -edge)) -> 1
                         else -> 0
                     }
                     going = way
                     if (way == 0 || seconds == 0f) continue
                     val depth = (if (way < 0) upDepth else downDepth).coerceIn(0f, 1f)
                     // Slows on the way to the margin rather than stopping at full speed.
-                    val left = (if (way < 0) above else below) + edge
+                    val left = (if (way < 0) reach.above else reach.below) + edge
                     // Within half a pixel the list has arrived, so the easing does not creep on forever.
                     if (left < 0.5f) continue
                     val speed = min(fastest * depth, left * REORDER_SCROLL_EASE)
                     if (speed <= 0f) continue
                     val consumed = listState.scrollBy(way * speed * seconds)
-                    dragOffset += consumed
-                    followDrag()
+                    if (tiled) {
+                        board.scrolled(consumed)
+                    } else {
+                        dragOffset += consumed
+                        followDrag()
+                    }
                 }
             }
             val actions = EntryActions(
                 onOpen = { haptics.tap(); open(it) },
                 onFavorite = { entry, on ->
-                    haptics.toggle(on)
-                    store.setFavorite(entry.text, entry.format, on)
+                    if (on && namesFavorites && !hasTitle(context, entry.text, entry.format, entry.label)) {
+                        naming = entry
+                    } else {
+                        haptics.toggle(on)
+                        store.setFavorite(entry.text, entry.format, on)
+                    }
                 },
                 onShortcut = { entry, on ->
                     haptics.toggle(on)
@@ -439,16 +541,21 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
                 if (favorites.isNotEmpty()) {
                     item(key = "header:favorites") {
                         FavoritesHeader(
-                            foldable = foldable,
+                            foldable = if (tiled) tilesFoldable else foldable,
                             folded = folded,
-                            hidden = favorites.size - FOLDED_FAVORITES,
+                            hidden = if (tiled) {
+                                tileArrangement.spots.count { it.row >= foldedRows }
+                            } else {
+                                favorites.size - foldedRows
+                            },
                             onToggle = {
                                 haptics.tap()
                                 folded = !folded
                                 prefs.edit().putBoolean(PREF_FAVORITES_FOLDED, folded).apply()
                             },
-                            reorderable = favorites.size > 1,
-                            reordering = reordering,
+                            // Tiles are dragged straight away, so only the list has a mode for it.
+                            reorderable = !tiled && favorites.size > 1,
+                            reordering = reordering && !tiled,
                             onReorder = {
                                 haptics.tap()
                                 if (reordering) {
@@ -462,7 +569,36 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
                             modifier = animateRow(),
                         )
                     }
-                    itemsIndexed(shownFavorites, key = { _, e -> "entry:${e.text}" }) { index, entry ->
+                    if (tiled) {
+                        item(key = TILES_KEY) {
+                            FavoriteTiles(
+                                board = board,
+                                favorites = favoritesByKey,
+                                arrangement = tileArrangement,
+                                actions = actions,
+                                onShift = { entry, by ->
+                                    val index = favorites.indexOfFirst { it.text == entry.text }
+                                    if (index >= 0) {
+                                        haptics.step()
+                                        store.moveFavorite(entry.text, index + by)
+                                    }
+                                },
+                                onDrop = { entry, dropped ->
+                                    when (dropped) {
+                                        DropZone.DELETE -> delete(entry)
+                                        DropZone.UNFAVORITE -> {
+                                            haptics.toggle(false)
+                                            store.setFavorite(entry.text, entry.format, false)
+                                        }
+                                        DropZone.NONE -> store.setFavoriteOrder(board.order.toList())
+                                    }
+                                },
+                                // Above the rows around it, so a tile dragged out of the favorites
+                                // stays in sight over them.
+                                modifier = animateRow().zIndex(1f),
+                            )
+                        }
+                    } else itemsIndexed(shownFavorites, key = { _, e -> "entry:${e.text}" }) { index, entry ->
                         if (reordering) {
                             val dragged = dragging == entry.text
                             val moveUp = stringResource(R.string.favorite_move_up)
@@ -502,6 +638,18 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
                     }
                 }
             }
+
+            // Tiles fit as many favorites in a row as their names allow; once there are enough
+            // favorites that tiles would at least halve their rows, history suggests them, once.
+            val worthTiles = !tiled && !tilesSuggested && !reordering && favorites.size >= SUGGEST_TILES_AT &&
+                arrangeTiles(favorites.map { it.text }, { tileWidths[it] ?: 0 }, available, gap, null).rows * 2 <=
+                favorites.size
+            LaunchedEffect(worthTiles) {
+                if (!worthTiles) return@LaunchedEffect
+                tilesSuggested = true
+                prefs.edit().putBoolean(PREF_TILES_SUGGESTED, true).apply()
+                suggestTiles = true
+            }
         }
     }
 
@@ -525,9 +673,45 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
         )
     }
 
+    naming?.let { entry ->
+        NameFavoriteDialog(
+            current = entry.label ?: defaultTitle(context, entry.text, entry.format),
+            onDismiss = { naming = null },
+            onName = { name ->
+                store.setFavorite(entry.text, entry.format, true, name)
+                naming = null
+            },
+        )
+    }
+
+    if (suggestTiles) {
+        AlertDialog(
+            onDismissRequest = { suggestTiles = false },
+            icon = { Icon(painterResource(R.drawable.ic_view_quilt), contentDescription = null) },
+            title = { Text(stringResource(R.string.tiles_suggest_title)) },
+            text = { Text(stringResource(R.string.tiles_suggest_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        haptics.confirm()
+                        layout = FavoriteLayout.COMPACT
+                        AppSettings.setFavoriteLayout(context, FavoriteLayout.COMPACT)
+                        suggestTiles = false
+                    },
+                    shapes = ButtonDefaults.shapes(),
+                ) { Text(stringResource(R.string.tiles_suggest_use)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { haptics.tap(); suggestTiles = false }, shapes = ButtonDefaults.shapes()) {
+                    Text(stringResource(R.string.tiles_suggest_keep))
+                }
+            },
+        )
+    }
+
     renaming?.let { entry ->
         RenameDialog(
-            current = entry.label ?: defaultTitle(context, entry),
+            current = entry.label ?: defaultTitle(context, entry.text, entry.format),
             onDismiss = { renaming = null },
             onRename = { name ->
                 store.rename(entry.text, name)
@@ -576,7 +760,7 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
 }
 
 /** [topFavorite] is the content of the favorite at the top, which has nowhere higher to move. */
-private class EntryActions(
+internal class EntryActions(
     val onOpen: (HistoryEntry) -> Unit,
     val onFavorite: (HistoryEntry, Boolean) -> Unit,
     val onShortcut: (HistoryEntry, Boolean) -> Unit,
@@ -586,12 +770,6 @@ private class EntryActions(
     val topFavorite: String?,
     val onMoveToTop: (HistoryEntry) -> Unit,
 )
-
-/** What a favorite is called until the user names it: the same short title its shortcut shows. */
-private fun defaultTitle(context: Context, entry: HistoryEntry): String {
-    val payload = Classifier.classify(entry.text, entry.format)
-    return Cards.titleOf(context, payload) ?: context.getString(Cards.kindOf(payload).label)
-}
 
 /** Rows and headers fade in and out and slide to their new places with the theme's motion. */
 @Composable
@@ -1085,7 +1263,7 @@ private fun SwipeBackground(
 
 /** The long-press menu, in the grouped expressive style: what to do with the entry, then deleting it. */
 @Composable
-private fun EntryMenu(entry: HistoryEntry, expanded: Boolean, onDismiss: () -> Unit, actions: EntryActions) {
+internal fun EntryMenu(entry: HistoryEntry, expanded: Boolean, onDismiss: () -> Unit, actions: EntryActions) {
     DropdownMenuPopup(expanded = expanded, onDismissRequest = onDismiss) {
         val keep = buildList {
             if (entry.favorite) {
@@ -1109,6 +1287,7 @@ private fun EntryMenu(entry: HistoryEntry, expanded: Boolean, onDismiss: () -> U
                 }
             } else {
                 add(MenuEntry(R.string.favorite, R.drawable.ic_star) { actions.onFavorite(entry, true) })
+                add(MenuEntry(R.string.rename, R.drawable.ic_edit) { actions.onRename(entry) })
             }
         }
         DropdownMenuGroup(shapes = MenuDefaults.groupShape(0, 2)) {
@@ -1214,7 +1393,7 @@ private fun EmptyHistory(modifier: Modifier) {
  * between its words, and Chinese text between any two characters already, keeping its rules for
  * punctuation, so both are left alone.
  */
-private fun breakAnywhere(text: String): String? {
+internal fun breakAnywhere(text: String): String? {
     if (text.any { it.isWhitespace() }) return null
     if (text.codePoints().anyMatch { Character.UnicodeScript.of(it) == Character.UnicodeScript.HAN }) return null
     val characters = BreakIterator.getCharacterInstance().apply { setText(text) }

@@ -93,20 +93,23 @@ class HistoryStore private constructor(private val context: Context) {
 
     /**
      * Favoriting content that is not in the history, such as a created code, adds it as well. An
-     * entry that stops being a favorite also leaves the app shortcuts.
+     * entry that stops being a favorite also leaves the app shortcuts. A [label] given with a new
+     * favorite names it in the same step, a blank one leaving it to show its content.
      */
-    fun setFavorite(text: String, format: String, favorite: Boolean) = update { entries ->
+    fun setFavorite(text: String, format: String, favorite: Boolean, label: String? = null) = update { entries ->
         val now = System.currentTimeMillis()
         val old = entries.find { it.text == text }
         // A new favorite goes to the top, above whatever order the user gave the others.
         val top = (entries.filter { it.favorite }.minOfOrNull { it.favoriteRank } ?: 0) - 1
+        val name = label?.trim()?.ifEmpty { null }
         when {
-            old == null && favorite -> listOf(HistoryEntry(text, format, now, favoritedAt = now, favoriteRank = top)) + entries
+            old == null && favorite ->
+                listOf(HistoryEntry(text, format, now, favoritedAt = now, label = name, favoriteRank = top)) + entries
             old == null || old.favorite == favorite -> entries
             else -> entries.map {
                 when {
                     it.text != text -> it
-                    favorite -> it.copy(favoritedAt = now, favoriteRank = top)
+                    favorite -> it.copy(favoritedAt = now, favoriteRank = top, label = if (label != null) name else it.label)
                     else -> it.copy(favoritedAt = 0L, shortcutAt = 0L, favoriteRank = 0)
                 }
             }
