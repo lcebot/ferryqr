@@ -1,10 +1,15 @@
 package io.github.lcebot.ferryqr
 
 import android.content.Intent
+import android.graphics.drawable.ColorDrawable
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.graphics.toArgb
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.ViewModelProvider
 import io.github.lcebot.ferryqr.history.FavoriteShortcuts
@@ -25,10 +30,23 @@ abstract class PageActivity : ComponentActivity() {
         WindowCompat.enableEdgeToEdge(window)
         setContent {
             FerryTheme {
+                MatchWindowBackground()
                 SystemBars()
                 Page()
             }
         }
+    }
+
+    /**
+     * On Android 12 and 13 the dynamic scheme's background is a tone no system colour resource
+     * names, so the window, which shows through while the page opens and around it during a back
+     * gesture, takes the exact colour from the composed theme. Elsewhere the resource already is it.
+     */
+    @Composable
+    private fun MatchWindowBackground() {
+        if (Build.VERSION.SDK_INT !in Build.VERSION_CODES.S..Build.VERSION_CODES.TIRAMISU) return
+        val background = MaterialTheme.colorScheme.background
+        LaunchedEffect(background) { window.setBackgroundDrawable(ColorDrawable(background.toArgb())) }
     }
 
     @Composable

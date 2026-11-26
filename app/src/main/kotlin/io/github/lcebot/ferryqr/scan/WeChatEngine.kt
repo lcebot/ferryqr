@@ -241,31 +241,29 @@ class WeChatEngine(context: Context) {
         }
     }
 
-    fun decode(bitmap: Bitmap, region: Rect? = null): List<Detection> {
+    /** Decodes the QR codes in [bitmap] with WeChatQRCode; positions are in [bitmap]'s pixels. */
+    fun decode(bitmap: Bitmap): List<Detection> {
         if (!ensureReady()) return emptyList()
-        val area = region?.let { Rect(it) }?.takeIf { it.intersect(0, 0, bitmap.width, bitmap.height) }
-        val source = if (area == null) bitmap
-        else Bitmap.createBitmap(bitmap, area.left, area.top, area.width(), area.height())
-        val dx = area?.left ?: 0
-        val dy = area?.top ?: 0
         val points = ArrayList<Mat>()
         return try {
             synchronized(lock) {
-                val texts = WeChatQRCodeDetector.detectAndDecode(source, points)
+                val texts = WeChatQRCodeDetector.detectAndDecode(bitmap, points)
                 texts.mapIndexedNotNull { i, text ->
                     if (text.isEmpty()) null
-                    else Detection(text, "QR_CODE", points.getOrNull(i)?.corners(dx, dy).orEmpty())
+                    else Detection(text, "QR_CODE", points.getOrNull(i)?.corners().orEmpty())
                 }
             }
         } catch (t: Throwable) {
             emptyList()
         } finally {
             points.forEach { it.release() }
-            if (source !== bitmap) source.recycle()
         }
     }
+
+    /** [decode] on a region cut from a frame, with positions in the frame's pixels. */
+    fun decode(region: RegionCrop): List<Detection> = decode(region.image).map(region::toFrame)
 }
 
-private fun Mat.corners(dx: Int, dy: Int): List<PointF> = (0 until rows()).map { row ->
-    PointF(get(row, 0)[0].toFloat() + dx, get(row, 1)[0].toFloat() + dy)
+private fun Mat.corners(): List<PointF> = (0 until rows()).map { row ->
+    PointF(get(row, 0)[0].toFloat(), get(row, 1)[0].toFloat())
 }

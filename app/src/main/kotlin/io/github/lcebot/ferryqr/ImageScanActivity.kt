@@ -13,6 +13,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import io.github.lcebot.ferryqr.dispatch.Launch
+import io.github.lcebot.ferryqr.dispatch.ReadContent
 import io.github.lcebot.ferryqr.history.HistoryStore
 import io.github.lcebot.ferryqr.openin.OpenInModule
 import io.github.lcebot.ferryqr.scan.Detection
@@ -73,12 +74,14 @@ sealed interface ImageScan {
     data object Unreadable : ImageScan
 
     /**
-     * The codes read, each with its [thumbnails] entry for the chooser and, for a mini program code
-     * only located, its [locatedCrops] entry for WeChat, null where there is none; [miniCrop] is the
-     * one mini program code located when nothing was read.
+     * The codes read, each with its [contents] entry, read once for its card, its tile and history,
+     * its [thumbnails] entry for the chooser and, for a mini program code only located, its
+     * [locatedCrops] entry for WeChat, null where there is none; [miniCrop] is the one mini program
+     * code located when nothing was read.
      */
     class Read(
         val detections: List<Detection>,
+        val contents: List<ReadContent>,
         val thumbnails: List<Bitmap?>,
         val locatedCrops: List<Bitmap?>,
         val miniCrop: Bitmap?,
@@ -92,6 +95,7 @@ sealed interface ImageScan {
             fun Bitmap?.own(): Bitmap? = this?.let { if (it === frame) it.copy(Bitmap.Config.ARGB_8888, false) else it }
             return Read(
                 detections = read.detections,
+                contents = read.detections.map { ReadContent.of(it.text, it.format) },
                 thumbnails = read.detections.map { if (many) it.thumbnail(frame).own() else null },
                 locatedCrops = read.detections.map { if (it.isLocatedMiniCode) it.locatedCrop(frame).own() else null },
                 miniCrop = if (read.detections.isEmpty()) read.miniCodes.firstOrNull()?.crop(frame).own() else null,
@@ -108,7 +112,7 @@ class ImageScanViewModel(app: Application) : AndroidViewModel(app) {
     private var loaded = false
 
     /** The code recorded last, which the activity shows again when it is recreated, as on rotation. */
-    private var recorded: Detection? = null
+    private var recorded: ReadContent? = null
 
     /** Null while the image is still being read. */
     private val _result = MutableStateFlow<ImageScan?>(null)
@@ -128,12 +132,12 @@ class ImageScanViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Records [detection] as the code the sheet shows. Switching to another code records that one,
+     * Records [content] as the code the sheet shows. Switching to another code records that one,
      * as opening it would; showing the same code again, as a recreated activity does, records nothing.
      */
-    fun shown(detection: Detection) {
-        if (detection == recorded) return
-        recorded = detection
-        history.record(detection)
+    fun shown(content: ReadContent) {
+        if (content == recorded) return
+        recorded = content
+        history.record(content)
     }
 }

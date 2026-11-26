@@ -30,6 +30,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -51,6 +52,8 @@ import io.github.lcebot.ferryqr.history.HistoryEntry
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.pow
+import kotlin.math.round
+import kotlin.math.roundToInt
 import kotlin.math.sign
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -211,6 +214,25 @@ internal class Magnet {
     val bottomStart = Follower()
     val bottomEnd = Follower()
 }
+
+/** How many steps of half a dp a corner takes between [INNER_CORNER] and [OUTER_CORNER]. */
+private val ROUNDING_STEPS = (OUTER_CORNER - INNER_CORNER) / 0.5.dp
+
+/**
+ * How far [corner] rounds, from 0 to 1, in steps that move the corner by half a dp, which is as
+ * fine as a corner shows. Composition reads only this, so a row or tile builds its shape again a
+ * few dozen times over a whole pull rather than on every frame of the finger.
+ */
+@Composable
+internal fun rememberRounding(corner: Follower): State<Float> = remember(corner) {
+    derivedStateOf { (corner.value.value.coerceIn(0f, 1f) * ROUNDING_STEPS).roundToInt() / ROUNDING_STEPS }
+}
+
+/**
+ * [x] on whole pixels, for moving an entry sideways in its layer. Text moved across fractions of
+ * a pixel is drawn blurred and flickers at its glyph edges, which on whole pixels stay sharp.
+ */
+internal fun onWholePixels(x: Float): Float = round(x)
 
 /** The corners of an entry that round, as a set of bits, and the pairs along each side. */
 internal object Corners {

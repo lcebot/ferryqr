@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -35,6 +34,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -124,9 +124,10 @@ private fun KeepScreenOn() {
  * gesture, which shrinks it as it goes.
  *
  * A [long] code, a barcode or a PDF417, is shown level, one of the ways the settings offer to
- * enlarge it. The screen turns sideways while it shows, where the code is longest, so the activity
- * has to handle rotation itself, as the history does. A screen about to turn fades the code in and
- * out instead, since the card's code is where it was only in the window's earlier shape.
+ * enlarge it. The screen turns sideways while it shows, where the code is longest, and turns back
+ * when it closes, even when the activity was recreated for the turn. A screen about to turn fades
+ * the code in and out instead, since the card's code is where it was only in the window's earlier
+ * shape.
  * [drawTall], when given, draws a long code again as tall as the window lets it be, so its bars or
  * rows grow rather than a scaled picture. Any other code keeps its own shape and the screen its
  * orientation.
@@ -161,13 +162,18 @@ fun CodeOverlay(
         KeepScreenOn()
         val configuration = LocalConfiguration.current
         val turning = remember { long && configuration.orientation == Configuration.ORIENTATION_PORTRAIT }
+        // Saved with the overlay, so an activity recreated while it shows gives back the orientation
+        // it had before the overlay, rather than the landscape the overlay asked for.
+        val original = rememberSaveable { if (long) view.context.activity()?.requestedOrientation else null }
         DisposableEffect(view) {
             if (!long) return@DisposableEffect onDispose {}
             val activity = view.context.activity()
-            val previous = activity?.requestedOrientation
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
             onDispose {
-                if (activity != null && previous != null) activity.requestedOrientation = previous
+                // An activity being recreated shows the overlay again, which keeps the screen turned.
+                if (activity != null && original != null && !activity.isChangingConfigurations) {
+                    activity.requestedOrientation = original
+                }
             }
         }
 
@@ -176,8 +182,8 @@ fun CodeOverlay(
         // of the overlay shows fades on its own, so the fade never bounces with the geometry.
         val growth = remember { Animatable(0f) }
         val shown = remember { Animatable(0f) }
-        val spatial = MaterialTheme.motionScheme.defaultSpatialSpec<Float>()
-        val effects = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+        val spatial = MaterialTheme.motionScheme.slowSpatialSpec<Float>()
+        val effects = MaterialTheme.motionScheme.slowEffectsSpec<Float>()
         var closing by remember { mutableStateOf(false) }
         LaunchedEffect(Unit) {
             launch { shown.animateTo(1f, effects) }
@@ -261,7 +267,7 @@ fun CodeOverlay(
 @Composable
 internal fun PlainCode(code: Bitmap, modifier: Modifier, stretch: Boolean) {
     val image = remember(code) { code.asImageBitmap() }
-    BoxWithConstraints(modifier.clip(RoundedCornerShape(12.dp)).background(Color.White), contentAlignment = Alignment.Center) {
+    BoxWithConstraints(modifier.clip(MaterialTheme.shapes.medium).background(Color.White), contentAlignment = Alignment.Center) {
         val scale = minOf(constraints.maxWidth.toFloat() / code.width, constraints.maxHeight.toFloat() / code.height)
         Image(
             bitmap = image,

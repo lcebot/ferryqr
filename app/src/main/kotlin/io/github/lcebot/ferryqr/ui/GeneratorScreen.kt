@@ -3,8 +3,11 @@
 package io.github.lcebot.ferryqr.ui
 
 import android.content.ClipboardManager
+import android.content.ContentResolver
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
+import android.net.Uri
 import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedContentTransitionScope
@@ -40,7 +43,6 @@ import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.clearText
@@ -66,6 +68,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -115,6 +118,7 @@ import io.github.lcebot.ferryqr.generate.CodeType
 import io.github.lcebot.ferryqr.generate.Generated
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -126,6 +130,12 @@ private const val AUTO = "auto"
 /** Longer text is regenerated only after typing pauses, so each keystroke stays responsive. */
 private const val LARGE_TEXT = 800
 private const val LARGE_TEXT_DELAY_MS = 350L
+
+/**
+ * The most of a clip the page takes in. It is beyond what any format holds, so a longer clip still
+ * reads as too long rather than becoming a code of its beginning.
+ */
+private const val CLIP_MAX_CHARS = 4096
 
 /** How long the format picker waits for the keyboard to start going down before it opens anyway. */
 private const val KEYBOARD_CLOSE_TIMEOUT_MS = 300L
@@ -143,16 +153,18 @@ fun GeneratorScreen(onBack: () -> Unit) {
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val windowInfo = LocalWindowInfo.current
+    // The text is read in effects and in the parts that depend on it, and values drawn from it are
+    // derived, so a keystroke composes the field again rather than the whole page.
     val field = rememberTextFieldState()
-    val text = field.text.toString()
+    val hasText by remember { derivedStateOf { field.text.isNotEmpty() } }
     // The format is chosen from the content unless one is picked; the last pick is kept only when
     // the settings ask for it, as the page keeps nothing else between visits.
     val settings = remember { AppSettings.of(context) }
     val keepFormat by settings.rememberFormat.flow.collectAsStateWithLifecycle()
     var choice by rememberSaveable { mutableStateOf(if (settings.rememberFormat.value) settings.lastFormat.value ?: AUTO else AUTO) }
-    val chosen = remember(choice) { CodeType.entries.firstOrNull { it.name == choice } }
-    val automatic = remember(text) { AutoFormat.pick(text) }
-    val type = chosen ?: automatic
+    val chosen by remember { derivedStateOf { CodeType.entries.firstOrNull { it.name == choice } } }
+    val automatic by remember { derivedStateOf { AutoFormat.pick(field.text.toString()) } }
+    val type by remember { derivedStateOf { chosen ?: automatic } }
     fun choose(next: String) {
         choice = next
         if (keepFormat) settings.lastFormat.value = next
@@ -187,22 +199,26 @@ fun GeneratorScreen(onBack: () -> Unit) {
     }
     val enlarge by settings.longCodeEnlarge.flow.collectAsStateWithLifecycle()
     var prefilled by rememberSaveable { mutableStateOf(false) }
-    var result by remember { mutableStateOf<Generated?>(null) }
+    var made by remember { mutableStateOf<Made?>(null) }
+    // The field follows only whether the text fits, not every code made from it.
+    val unfit by remember { derivedStateOf { made?.generated as? Generated.Unfit } }
     // Every installed app FerryQR reaches its own way, each in a place of its own in the toolbar so
     // it can fade in and out there: the apps for their own codes first, the general ones last.
     // Asking the package manager is a call into another process, so it stays off the main thread.
     val candidates by produceState(emptyList<ActiveFerry>()) {
         value = withContext(Dispatchers.IO) { ActiveFerries.all.filter { it.installed(context) }.sortedBy { it.general } }
     }
-    val appFade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
-    val appResize = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
+    val appFade = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
+    val appResize = MaterialTheme.motionScheme.fastSpatialSpec<IntSize>()
     val ready = readyApps()
     // The apps for the text are the ones result cards offer for the same content, in the same order,
     // looked up once typing pauses rather than on every keystroke.
-    val offered by produceState(emptyList<Ferry>(), text, ready) {
-        delay(OFFER_DELAY_MS)
-        value = withContext(Dispatchers.IO) {
-            Ferries.offered(context, Classifier.classify(text), ready).filter { it.installed(context) }
+    val offered by produceState(emptyList<Ferry>(), ready) {
+        snapshotFlow { field.text.toString() }.collectLatest { text ->
+            delay(OFFER_DELAY_MS)
+            value = withContext(Dispatchers.IO) {
+                Ferries.offered(context, Classifier.classify(text), ready).filter { it.installed(context) }
+            }
         }
     }
 
@@ -211,57 +227,33 @@ fun GeneratorScreen(onBack: () -> Unit) {
         if (prefilled) return@LaunchedEffect
         snapshotFlow { windowInfo.isWindowFocused }.first { it }
         prefilled = true
-        val clip = readClipboardText(context)
-        // Read from the field itself: by now the text this composition saw may be stale.
+        val clip = withContext(Dispatchers.IO) { readClipboardText(context) }
+        // Typing may have begun while the page waited for focus, and the clipboard never replaces it.
         if (!clip.isNullOrEmpty() && field.text.isEmpty()) field.setTextAndPlaceCursorAtEnd(clip)
     }
 
-    LaunchedEffect(text, type) {
-        if (text.isEmpty()) {
-            result = null
-            return@LaunchedEffect
+    // The text and the format are read together, so a code is never made from one with the other
+    // out of date; a code still being made is dropped once either moves on.
+    LaunchedEffect(Unit) {
+        snapshotFlow { field.text.toString() to type }.collectLatest { (text, wanted) ->
+            if (text.isEmpty()) {
+                made = null
+                return@collectLatest
+            }
+            if (text.length > LARGE_TEXT) delay(LARGE_TEXT_DELAY_MS)
+            made = withContext(Dispatchers.Default) { Made(text, wanted, CodeGenerator.generate(text, wanted)) }
         }
-        if (text.length > LARGE_TEXT) delay(LARGE_TEXT_DELAY_MS)
-        result = withContext(Dispatchers.Default) { CodeGenerator.generate(text, type) }
     }
 
-    val code = (result as? Generated.Code)?.bitmap
-    // A long code is drawn again at the shape it is shown in, so its bars fill it without a scaled picture.
-    val drawTall: ((Float) -> Bitmap?)? = if (type.long) {
-        { ratio -> (CodeGenerator.generate(text, type, ratio) as? Generated.Code)?.bitmap }
-    } else {
-        null
-    }
-    val unfit = result as? Generated.Unfit
-    val typeLabel = stringResource(type.label)
-    val separator = stringResource(R.string.list_separator)
-    val alternatives = unfit?.alternatives?.map { stringResource(it.label) }.orEmpty().joinToString(separator)
-    val error = unfit?.let {
-        when (val problem = it.problem) {
-            CodeProblem.TooLong ->
-                if (alternatives.isEmpty()) stringResource(R.string.generate_too_long_all)
-                else stringResource(R.string.generate_too_long, typeLabel, alternatives)
-            else -> {
-                val reason = problemText(problem)
-                if (alternatives.isEmpty()) stringResource(R.string.generate_unfit_all, typeLabel, reason)
-                else stringResource(R.string.generate_unfit, typeLabel, reason, alternatives)
-            }
+    val clearButton: @Composable () -> Unit = {
+        IconButton(onClick = { haptics.tap(); field.clearText() }, shapes = IconButtonDefaults.shapes()) {
+            Icon(painterResource(R.drawable.ic_close), stringResource(R.string.generate_clear))
         }
     }
-    val trailingIcon: (@Composable () -> Unit)? = if (text.isNotEmpty()) {
-        {
-            IconButton(onClick = { haptics.tap(); field.clearText() }, shapes = IconButtonDefaults.shapes()) {
-                Icon(painterResource(R.drawable.ic_close), stringResource(R.string.generate_clear))
-            }
-        }
-    } else {
-        null
-    }
-
 
     if (picking) {
         FormatPickerSheet(
-            text = text,
+            text = field.text.toString(),
             selected = chosen,
             original = null,
             onPick = { picked ->
@@ -326,20 +318,17 @@ fun GeneratorScreen(onBack: () -> Unit) {
                         }
                         else -> {
                             haptics.tap()
-                            if (!ferry.open(activity, text)) scope.launch { snackbar.showLatest(context.getString(R.string.no_app)) }
+                            val opened = ferry.open(activity, field.text.toString())
+                            if (!opened) scope.launch { snackbar.showLatest(context.getString(R.string.no_app)) }
                         }
                     }
                 }
             }
-            val layout = if (offered.isEmpty()) null else sendLayout(offered, toolbarRoom)
 
             // The code opens over the whole window when tapped, as large as the window lets it be.
             var enlarged by rememberSaveable { mutableStateOf(false) }
             var codeBounds by remember { mutableStateOf<Rect?>(null) }
             val brighten by settings.fullBrightness.flow.collectAsStateWithLifecycle()
-            if (enlarged && code != null) {
-                CodeOverlay(code, brighten, codeBounds, onDismiss = { enlarged = false }, drawTall = drawTall, long = type.long)
-            }
 
             val chips: @Composable () -> Unit = {
                 // The automatic choice leads and names the format it uses; the common formats follow, with
@@ -386,6 +375,20 @@ fun GeneratorScreen(onBack: () -> Unit) {
             }
             val codeFade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
             val codeArea: @Composable () -> Unit = {
+                val current = made
+                val code = (current?.generated as? Generated.Code)?.bitmap
+                // The format of the code shown, which the format chosen may have moved on from.
+                val long = current?.type?.long == true
+                // A long code is drawn again at the shape it is shown in, so its bars fill it without a
+                // scaled picture, from the same text and format as the code it replaces.
+                val drawTall: ((Float) -> Bitmap?)? = if (current != null && long) {
+                    { ratio -> (CodeGenerator.generate(current.text, current.type, ratio) as? Generated.Code)?.bitmap }
+                } else {
+                    null
+                }
+                if (enlarged && code != null) {
+                    CodeOverlay(code, brighten, codeBounds, onDismiss = { enlarged = false }, drawTall = drawTall, long = long)
+                }
                 Box(
                     modifier = Modifier.fillMaxSize().then(
                         if (code == null) {
@@ -400,7 +403,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
                     contentAlignment = Alignment.Center,
                 ) {
                     val look = when {
-                        code == null || !type.long -> CodeLook.SQUARE
+                        code == null || !long -> CodeLook.SQUARE
                         enlarge == LongCodeEnlarge.TILT -> CodeLook.TILTED
                         else -> CodeLook.STRETCHED
                     }
@@ -435,16 +438,20 @@ fun GeneratorScreen(onBack: () -> Unit) {
                     (fadeOut(appFade) + shrinkHorizontally(appResize)) using null
             }
             val toolbar: @Composable () -> Unit = {
+                val code = (made?.generated as? Generated.Code)?.bitmap
+                // Worked out again only when the offered apps or their room change, not for each new code.
+                val layout = remember(offered, toolbarRoom) { if (offered.isEmpty()) null else sendLayout(offered, toolbarRoom) }
                 CodeToolbar(
                     code = code,
                     onMessage = { message -> scope.launch { snackbar.showLatest(context.getString(message)) } },
                     favorite = {
                         // Kept codes are shown again from history, drawn the same way as here. Unstarred,
                         // the toggle takes the toolbar's own content colour, like save and copy beside it;
-                        // starred, it fills like the favorite on result cards.
+                        // starred, it fills like the favorite on result cards. Only the toggle reads the
+                        // text, so a keystroke composes it again and leaves the rest of the toolbar be.
                         Labeled(R.string.favorite) {
                             FavoriteToggle(
-                                text,
+                                field.text.toString(),
                                 type.format.name,
                                 enabled = code != null,
                                 colors = IconButtonDefaults.iconToggleButtonColors(
@@ -470,7 +477,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
                             // Folding apps away or bringing them back resizes the pill a button at a
                             // time, the same way as when an app appears for the text.
                             AppGroup {
-                                val enabled = text.isNotEmpty()
+                                val enabled = hasText
                                 for (ferry in candidates.filterNot { it.general }) {
                                     AppSlot(ferry in shown.inline, sendApp(ferry), enabled, appFade, appResize)
                                 }
@@ -501,6 +508,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
                 }
             }
             val textField: @Composable (lines: Int) -> Unit = { lines ->
+                val error = unfitMessage(unfit, made?.type ?: type)
                 OutlinedTextField(
                     state = field,
                     modifier = Modifier
@@ -513,7 +521,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
                     placeholder = { Text(stringResource(R.string.generate_placeholder)) },
                     isError = error != null,
                     supportingText = { Text(error.orEmpty()) },
-                    trailingIcon = trailingIcon,
+                    trailingIcon = if (hasText) clearButton else null,
                     lineLimits = TextFieldLineLimits.MultiLine(minHeightInLines = lines, maxHeightInLines = lines),
                 )
             }
@@ -521,13 +529,14 @@ fun GeneratorScreen(onBack: () -> Unit) {
             // which tells how much room the field takes at the current font size.
             val probeState = remember { TextFieldState() }
             val fieldProbe: @Composable () -> Unit = {
+                val error = unfitMessage(unfit, made?.type ?: type)
                 OutlinedTextField(
                     state = probeState,
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text(stringResource(R.string.generate_input)) },
                     isError = error != null,
                     supportingText = { Text(error.orEmpty()) },
-                    trailingIcon = trailingIcon,
+                    trailingIcon = if (hasText) clearButton else null,
                     lineLimits = TextFieldLineLimits.MultiLine(minHeightInLines = 1, maxHeightInLines = 1),
                 )
             }
@@ -546,6 +555,31 @@ fun GeneratorScreen(onBack: () -> Unit) {
     }
 }
 
+/** What was made from [text] in [type], kept with both so a long code is drawn again from the same. */
+private class Made(val text: String, val type: CodeType, val generated: Generated)
+
+/**
+ * Why the text does not fit [type], naming the common formats that would hold it, or null when
+ * nothing is [unfit].
+ */
+@Composable
+private fun unfitMessage(unfit: Generated.Unfit?, type: CodeType): String? {
+    if (unfit == null) return null
+    val typeLabel = stringResource(type.label)
+    val separator = stringResource(R.string.list_separator)
+    val alternatives = unfit.alternatives.map { stringResource(it.label) }.joinToString(separator)
+    return when (val problem = unfit.problem) {
+        CodeProblem.TooLong ->
+            if (alternatives.isEmpty()) stringResource(R.string.generate_too_long_all)
+            else stringResource(R.string.generate_too_long, typeLabel, alternatives)
+        else -> {
+            val reason = problemText(problem)
+            if (alternatives.isEmpty()) stringResource(R.string.generate_unfit_all, typeLabel, reason)
+            else stringResource(R.string.generate_unfit, typeLabel, reason, alternatives)
+        }
+    }
+}
+
 /** How the create page's preview draws a code. */
 private enum class CodeLook { SQUARE, TILTED, STRETCHED }
 
@@ -557,7 +591,7 @@ private data class ShownCode(val look: CodeLook, val code: Bitmap?)
 private fun CodePreview(code: Bitmap?, modifier: Modifier = Modifier) {
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(28.dp),
+        shape = MaterialTheme.shapes.extraLarge,
         color = MaterialTheme.colorScheme.surfaceContainer,
     ) {
         val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
@@ -573,7 +607,7 @@ private fun CodePreview(code: Bitmap?, modifier: Modifier = Modifier) {
                 val image = remember(code) { code.asImageBitmap() }
                 // Inside a box, so the white card takes the code's own shape rather than the area's size.
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Surface(shape = RoundedCornerShape(16.dp), color = Color.White) {
+                    Surface(shape = MaterialTheme.shapes.large, color = Color.White) {
                         Image(
                             bitmap = image,
                             contentDescription = null,
@@ -608,10 +642,45 @@ private fun CodePreview(code: Bitmap?, modifier: Modifier = Modifier) {
     }
 }
 
+/**
+ * The text on the clipboard, up to [CLIP_MAX_CHARS]. Some apps put text on the clipboard as a
+ * content URI, which `coerceToText` would read to its end however large it is, so the URI is read
+ * here only as far as the field can take. It asks the clipboard and possibly another app's
+ * provider, so it runs off the main thread.
+ */
 private fun readClipboardText(context: Context): String? {
     val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return null
     if (clipboard.primaryClipDescription?.hasMimeType("text/*") != true) return null
     val clip = clipboard.primaryClip ?: return null
     if (clip.itemCount == 0) return null
-    return clip.getItemAt(0).coerceToText(context)?.toString()
+    val item = clip.getItemAt(0)
+    item.text?.let { return it.take(CLIP_MAX_CHARS).toString() }
+    item.uri?.let { uri ->
+        // A URI that cannot be read as text stands for itself, unless it points into this device,
+        // as coerceToText treats it.
+        return readText(context, uri) ?: uri.toString().take(CLIP_MAX_CHARS).takeIf { uri.scheme !in LOCAL_SCHEMES }
+    }
+    return item.intent?.toUri(Intent.URI_INTENT_SCHEME)?.take(CLIP_MAX_CHARS)
+}
+
+/** URI schemes that name something on this device rather than a link worth showing as text. */
+private val LOCAL_SCHEMES = setOf(ContentResolver.SCHEME_CONTENT, ContentResolver.SCHEME_ANDROID_RESOURCE, ContentResolver.SCHEME_FILE)
+
+/** The first [CLIP_MAX_CHARS] of the text behind [uri], in UTF-8 as the clipboard reads it, or null when it cannot be read. */
+private fun readText(context: Context, uri: Uri): String? = try {
+    context.contentResolver.openTypedAssetFileDescriptor(uri, "text/*", null)?.use { descriptor ->
+        descriptor.createInputStream().bufferedReader(Charsets.UTF_8).use { reader ->
+            val buffer = CharArray(CLIP_MAX_CHARS)
+            var read = 0
+            while (read < buffer.size) {
+                val count = reader.read(buffer, read, buffer.size - read)
+                if (count < 0) break
+                read += count
+            }
+            String(buffer, 0, read)
+        }
+    }
+} catch (e: Exception) {
+    // A provider may refuse, go away or fail midway, and the clip then counts as unreadable.
+    null
 }

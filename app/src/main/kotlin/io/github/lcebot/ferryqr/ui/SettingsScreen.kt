@@ -5,11 +5,14 @@
 package io.github.lcebot.ferryqr.ui
 
 import androidx.annotation.StringRes
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -336,7 +339,7 @@ private fun FavoriteSettings() {
                                 }
                             }
                         }
-                        Text(stringResource(if (tiles) R.string.favorite_layout_tiles_desc else R.string.favorite_layout_list_desc))
+                        ChoiceDescription(if (tiles) R.string.favorite_layout_tiles_desc else R.string.favorite_layout_list_desc)
                     }
                 },
             ) {
@@ -469,7 +472,7 @@ private fun DisplaySettings() {
                             }
                         }
                     }
-                    Text(stringResource(enlargeDescription(mode)))
+                    ChoiceDescription(enlargeDescription(mode))
                 }
             },
         ) {
@@ -485,6 +488,25 @@ private fun DisplaySettings() {
                 settings.fullBrightness.value = on
             },
         )
+    }
+}
+
+/**
+ * The description of the option chosen in the row above it. Another option's description fades in
+ * over it while the row resizes to the new text on the section's own spring, so the rows below
+ * move to their places rather than jump.
+ */
+@Composable
+private fun ChoiceDescription(@StringRes description: Int) {
+    val effects = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+    val spatial = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
+    AnimatedContent(
+        targetState = description,
+        transitionSpec = { (fadeIn(effects) togetherWith fadeOut(effects)) using SizeTransform { _, _ -> spatial } },
+        modifier = Modifier.fillMaxWidth(),
+        label = "choice-description",
+    ) { shown ->
+        Text(stringResource(shown))
     }
 }
 

@@ -30,7 +30,6 @@ import androidx.compose.material3.ToggleButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -50,7 +49,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
@@ -70,6 +68,7 @@ import io.github.lcebot.ferryqr.openin.OpenInApps
 import io.github.lcebot.ferryqr.openin.OpenInModule
 import io.github.lcebot.ferryqr.openin.Strategy
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** How a code reaches an app's scanner, in the terms the settings use. */
@@ -117,10 +116,19 @@ fun FerrySettingsScreen(onBack: () -> Unit) {
     val features = remember(collator) { sorted(SystemFeatures.all) { it.name } }
     val defaults = remember(collator) { sorted(DefaultApps.all) { it.name } }
 
-    // Coming back from LSPosed, or from an app that restarted, the framework may say otherwise.
+    // Asked again each time the page comes back, since coming back from LSPosed, or from an app that
+    // restarted, the framework may say otherwise, and an app may be installed, removed or made the
+    // default in the system's settings meanwhile. Until the first answer of this process arrives,
+    // each row's status is blank and fades in; after that, the last answer stays until the next.
     val lifecycle = LocalLifecycleOwner.current.lifecycle
+    var facts by remember { mutableStateOf(lastFacts) }
     LaunchedEffect(lifecycle) {
-        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) { OpenInModule.refresh() }
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            launch { OpenInModule.refresh() }
+            val read = withContext(Dispatchers.IO) { readFacts(context) }
+            lastFacts = read
+            facts = read
+        }
     }
 
     TabbedSettingsPage(
@@ -131,22 +139,28 @@ fun FerrySettingsScreen(onBack: () -> Unit) {
         if (tab == 0) {
             item(key = "header") { OpenInHeader() }
             itemsIndexed(modules, key = { _, app -> app.pkg }) { index, app ->
-                AppSettingItem(app, segmentShape(index, modules.size))
+                AppSettingItem(app, facts?.installed(app.pkg), segmentShape(index, modules.size))
             }
         } else {
             item(key = "apps") {
                 SettingsSection(R.string.ferry_group_apps, R.string.settings_entries_intro, first = true) {
-                    entries.forEachIndexed { index, ferry -> EntryItem(ferry, segmentShape(index, entries.size)) }
+                    entries.forEachIndexed { index, ferry ->
+                        EntryItem(ferry, facts?.installed(ferry.pkg), segmentShape(index, entries.size))
+                    }
                 }
             }
             item(key = "system") {
                 SettingsSection(R.string.ferry_group_system, R.string.ferry_group_system_intro) {
-                    features.forEachIndexed { index, feature -> FeatureItem(feature, segmentShape(index, features.size)) }
+                    features.forEachIndexed { index, feature ->
+                        FeatureItem(feature, facts?.let { feature in it.supported }, segmentShape(index, features.size))
+                    }
                 }
             }
             item(key = "defaults") {
                 SettingsSection(R.string.ferry_group_defaults, R.string.ferry_group_defaults_intro) {
-                    defaults.forEachIndexed { index, app -> DefaultAppItem(app, segmentShape(index, defaults.size)) }
+                    defaults.forEachIndexed { index, app ->
+                        DefaultAppItem(app, facts?.handling?.get(app), facts?.labels.orEmpty(), segmentShape(index, defaults.size))
+                    }
                 }
             }
         }
@@ -250,20 +264,21 @@ private fun AppRow(
     }
 }
 
+/** An app the module works in. [installed] is null until the page has asked. */
 @Composable
-private fun AppSettingItem(app: AppSetting, shape: Shape) {
+private fun AppSettingItem(app: AppSetting, installed: Boolean?, shape: Shape) {
     val context = LocalContext.current
     val haptics = rememberHaptics()
     val name = stringResource(app.name)
-    val installed = rememberOnResume { Launch.isInstalled(it, app.pkg) }
     val state by OpenInModule.state(app.pkg).collectAsStateWithLifecycle()
     val cameraFeedSetting = remember(app.pkg) { AppSettings.of(context).cameraFeed(app.pkg) }
     val cameraFeed by cameraFeedSetting.flow.collectAsStateWithLifecycle()
     val method = app.fixed ?: if (cameraFeed) Method.Camera else Method.Direct
-    val working = installed && (state == ModuleState.Loaded || state == ModuleState.Enabled)
-    val status = when {
-        !installed -> stringResource(R.string.app_not_installed)
-        else -> when (state) {
+    val working = installed == true && (state == ModuleState.Loaded || state == ModuleState.Enabled)
+    val status = when (installed) {
+        null -> ""
+        false -> stringResource(R.string.app_not_installed)
+        true -> when (state) {
             ModuleState.Unknown -> stringResource(R.string.module_checking)
             ModuleState.Inactive -> stringResource(R.string.module_inactive)
             ModuleState.OutOfScope -> stringResource(R.string.module_out_of_scope)
@@ -286,38 +301,48 @@ private fun AppSettingItem(app: AppSetting, shape: Shape) {
     }
 }
 
-/** An app reached through an entry of its own: nothing to set, only whether it is there and what it opens. */
+/**
+ * An app reached through an entry of its own: nothing to set, only whether it is there and what it
+ * opens. [installed] is null until the page has asked.
+ */
 @Composable
-private fun EntryItem(ferry: ActiveFerry, shape: Shape) {
-    val installed = rememberOnResume { ferry.installed(it) }
-    val status = stringResource(if (installed) R.string.entry_ready else R.string.app_not_installed)
-    AppRow({ AppIcon(ferry.pkg, R.drawable.ic_apps, Modifier.size(24.dp)) }, stringResource(ferry.name), status, installed, shape) {
+private fun EntryItem(ferry: ActiveFerry, installed: Boolean?, shape: Shape) {
+    val status = when (installed) {
+        null -> ""
+        true -> stringResource(R.string.entry_ready)
+        false -> stringResource(R.string.app_not_installed)
+    }
+    AppRow({ AppIcon(ferry.pkg, R.drawable.ic_apps, Modifier.size(24.dp)) }, stringResource(ferry.name), status, installed == true, shape) {
         ferry.summary?.let { Note(it) }
     }
 }
 
-/** A feature of the system: whether this device has it, and what it does. */
+/** A feature of the system: whether this device has it, and what it does. [supported] is null until the page has asked. */
 @Composable
-private fun FeatureItem(feature: SystemFeature, shape: Shape) {
-    val context = LocalContext.current
-    val supported = remember(feature) { feature.supported(context) }
-    val status = stringResource(if (supported) R.string.entry_ready else R.string.feature_unsupported)
-    AppRow({ FeatureIcon(feature.icon) }, stringResource(feature.name), status, supported, shape) {
+private fun FeatureItem(feature: SystemFeature, supported: Boolean?, shape: Shape) {
+    val status = when (supported) {
+        null -> ""
+        true -> stringResource(R.string.entry_ready)
+        false -> stringResource(R.string.feature_unsupported)
+    }
+    AppRow({ FeatureIcon(feature.icon) }, stringResource(feature.name), status, supported == true, shape) {
         Note(feature.summary)
     }
 }
 
-/** A kind of content and the app the system hands it to, which a change of default apps changes. */
+/**
+ * A kind of content and the app the system hands it to, which a change of default apps changes.
+ * [handling] is null until the page has asked, and [labels] names the apps content can go to.
+ */
 @Composable
-private fun DefaultAppItem(app: DefaultApp, shape: Shape) {
-    val handling = rememberOnResume { app.handling(it) }
-    val context = LocalContext.current
+private fun DefaultAppItem(app: DefaultApp, handling: Handling?, labels: Map<String, String>, shape: Shape) {
     val status = when (handling) {
-        is Handling.App -> stringResource(R.string.default_opens_in, remember(handling.pkg) { Launch.appLabel(context, handling.pkg) } ?: handling.pkg)
+        null -> ""
+        is Handling.App -> stringResource(R.string.default_opens_in, labels[handling.pkg] ?: handling.pkg)
         Handling.Asks -> stringResource(R.string.default_asks)
         Handling.None -> stringResource(R.string.default_none)
     }
-    AppRow({ FeatureIcon(app.icon) }, stringResource(app.name), status, handling !is Handling.None, shape)
+    AppRow({ FeatureIcon(app.icon) }, stringResource(app.name), status, handling != null && handling !is Handling.None, shape)
 }
 
 @Composable
@@ -326,24 +351,37 @@ private fun FeatureIcon(@DrawableRes icon: Int) {
 }
 
 /**
- * [read] again each time the page comes back, since what it reads, such as whether an app is
- * installed or which app is the default, can change in the system's settings meanwhile.
+ * What the page shows that only the package manager and the system's services can say: which of
+ * the listed apps are installed, which features this device has, where each kind of content goes,
+ * and what the apps it goes to are called.
  */
-@Composable
-private fun <T> rememberOnResume(read: (Context) -> T): T {
-    val context = LocalContext.current
-    // Read once at once, so the row opens with its answer rather than changing to it, and again
-    // off the main thread each time the page comes back, since each read asks the package manager.
-    var value by remember { mutableStateOf(read(context)) }
-    var resumes by remember { mutableIntStateOf(0) }
-    LifecycleResumeEffect(Unit) {
-        resumes++
-        onPauseOrDispose {}
-    }
-    LaunchedEffect(resumes) {
-        if (resumes > 1) value = withContext(Dispatchers.IO) { read(context) }
-    }
-    return value
+private class SystemFacts(
+    private val installedPackages: Set<String>,
+    val supported: Set<SystemFeature>,
+    val handling: Map<DefaultApp, Handling>,
+    val labels: Map<String, String>,
+) {
+    fun installed(pkg: String) = pkg in installedPackages
+}
+
+/**
+ * The last [SystemFacts] read in this process. A page opened again, or rebuilt for a new
+ * configuration, starts from it rather than from blank statuses, and corrects it once its own read
+ * is in. Only the main thread reads or writes it.
+ */
+private var lastFacts: SystemFacts? = null
+
+/** Asks everything the page shows in one pass, which belongs off the main thread as each question is a binder call. */
+private fun readFacts(context: Context): SystemFacts {
+    val handling = DefaultApps.all.associateWith { it.handling(context) }
+    return SystemFacts(
+        installedPackages = ActiveFerries.all.filter { it.installed(context) }.mapTo(HashSet()) { it.pkg },
+        supported = SystemFeatures.all.filterTo(HashSet()) { it.supported(context) },
+        handling = handling,
+        labels = handling.values.filterIsInstance<Handling.App>()
+            .mapNotNull { app -> Launch.appLabel(context, app.pkg)?.let { app.pkg to it } }
+            .toMap(),
+    )
 }
 
 @Composable

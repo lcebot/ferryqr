@@ -3,6 +3,7 @@ package io.github.lcebot.ferryqr.ui
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.animate
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.lazy.LazyListItemInfo
 import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
@@ -92,6 +93,15 @@ internal interface FavoritesReorder {
 }
 
 /**
+ * Where an order the favorites were moved into is kept. The list's rows and the tiles both keep
+ * theirs through one, so every way of moving favorites ends in the same place.
+ */
+internal fun interface FavoriteOrderKeeper {
+    /** Keeps [order], the contents of the favorites in their new order. */
+    fun commit(order: List<String>)
+}
+
+/**
  * While a favorite of [reorder] is held near the top or bottom of the visible list, and favorites
  * reach past that edge, the list scrolls toward them. Only the list's content moves: the held row
  * or tile stays under the finger, taking each scroll off its drag, the top bar keeps its size since
@@ -147,11 +157,12 @@ internal fun ReorderAutoScroll(listState: LazyListState, reorder: FavoritesReord
 }
 
 /**
- * The favorites reordered as rows of the list, each [rowKey] in the list. While [active], the
- * favorites follow [order], their contents in their new order, which is kept when done. The row
- * being dragged is [dragging], drawn [dragOffset] from its place, and while [settling], the one
- * gliding into its place after the finger lifted. It sets its dragged look down as the finger
- * lifts and stays above its neighbours only until it lands, so letting go answers at once.
+ * The favorites reordered as rows of the list, each [rowKey] in the list, right below the list item
+ * [headerKey], their title. While [active], the favorites follow [order], their contents in their
+ * new order, which [keeper] keeps when done. The row being dragged is [dragging], drawn [dragOffset]
+ * from its place, and while [settling], the one gliding into its place after the finger lifted. It
+ * sets its dragged look down as the finger lifts and stays above its neighbours only until it lands,
+ * so letting go answers at once.
  */
 @Stable
 internal class ListReorderState(
@@ -159,7 +170,9 @@ internal class ListReorderState(
     private val haptics: Haptics,
     private val scope: CoroutineScope,
     private val rowKey: (String) -> Any,
-) : FavoritesReorder {
+    private val headerKey: Any,
+    keeper: FavoriteOrderKeeper,
+) : FavoritesReorder, FavoriteOrderKeeper by keeper {
     var active by mutableStateOf(false)
         private set
     val order = FavoriteOrder()
@@ -172,16 +185,30 @@ internal class ListReorderState(
 
     override val held: Any? get() = dragging.takeIf { active && settling == null }
 
+    /**
+     * Where the first favorite is among the list's items, one past the title as it was last seen
+     * laid out, or -1 before it has been. Nothing above the favorites changes while they are
+     * reordered, so the place holds while the title is scrolled out of view.
+     */
+    private var firstRow = -1
+
+    /** Takes the place of the favorites from the title, where it is laid out in view. */
+    private fun findFirstRow(rows: List<LazyListItemInfo>) {
+        rows.firstOrNull { it.key == headerKey }?.let { firstRow = it.index + 1 }
+    }
+
     /** Starts reordering [favorites] as they are. */
     fun start(favorites: List<HistoryEntry>) {
         order.reset(favorites.map { it.text })
+        firstRow = -1
+        findFirstRow(listState.layoutInfo.visibleItemsInfo)
         active = true
     }
 
-    /** Ends reordering and gives the order reached. */
-    fun finish(): List<String> {
+    /** Ends reordering and keeps the order reached. */
+    fun finish() {
         active = false
-        return order.toList()
+        commit(order.toList())
     }
 
     /**
@@ -216,9 +243,14 @@ internal class ListReorderState(
         }
     }
 
-    /** Moves [text] to [to] in the order, for screen readers, which move a row at a time. */
+    /**
+     * Moves [text] to [to] in the order, for screen readers, which move a row at a time. Each move
+     * is kept at once, as a tile's is, so leaving without Done loses none of them.
+     */
     fun move(text: String, to: Int) {
-        if (order.move(text, to)) haptics.step()
+        if (!order.move(text, to)) return
+        haptics.step()
+        commit(order.toList())
     }
 
     /**
@@ -230,9 +262,10 @@ internal class ListReorderState(
         val rows = listState.layoutInfo.visibleItemsInfo
         val row = rows.firstOrNull { it.key == rowKey(text) } ?: return
         val index = order.indexOf(text)
+        findFirstRow(rows)
         // Until the list is laid out again after a move, its positions are the old ones, and would
-        // move the row straight back; the favorites start below their header.
-        if (row.index != index + 1) return
+        // move the row straight back.
+        if (firstRow < 0 || row.index != firstRow + index) return
         val middle = row.offset + row.size / 2 + dragOffset
         val next = order.getOrNull(index + 1)?.let { key -> rows.firstOrNull { it.key == rowKey(key) } }
         val previous = order.getOrNull(index - 1)?.let { key -> rows.firstOrNull { it.key == rowKey(key) } }

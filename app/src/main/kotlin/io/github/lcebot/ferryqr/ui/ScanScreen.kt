@@ -16,13 +16,16 @@ import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -40,12 +43,12 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.text.TextAutoSize
+import androidx.compose.material3.ContainedLoadingIndicator
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledIconToggleButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
-import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -53,13 +56,13 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -83,7 +86,6 @@ import io.github.lcebot.ferryqr.ScanViewModel
 import io.github.lcebot.ferryqr.dispatch.Dispatcher
 import kotlin.math.abs
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.launch
 
 /** The smallest a control label shrinks to before it is cut short. */
 private val MIN_LABEL_SIZE = 9.sp
@@ -104,7 +106,6 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
     val phase by vm.phase.collectAsStateWithLifecycle()
     val session by vm.cameraSession.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
     val torch = remember { Torch() }
     var zoom by remember { mutableFloatStateOf(1f) }
 
@@ -123,9 +124,11 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
     LaunchedEffect(phase) {
         if (phase is Phase.MiniCodeFound) haptics.found()
     }
-    // A code goes to its app from here, the only place with an activity to start it; each is tried once.
+    // A code goes to its app from here, the only place with an activity to start it; each is tried
+    // once, and only while the user has not moved on from it.
     LaunchedEffect(vm) {
         vm.routes.collect { effect ->
+            if (!vm.isCurrent(effect)) return@collect
             if (Dispatcher.autoLaunch(activity, effect.payload, effect.origin, effect.plan)) activity.finish() else vm.show(effect)
         }
     }
@@ -138,14 +141,18 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
     // The hint and the indicator on the code tell that it is being looked at closer only once that
     // goes on for a moment, so a code read at the first closer look never makes them blink.
     val lookingCloser = rememberSteady(deep, showAfterMs = LOOKING_CLOSER_AFTER_MS, holdMs = LOOKING_CLOSER_HOLD_MS)
+    // The zoom changes with every pinch event; the page reads only whether it is off the base, and
+    // the pill alone reads the figure.
+    val zoomed by remember { derivedStateOf { abs(zoom - 1f) >= 0.05f } }
     // Back at the base zoom, the pill shows it for a moment before it leaves, so a zoom that comes
     // back to where it started is seen to arrive there.
-    val zoomShown = rememberSteady(abs(zoom - 1f) >= 0.05f, showAfterMs = 0L, holdMs = ZOOM_HOLD_MS)
-    val effects = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
-    val spatial = MaterialTheme.motionScheme.defaultSpatialSpec<Float>()
-    val pillEffects = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
-    val pillSpatial = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
-    val pillResize = MaterialTheme.motionScheme.fastSpatialSpec<IntSize>()
+    val zoomShown = rememberSteady(zoomed, showAfterMs = 0L, holdMs = ZOOM_HOLD_MS)
+    // The controls, pills and indicator are small parts of the page, which the scheme's fast springs
+    // move; what covers the whole window moves on its slow ones.
+    val effects = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
+    val spatial = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
+    val resize = MaterialTheme.motionScheme.fastSpatialSpec<IntSize>()
+    val pageEffects = MaterialTheme.motionScheme.slowEffectsSpec<Float>()
 
     val camera = rememberCameraPermission(activity)
     val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -181,16 +188,20 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
                         .windowInsetsPadding(WindowInsets.navigationBars)
                         .padding(bottom = 24.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(20.dp),
                 ) {
-                    if (camera.granted) {
+                    // Once the camera may run, the hint row opens its place, the gap to the controls
+                    // included, so the bar grows rather than jumping.
+                    AnimatedVisibility(
+                        visible = camera.granted,
+                        enter = fadeIn(effects) + expandVertically(resize),
+                        exit = fadeOut(effects) + shrinkVertically(resize),
+                    ) {
                         // The hint gives way to the zoom pill, which is short, so both stay inside the
                         // edges. The pill's place opens and closes together with the gap before it, so
                         // the hint slides aside and back rather than jumping, while the pill itself
                         // grows and fades in whole, its rounded ends never cut off by the opening place.
-                        // Both are small parts of the page, which the scheme's fast springs move.
                         Row(
-                            modifier = Modifier.padding(horizontal = 24.dp),
+                            modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 20.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             StatusPill(
@@ -203,12 +214,12 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
                             )
                             AnimatedVisibility(
                                 visible = zoomShown,
-                                enter = fadeIn(pillEffects) + scaleIn(pillSpatial) +
-                                    expandHorizontally(pillResize, expandFrom = Alignment.Start, clip = false),
-                                exit = fadeOut(pillEffects) + scaleOut(pillSpatial) +
-                                    shrinkHorizontally(pillResize, shrinkTowards = Alignment.Start, clip = false),
+                                enter = fadeIn(effects) + scaleIn(spatial) +
+                                    expandHorizontally(resize, expandFrom = Alignment.Start, clip = false),
+                                exit = fadeOut(effects) + scaleOut(spatial) +
+                                    shrinkHorizontally(resize, shrinkTowards = Alignment.Start, clip = false),
                             ) {
-                                ZoomPill(zoom, Modifier.padding(start = 8.dp))
+                                ZoomPill({ zoom }, Modifier.padding(start = 8.dp))
                             }
                         }
                     }
@@ -252,34 +263,39 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
                 }
             },
         ) { padding ->
-            // The camera fills the whole window behind the bars.
+            // The camera fills the whole window behind the bars, and takes the permission panel's
+            // place as the two fade over each other.
             Box(Modifier.fillMaxSize()) {
-                if (camera.granted) {
-                    CameraPreview(
-                        analyzer = vm.analyzer,
-                        executor = vm.analysisExecutor,
-                        autoZoom = vm.autoZoom,
-                        session = session,
-                        torch = torch,
-                        onZoom = { zoom = it },
-                        onUnavailable = { vm.message(R.string.no_camera) },
-                        scanning = phase == Phase.Scanning,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                    ScanOverlay(
-                        sighting = { sightingState.value },
-                        lookingCloser = lookingCloser,
-                        confirming = phase as? Phase.Confirming,
-                        onConfirmed = vm::confirmed,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                } else {
-                    // Between the bars, so when a large font makes it scroll, nothing of it hides behind them.
-                    PermissionPanel(
-                        openSettings = camera.permanentlyDenied,
-                        onRequest = camera.request,
-                        modifier = Modifier.align(Alignment.Center).padding(padding),
-                    )
+                Crossfade(camera.granted, animationSpec = pageEffects, label = "camera") { granted ->
+                    Box(Modifier.fillMaxSize()) {
+                        if (granted) {
+                            CameraPreview(
+                                analyzer = vm.analyzer,
+                                executor = vm.analysisExecutor,
+                                autoZoom = vm.autoZoom,
+                                session = session,
+                                torch = torch,
+                                onZoom = { zoom = it },
+                                onUnavailable = { vm.message(R.string.no_camera) },
+                                scanning = phase == Phase.Scanning,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                            ScanOverlay(
+                                sighting = { sightingState.value },
+                                lookingCloser = lookingCloser,
+                                confirming = phase as? Phase.Confirming,
+                                onConfirmed = vm::confirmed,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        } else {
+                            // Between the bars, so when a large font makes it scroll, nothing of it hides behind them.
+                            PermissionPanel(
+                                openSettings = camera.permanentlyDenied,
+                                onRequest = camera.request,
+                                modifier = Modifier.align(Alignment.Center).padding(padding),
+                            )
+                        }
+                    }
                 }
 
                 AnimatedVisibility(
@@ -288,7 +304,8 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
                     exit = fadeOut(effects) + scaleOut(spatial),
                     modifier = Modifier.align(Alignment.Center),
                 ) {
-                    LoadingIndicator(Modifier.size(64.dp))
+                    // Contained, since the camera image behind it may be as light as the indicator itself.
+                    ContainedLoadingIndicator(Modifier.size(64.dp))
                 }
             }
         }
@@ -299,10 +316,16 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
             targetState = phase as? Phase.Picking,
             contentKey = { it != null },
             // Each fades where it is, so the frame never grows from a corner as the container would.
-            transitionSpec = { (fadeIn(effects) togetherWith fadeOut(effects)) using null },
+            transitionSpec = { (fadeIn(pageEffects) togetherWith fadeOut(pageEffects)) using null },
             label = "pick",
         ) { picking ->
             if (picking != null) {
+                // The frozen frame is a full camera frame or an image of up to 3000 pixels a side, so
+                // it goes as soon as the overlay has faded out with it. While the scanner still holds
+                // it, as when the activity is made again, it stays for the overlay composed next.
+                DisposableEffect(picking) {
+                    onDispose { if (vm.phase.value != picking) picking.frame.recycle() }
+                }
                 PickOverlay(
                     picking.frame,
                     picking.detections,
@@ -315,16 +338,8 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
         }
     }
 
-    val onResult = rememberActionResultHandler(activity::finish) { message ->
-        scope.launch { snackbar.showLatest(context.getString(message)) }
-    }
-
     (phase as? Phase.Showing)?.let { showing ->
-        ResultSheet(
-            card = showing.card,
-            onDismiss = vm::resume,
-            onAction = { action -> onResult(action.run(activity)) },
-        )
+        ResultSheet(card = showing.card, onDismiss = vm::resume, onHandoff = activity::finish)
     }
 }
 
@@ -430,11 +445,14 @@ private fun StatusPill(@StringRes text: Int, modifier: Modifier = Modifier) {
     }
 }
 
-/** The zoom, in figures of one width, so the pill and the hint beside it keep still as it changes. */
+/**
+ * The zoom, in figures of one width, so the pill and the hint beside it keep still as it changes.
+ * [zoom] is read here, so only the pill follows a pinch.
+ */
 @Composable
-private fun ZoomPill(zoom: Float, modifier: Modifier = Modifier) {
+private fun ZoomPill(zoom: () -> Float, modifier: Modifier = Modifier) {
     PillSurface(modifier) {
-        PillText(stringResource(R.string.zoom_label, zoom), MaterialTheme.typography.labelLarge.withTabularFigures())
+        PillText(stringResource(R.string.zoom_label, zoom()), MaterialTheme.typography.labelLarge.withTabularFigures())
     }
 }
 

@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -90,7 +89,7 @@ fun TiltedCode(code: Bitmap, modifier: Modifier) {
                 // Unrotated, the card may be wider than the area; only its rotated footprint has to fit.
                 .requiredSize(cardWidth, cardHeight)
                 .graphicsLayer { rotationZ = -angle }
-                .background(Color.White, RoundedCornerShape(12.dp))
+                .background(Color.White, MaterialTheme.shapes.medium)
                 .padding(TILTED_MARGIN)
         ) {
             Image(

@@ -12,11 +12,14 @@ import androidx.core.graphics.createBitmap
 import androidx.core.graphics.drawable.IconCompat
 import io.github.lcebot.ferryqr.HistoryActivity
 import io.github.lcebot.ferryqr.MainActivity
-import io.github.lcebot.ferryqr.dispatch.EntryNames
+import kotlin.math.roundToInt
 
-/** Adaptive icon canvas and the glyph inside it, sized like the launcher's own 108 by 108 dp grid. */
-private const val ICON_SIZE = 216
-private const val GLYPH_SIZE = 96
+/**
+ * Adaptive icon canvas and the glyph inside it, in dp, sized like the launcher's own 108 by 108 dp
+ * grid. They are drawn at the density of the display, so they stay as sharp as the app's own icon.
+ */
+private const val ICON_DP = 108
+private const val GLYPH_DP = 48
 
 /** The label lengths the shortcut documentation recommends; longer ones are cut with an ellipsis. */
 private const val SHORT_LABEL = 10
@@ -65,7 +68,7 @@ object FavoriteShortcuts {
     private fun idOf(text: String) = "favorite-${text.hashCode().toUInt().toString(16)}-${text.length}"
 
     private fun shortcut(context: Context, entry: HistoryEntry, rank: Int): ShortcutInfoCompat {
-        val names = EntryNames(context, entry.text, entry.format, entry.label)
+        val names = entry.content.names(context, entry.label)
         val kind = names.kind
         val title = names.shortTitle
         // History opens above the scanner, so going back from it leads there as usual.
@@ -92,13 +95,16 @@ object FavoriteShortcuts {
         } else {
             FALLBACK_CONTAINER to FALLBACK_ON_CONTAINER
         }
-        val bitmap = createBitmap(ICON_SIZE, ICON_SIZE, Bitmap.Config.ARGB_8888)
+        val density = context.resources.displayMetrics.density
+        val size = (ICON_DP * density).roundToInt()
+        val glyphSize = (GLYPH_DP * density).roundToInt()
+        val bitmap = createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         canvas.drawColor(container)
         ContextCompat.getDrawable(context, glyphRes)?.mutate()?.let { glyph ->
-            val inset = (ICON_SIZE - GLYPH_SIZE) / 2
+            val inset = (size - glyphSize) / 2
             glyph.setTint(onContainer)
-            glyph.setBounds(inset, inset, inset + GLYPH_SIZE, inset + GLYPH_SIZE)
+            glyph.setBounds(inset, inset, inset + glyphSize, inset + glyphSize)
             glyph.draw(canvas)
         }
         return IconCompat.createWithAdaptiveBitmap(bitmap)

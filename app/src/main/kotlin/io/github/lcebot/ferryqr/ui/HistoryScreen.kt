@@ -3,11 +3,11 @@
 package io.github.lcebot.ferryqr.ui
 
 import android.text.format.DateUtils
-import androidx.activity.compose.LocalActivity
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
@@ -99,6 +99,9 @@ import java.time.LocalDate
 /** The group the favorites form for a swipe; the other rows group by day. */
 private const val FAVORITES_GROUP = "favorites"
 
+/** The list item holding the favorites' title. */
+private const val FAVORITES_HEADER_KEY = "header:favorites"
+
 /** The list item holding the favorites as tiles. */
 internal const val TILES_KEY = "favorites:tiles"
 
@@ -121,7 +124,6 @@ private enum class HistoryContent { LOADING, EMPTY, LIST }
 @Composable
 fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = null, onOpened: () -> Unit = {}) {
     val context = LocalContext.current
-    val activity = LocalActivity.current ?: return
     val haptics = rememberHaptics()
     val lists by vm.lists.collectAsStateWithLifecycle()
     val dialog by vm.dialog.collectAsStateWithLifecycle()
@@ -144,19 +146,20 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
     val favoritesByKey = lists?.favoritesByKey.orEmpty()
     val recent = lists?.recent.orEmpty()
     val count = lists?.all?.size ?: 0
-    val board = remember(haptics) { TileBoard(haptics) }
+    val keeper = remember(vm) { FavoriteOrderKeeper { vm.setOrder(it) } }
+    val board = remember(haptics, keeper) { TileBoard(haptics, keeper) }
     val listState = rememberLazyListState()
-    val reorder = remember(listState, haptics, scope) { ListReorderState(listState, haptics, scope, ::rowKey) }
+    val reorder = remember(listState, haptics, scope, keeper) {
+        ListReorderState(listState, haptics, scope, ::rowKey, FAVORITES_HEADER_KEY, keeper)
+    }
     LaunchedEffect(favorites) { reorder.sync(favorites) }
     val settleSpec = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
-    val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+    // The count and the clear button are small parts of the bar, while what shows below it is the
+    // whole page.
+    val barFade = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
+    val pageFade = MaterialTheme.motionScheme.slowEffectsSpec<Float>()
     val magnetic = remember(scope) { MagneticList(scope) }
-    val subtitle: (@Composable () -> Unit)? = if (count == 0) {
-        null
-    } else {
-        // The count changes as entries are deleted and brought back, with the title beside it kept still.
-        { Text(pluralStringResource(R.plurals.history_count, count, count), style = LocalTextStyle.current.withTabularFigures()) }
-    }
+    val favoriting = rememberFavoriteRequester()
 
     LaunchedEffect(openText) {
         if (openText == null) return@LaunchedEffect
@@ -217,15 +220,12 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
     // Made once for what they show, so rows that have not changed are not composed again.
     val shortcutsFull = favorites.count { it.shortcut } >= FavoriteShortcuts.MAX
     val topFavorite = favorites.firstOrNull()?.text
-    val actions = remember(shortcutsFull, topFavorite, namesFavorites) {
+    val actions = remember(shortcutsFull, topFavorite, namesFavorites, favoriting) {
         EntryActions(
             onOpen = { haptics.tap(); vm.open(it) },
-            onFavorite = { entry, on ->
-                // Asked for a name first, the entry becomes a favorite only once it has one.
-                if (vm.setFavorite(entry, on)) haptics.toggle(on) else haptics.tap()
-            },
+            onFavorite = { entry, on -> favoriting.request(entry.content, on) },
             namesFavorites = namesFavorites,
-            onNameAndFavorite = { haptics.tap(); vm.show(HistoryDialog.Name(it)) },
+            onNameAndFavorite = { favoriting.requestNamed(it.content) },
             onShortcut = { entry, on ->
                 haptics.toggle(on)
                 vm.setShortcut(entry, on)
@@ -245,14 +245,14 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
         topBar = {
             LargeFlexibleTopAppBar(
                 title = { Text(stringResource(R.string.history_title)) },
-                subtitle = subtitle,
+                subtitle = { HistoryCount(count, barFade) },
                 navigationIcon = {
                     IconButton(onClick = { haptics.tap(); onBack() }, shapes = IconButtonDefaults.shapes()) {
                         Icon(painterResource(R.drawable.ic_arrow_back), stringResource(R.string.back))
                     }
                 },
                 actions = {
-                    AnimatedVisibility(visible = recent.isNotEmpty(), enter = fadeIn(fade), exit = fadeOut(fade)) {
+                    AnimatedVisibility(visible = recent.isNotEmpty(), enter = fadeIn(barFade), exit = fadeOut(barFade)) {
                         IconButton(onClick = { haptics.tap(); vm.show(HistoryDialog.Clear) }, shapes = IconButtonDefaults.shapes()) {
                             Icon(painterResource(R.drawable.ic_delete_sweep), stringResource(R.string.history_clear))
                         }
@@ -271,7 +271,7 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
         // showing first and giving way to the entries.
         AnimatedContent(
             targetState = content,
-            transitionSpec = { (fadeIn(fade) togetherWith fadeOut(fade)) using null },
+            transitionSpec = { (fadeIn(pageFade) togetherWith fadeOut(pageFade)) using null },
             modifier = Modifier.fillMaxSize(),
             label = "history",
         ) { shown ->
@@ -292,7 +292,10 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
                     val available = constraints.maxWidth - with(density) {
                         (padding.calculateStartPadding(layoutDirection) + padding.calculateEndPadding(layoutDirection) + 32.dp).roundToPx()
                     }
-                    val tileWidths = rememberTileWidths(favorites, with(density) { tileChrome(layoutDirection).roundToPx() })
+                    val tileWidths = rememberTileWidths(
+                        lists?.favoritePresentations.orEmpty(),
+                        with(density) { tileChrome(layoutDirection).roundToPx() },
+                    )
                     val tileKeys = if (board.key != null) board.order.filter { it in favoritesByKey } else favorites.map { it.text }
                     val columns = if (layout == FavoriteLayout.GRID) gridColumns(available, gap, with(density) { GRID_COLUMN.roundToPx() }) else null
                     val tileInputs = TileInputs(tileKeys, tileWidths, available, gap, columns)
@@ -314,7 +317,7 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
                         verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap),
                     ) {
                         if (favorites.isNotEmpty()) {
-                            item(key = "header:favorites") {
+                            item(key = FAVORITES_HEADER_KEY) {
                                 FavoritesHeader(
                                     foldable = if (tiled) tilesFoldable else foldable,
                                     folded = folded,
@@ -332,7 +335,7 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
                                     reordering = reorder.active && !tiled,
                                     onReorder = {
                                         haptics.tap()
-                                        if (reorder.active) vm.setOrder(reorder.finish()) else reorder.start(favorites)
+                                        if (reorder.active) reorder.finish() else reorder.start(favorites)
                                     },
                                     modifier = animateRow(),
                                 )
@@ -342,19 +345,15 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
                                     FavoriteTiles(
                                         board = board,
                                         favorites = favoritesByKey,
+                                        presentationOf = { lists?.presentationOf(it) },
                                         inputs = tileInputs,
                                         arrangement = tileArrangement,
                                         rowsShown = rowsShown,
                                         pendingUndo = undo?.texts.orEmpty(),
                                         list = magnetic,
                                         actions = actions,
-                                        onShift = { entry, by ->
-                                            haptics.step()
-                                            vm.move(entry, by)
-                                        },
                                         // Folded tiles unfold for one picked up, and stay unfolded after.
                                         onLift = { if (tilesFoldable && folded) vm.setFolded(false) },
-                                        onReorder = { vm.setOrder(board.order.toList()) },
                                         // Above the rows around it, so a tile dragged or swiped past the
                                         // favorites stays in sight over them.
                                         modifier = animateRow().zIndex(1f),
@@ -367,6 +366,7 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
                                     val moveDown = stringResource(R.string.favorite_move_down)
                                     ReorderRow(
                                         entry = entry,
+                                        listed = lists?.presentationOf(entry),
                                         shape = segmentShape(index, shownFavorites.size),
                                         lifted = dragged && reorder.settling == null,
                                         onDragStart = { reorder.startDrag(entry.text) },
@@ -387,7 +387,16 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
                                     )
                                 } else {
                                     val back = remember { magnetic.departed.containsKey(entry.text) }
-                                    EntryRow(entry, FAVORITES_GROUP, index, shownFavorites.size, magnetic, actions, animateRow(flyingBack = back))
+                                    EntryRow(
+                                        entry,
+                                        lists?.presentationOf(entry),
+                                        FAVORITES_GROUP,
+                                        index,
+                                        shownFavorites.size,
+                                        magnetic,
+                                        actions,
+                                        animateRow(flyingBack = back),
+                                    )
                                 }
                             }
                         }
@@ -395,18 +404,24 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
                             item(key = "header:$day") { DayHeader(day, items.first().time, animateRow()) }
                             itemsIndexed(items, key = { _, e -> rowKey(e.text) }) { index, entry ->
                                 val back = remember { magnetic.departed.containsKey(entry.text) }
-                                EntryRow(entry, day, index, items.size, magnetic, actions, animateRow(flyingBack = back))
+                                val listed = lists?.presentationOf(entry)
+                                EntryRow(entry, listed, day, index, items.size, magnetic, actions, animateRow(flyingBack = back))
                             }
                         }
                     }
 
                     // Tiles fit as many favorites in a row as their names allow; once there are enough
                     // favorites that tiles would at least halve their rows, history suggests them, once.
-                    val tileRows = remember(favorites, tileWidths, available, gap) {
-                        arrangeTiles(favorites.map { it.text }, { tileWidths[it] ?: 0 }, available, gap, null).rows
-                    }
-                    val worthTiles = !tiled && !tilesSuggested && !reorder.active && favorites.size >= SUGGEST_TILES_AT &&
+                    // The tiles are arranged for that only while the suggestion can still be made.
+                    val suggestible = !tiled && !tilesSuggested && !reorder.active && favorites.size >= SUGGEST_TILES_AT
+                    val worthTiles = if (suggestible) {
+                        val tileRows = remember(favorites, tileWidths, available, gap) {
+                            arrangeTiles(favorites.map { it.text }, { tileWidths[it] ?: 0 }, available, gap, null).rows
+                        }
                         tileRows * 2 <= favorites.size
+                    } else {
+                        false
+                    }
                     LaunchedEffect(worthTiles) {
                         if (worthTiles) vm.suggestTiles()
                     }
@@ -422,11 +437,10 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
     // History stays open after a handoff, so returning to the app lands back on the list; the card
     // slides away as it would when dismissed rather than vanishing as the other app opens.
     var closing by remember(showing?.text) { mutableStateOf(false) }
-    val onResult = rememberActionResultHandler(onHandoff = { closing = true }, message = ::showMessage)
 
     showing?.let { entry ->
         key(entry.text) {
-            val card = rememberResultCard(remember(entry) { CardSource.Read(entry.text, entry.format, Origin.HISTORY, entry.time) })
+            val card = rememberResultCard(remember(entry) { CardSource.Read(entry.content, Origin.HISTORY, entry.time) })
             card?.let {
                 ResultSheet(
                     card = it,
@@ -434,11 +448,32 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
                         closing = false
                         vm.open(null)
                     },
-                    onAction = { action -> onResult(action.run(activity)) },
+                    onHandoff = { closing = true },
                     closing = closing,
                 )
             }
         }
+    }
+}
+
+/**
+ * How many entries history holds, under its title. It fades in once the history is read and out
+ * when the last entry goes, on [fade], showing the last count as it does; meanwhile it stays empty
+ * but a line tall, so the title above keeps its place. A count that changes between two others
+ * changes at once, in figures of one width, with the title kept still.
+ */
+@Composable
+private fun HistoryCount(count: Int, fade: FiniteAnimationSpec<Float>) {
+    AnimatedContent(
+        targetState = count,
+        contentKey = { it > 0 },
+        transitionSpec = { (fadeIn(fade) togetherWith fadeOut(fade)) using null },
+        label = "history-count",
+    ) { shown ->
+        Text(
+            if (shown > 0) pluralStringResource(R.plurals.history_count, shown, shown) else "",
+            style = LocalTextStyle.current.withTabularFigures(),
+        )
     }
 }
 
@@ -505,7 +540,7 @@ private fun FavoritesHeader(
             AnimatedVisibility(visible = foldable, enter = enter, exit = exit) {
                 val turn by animateFloatAsState(
                     targetValue = if (folded) 0f else 180f,
-                    animationSpec = motion.defaultSpatialSpec(),
+                    animationSpec = spatial,
                     label = "favorites-chevron",
                 )
                 TextButton(onClick = onToggle, shapes = ButtonDefaults.shapes()) {

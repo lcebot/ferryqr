@@ -60,7 +60,8 @@ internal val TOOLBAR_TO_FAB_GAP = 8.dp
 /**
  * The actions on a code image, in one floating toolbar under the code: [favorite] when given,
  * then save and copy, then [extra] actions, with sharing as the floating action button. Results
- * are told through [onMessage], since a sheet hides the snackbar a page would use.
+ * are told through [onMessage], for the page or sheet holding the toolbar to show with its own
+ * snackbar host, since a sheet covers the snackbar of the page under it.
  */
 @Composable
 fun CodeToolbar(
@@ -152,7 +153,7 @@ fun handoffContainer(): Color = MaterialTheme.colorScheme.surfaceContainerHighes
 private fun ShareButton(enabled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val haptics = rememberHaptics()
     val defaults = FloatingToolbarDefaults.standardFloatingToolbarColors()
-    val effects = MaterialTheme.motionScheme.defaultEffectsSpec<Color>()
+    val effects = MaterialTheme.motionScheme.fastEffectsSpec<Color>()
     val onSurface = MaterialTheme.colorScheme.onSurface
     val disabledContainer = onSurface.copy(alpha = 0.12f).compositeOver(MaterialTheme.colorScheme.surface)
     val disabledContent = onSurface.copy(alpha = 0.38f).compositeOver(disabledContainer)

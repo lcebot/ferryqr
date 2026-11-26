@@ -24,6 +24,7 @@ import io.github.lcebot.ferryqr.content.WebPayload
 import io.github.lcebot.ferryqr.content.WifiPayload
 import io.github.lcebot.ferryqr.content.WifiSecurity
 import io.github.lcebot.ferryqr.generate.MiniCodeArt
+import java.lang.ref.WeakReference
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -162,6 +163,20 @@ object Cards {
         )
     }
 
+    /**
+     * The mini program code drawn last, by the content it holds. A scan's way to WeChat and its
+     * card share one drawing of a 720 pixel square, and so do the cards built again for it as an
+     * app's readiness changes. It is held weakly, so it goes once nothing shows or hands it on.
+     */
+    @Volatile
+    private var lastMiniDrawing: Pair<String, WeakReference<Bitmap>>? = null
+
+    /** The mini program code holding [raw], drawn as WeChat draws its codes, or null when none can hold it. */
+    fun miniCodeDrawing(raw: String): Bitmap? {
+        lastMiniDrawing?.let { (text, drawing) -> if (text == raw) drawing.get()?.let { return it } }
+        return MiniCodeArt.draw(raw)?.also { lastMiniDrawing = raw to WeakReference(it) }
+    }
+
     private val IP_LITERAL = Regex("^(\\d{1,3}\\.){3}\\d{1,3}$|^\\[.*]$")
 
     /**
@@ -244,7 +259,7 @@ object Cards {
      * was read, as after a scan of its own; without it, the user scans the code again in WeChat.
      */
     private fun miniProgramCode(context: Context, payload: MiniProgramPayload, origin: Origin, ready: Set<String>): ResultCard {
-        val image = MiniCodeArt.draw(payload.raw)
+        val image = miniCodeDrawing(payload.raw)
         val wechat = ActiveFerries.WECHAT
         val installed = wechat.installed(context)
         val actions = buildList {

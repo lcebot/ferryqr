@@ -1,22 +1,23 @@
 package io.github.lcebot.ferryqr.dispatch
 
 import android.content.Context
-import io.github.lcebot.ferryqr.content.Classifier
 import io.github.lcebot.ferryqr.content.WebPayload
 
 /**
- * Every name content goes by, worked out from one reading of it, so a row, a tile, a shortcut and
+ * Every name [content] goes by, worked out from its one reading, so a row, a tile, a shortcut and
  * the naming dialog call it the same way, and a name the user gives is told apart from those
  * FerryQR would show anyway by the same rules that show them. [label] is the name the user gave,
  * if any. The names that need more than the content's kind are worked out only when asked for.
+ * [ReadContent.names] hands them out, kept for each language and shared by every thread, so two
+ * threads may work out such a name at once, both to the same result.
  */
-class EntryNames(private val context: Context, private val text: String, format: String, val label: String?) {
-    private val payload = Classifier.classify(text, format)
+class EntryNames internal constructor(private val context: Context, private val content: ReadContent, val label: String?) {
+    private val payload = content.payload
 
     /** The name the content carries, as [Titles] gives it, or null when it carries none. */
     private val carried: String? = Titles.of(context, payload)
 
-    val kind: Kind = Cards.kindOf(payload)
+    val kind: Kind = content.kind
 
     /** As a list row shows it: its name, else the name it carries, else the content itself. */
     val rowTitle: String = label ?: carried ?: payload.raw
@@ -25,7 +26,7 @@ class EntryNames(private val context: Context, private val text: String, format:
     val tileTitle: String = label ?: carried ?: (payload as? WebPayload)?.host ?: payload.raw
 
     /** The short title FerryQR gives it by itself, which a shortcut shows and a name starts from. */
-    val automaticShortTitle: String by lazy(LazyThreadSafetyMode.NONE) {
+    val automaticShortTitle: String by lazy(LazyThreadSafetyMode.PUBLICATION) {
         Cards.titleOf(context, payload) ?: context.getString(kind.label)
     }
 
@@ -37,7 +38,7 @@ class EntryNames(private val context: Context, private val text: String, format:
      * from other content of its kind, as a boarding pass is named by its flight. A name every code of
      * a kind shares, such as a passkey sign-in's, does not count.
      */
-    val hasOwnName: Boolean by lazy(LazyThreadSafetyMode.NONE) {
+    val hasOwnName: Boolean by lazy(LazyThreadSafetyMode.PUBLICATION) {
         label != null || Titles.distinct(context, payload) != null
     }
 
@@ -48,7 +49,7 @@ class EntryNames(private val context: Context, private val text: String, format:
      */
     fun isOwnName(name: String): Boolean {
         val trimmed = name.trim()
-        if (trimmed.isEmpty() || trimmed == text.trim()) return false
+        if (trimmed.isEmpty() || trimmed == content.text.trim()) return false
         val unnamedTile = carried ?: (payload as? WebPayload)?.host ?: payload.raw
         return trimmed !in setOf(carried ?: payload.raw, unnamedTile, automaticShortTitle, context.getString(kind.label))
     }

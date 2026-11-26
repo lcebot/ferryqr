@@ -56,7 +56,7 @@ fun AppIcon(packageName: String, @DrawableRes fallback: Int, modifier: Modifier 
             glyph(context, packageName)?.also { glyphs.put(packageName, it) }?.let { IconLoad.Found(it) } ?: IconLoad.Missing
         }
     }
-    Crossfade(icon, animationSpec = MaterialTheme.motionScheme.defaultEffectsSpec(), label = "app-icon") { shown ->
+    Crossfade(icon, animationSpec = MaterialTheme.motionScheme.fastEffectsSpec(), label = "app-icon") { shown ->
         when (shown) {
             IconLoad.Loading -> Box(modifier)
             IconLoad.Missing -> Icon(painterResource(fallback), contentDescription = null, modifier = modifier)

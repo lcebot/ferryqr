@@ -1,5 +1,8 @@
 package io.github.lcebot.ferryqr.ui
 
+import android.hardware.camera2.CameraCaptureSession
+import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.TotalCaptureResult
 import android.util.Size
 import androidx.camera.camera2.interop.camera2Interop
 import androidx.camera.compose.CameraXViewfinder
@@ -19,13 +22,19 @@ import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.lifecycle.awaitInstance
 import androidx.camera.viewfinder.compose.MutableCoordinateTransformer
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -33,14 +42,19 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntOffset
@@ -54,10 +68,10 @@ import kotlin.math.floor
 import kotlin.math.ln
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
 
 /** 1080p keeps small and distant codes readable while zxing-cpp stays fast on the luma plane. */
 private val TARGET_SIZE = Size(1920, 1080)
@@ -80,10 +94,27 @@ private fun ProcessCameraProvider.preferredBackCamera(): CameraSelector {
 /**
  * The preview and analysis as one session, whose capture results also go to [autoZoom], which
  * reads the camera's own exposure state and scene change detection from them for a tapped focus.
+ * [onCapture] hears of each completed capture, on the camera's thread.
  */
-private fun sessionReporting(autoZoom: AutoZoom, preview: Preview, analysis: ImageAnalysis): SessionConfig =
+private fun sessionReporting(
+    autoZoom: AutoZoom,
+    preview: Preview,
+    analysis: ImageAnalysis,
+    onCapture: () -> Unit,
+): SessionConfig =
     SessionConfig.Builder(preview, analysis)
-        .camera2Interop { repeatingCaptureCallback = autoZoom.captureCallback }
+        .camera2Interop {
+            repeatingCaptureCallback = object : CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureCompleted(
+                    session: CameraCaptureSession,
+                    request: CaptureRequest,
+                    result: TotalCaptureResult,
+                ) {
+                    autoZoom.captureCallback.onCaptureCompleted(session, request, result)
+                    onCapture()
+                }
+            }
+        }
         .build()
 
 /**
@@ -124,8 +155,15 @@ fun CameraPreview(
     var request by remember { mutableStateOf<SurfaceRequest?>(null) }
     var camera by remember { mutableStateOf<Camera?>(null) }
     val haptics = rememberHaptics()
+    // Until the camera bound last delivers its first frame the viewfinder is black, and then the
+    // picture would appear at once. A black cover fades off it instead of the viewfinder fading
+    // itself, which works however the viewfinder draws its surface. It starts opaque, as the
+    // viewfinder starts black.
+    val cover = remember { Animatable(1f) }
+    val coverSpec = MaterialTheme.motionScheme.slowEffectsSpec<Float>()
+    val currentSession by rememberUpdatedState(session)
 
-    LaunchedEffect(owner, session) {
+    LaunchedEffect(owner) {
         // Besides a device without a back camera, CameraX fails here when the camera service or
         // another app holds the camera in a way it cannot recover from; either way there is no preview.
         val provider = try {
@@ -142,31 +180,52 @@ fun CameraPreview(
                 ResolutionStrategy(TARGET_SIZE, ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER)
             )
             .build()
-        val preview = Preview.Builder().setResolutionSelector(selector).build()
-        preview.setSurfaceProvider { request = it }
-        val analysis = ImageAnalysis.Builder()
-            .setResolutionSelector(selector)
-            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
-            .build()
-        analysis.setAnalyzer(executor, analyzer)
-        val config = sessionReporting(autoZoom, preview, analysis)
-        try {
-            provider.unbindAll()
-            val bound = try {
-                provider.bindToLifecycle(owner, provider.preferredBackCamera(), config)
-            } catch (e: Exception) {
-                onUnavailable()
-                return@LaunchedEffect
-            }
-            camera = bound
-            autoZoom.camera = bound
-            awaitCancellation()
-        } finally {
+        // The session bound last stays bound across a new session until the cover hides it, and
+        // is let go then, or as the effect ends.
+        var bound: SessionConfig? = null
+        var analyzing: ImageAnalysis? = null
+        fun release() {
+            val config = bound ?: return
             autoZoom.camera = null
-            analysis.clearAnalyzer()
+            analyzing?.clearAnalyzer()
             provider.unbind(config)
+            bound = null
+            analyzing = null
             camera = null
+        }
+        try {
+            snapshotFlow { currentSession }.collectLatest {
+                // A camera bound again, as after a reset, goes dark before the old one lets go, so
+                // the picture never cuts to black or freezes in view. The first binding starts dark.
+                cover.animateTo(1f, coverSpec)
+                release()
+                val preview = Preview.Builder().setResolutionSelector(selector).build()
+                preview.setSurfaceProvider { request = it }
+                val analysis = ImageAnalysis.Builder()
+                    .setResolutionSelector(selector)
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
+                    .build()
+                analysis.setAnalyzer(executor, analyzer)
+                val firstCapture = CompletableDeferred<Unit>()
+                val config = sessionReporting(autoZoom, preview, analysis) { firstCapture.complete(Unit) }
+                provider.unbindAll()
+                val started = try {
+                    provider.bindToLifecycle(owner, provider.preferredBackCamera(), config)
+                } catch (e: Exception) {
+                    analysis.clearAnalyzer()
+                    onUnavailable()
+                    return@collectLatest
+                }
+                bound = config
+                analyzing = analysis
+                camera = started
+                autoZoom.camera = started
+                firstCapture.await()
+                cover.animateTo(0f, coverSpec)
+            }
+        } finally {
+            release()
         }
     }
 
@@ -194,7 +253,9 @@ fun CameraPreview(
     val surface = request ?: return
     val transformer = remember { MutableCoordinateTransformer() }
     var tap by remember { mutableStateOf<FocusTap?>(null) }
-    Box(modifier) {
+    // A tap's place is in the view's own pixels, which run from the left edge whatever the layout
+    // direction, so the focus box starts from the top left corner and moves by an absolute offset.
+    Box(modifier, contentAlignment = AbsoluteAlignment.TopLeft) {
         CameraXViewfinder(
             surfaceRequest = surface,
             coordinateTransformer = transformer,
@@ -226,6 +287,7 @@ fun CameraPreview(
                     }
                 },
         )
+        Spacer(Modifier.fillMaxSize().drawBehind { drawRect(Color.Black, alpha = cover.value) })
         FocusBox(tap, autoZoom.tapFocus)
     }
 }
@@ -248,57 +310,51 @@ private val FOCUS_BOX_TICK = 6.dp
 /**
  * The square camera apps draw where a tap set the focus, with a short tick pointing in from the
  * middle of each side. It closes in on the point as it fades in, and fades out once the camera
- * lets go of that focus, whatever the reason.
+ * lets go of that focus, whatever the reason. A new tap replaces it at once.
  */
 @Composable
 private fun FocusBox(tap: FocusTap?, held: StateFlow<Boolean>) {
-    val alpha = remember { Animatable(0f) }
-    val scale = remember { Animatable(1f) }
-    val spatial = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
-    val appear = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
-    val disappear = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
-    // A fixed colour keeps one light tone in both themes, which the camera image behind needs.
-    val color = MaterialTheme.colorScheme.primaryFixed
-    LaunchedEffect(tap) {
-        if (tap == null) return@LaunchedEffect
-        alpha.snapTo(0f)
-        scale.snapTo(FOCUS_BOX_ENTER_SCALE)
-        launch { scale.animateTo(1f, spatial) }
-        launch { alpha.animateTo(1f, appear) }
-        // Waits on the focus itself rather than on what the page last saw of it, so a focus let go
-        // before the page saw it held still fades the box.
-        held.first { !it }
-        alpha.animateTo(0f, disappear)
-    }
-    val at = tap?.at ?: return
-    Canvas(
-        Modifier
-            .offset {
+    tap ?: return
+    key(tap) {
+        // Starts hidden, so the box closes in on the point as it appears.
+        val shown = remember { MutableTransitionState(false) }
+        LaunchedEffect(Unit) {
+            shown.targetState = true
+            // Waits on the focus itself rather than on what the page last saw of it, so a focus let
+            // go before the page saw it held still fades the box.
+            held.first { !it }
+            shown.targetState = false
+        }
+        // A fixed colour keeps one light tone in both themes, which the camera image behind needs.
+        val color = MaterialTheme.colorScheme.primaryFixed
+        AnimatedVisibility(
+            visibleState = shown,
+            enter = scaleIn(MaterialTheme.motionScheme.fastSpatialSpec(), initialScale = FOCUS_BOX_ENTER_SCALE) +
+                fadeIn(MaterialTheme.motionScheme.fastEffectsSpec()),
+            exit = fadeOut(MaterialTheme.motionScheme.fastEffectsSpec()),
+            modifier = Modifier.absoluteOffset {
                 val half = FOCUS_BOX_SIZE.toPx() / 2
-                IntOffset((at.x - half).roundToInt(), (at.y - half).roundToInt())
-            }
-            .size(FOCUS_BOX_SIZE)
-            .graphicsLayer {
-                this.alpha = alpha.value
-                scaleX = scale.value
-                scaleY = scale.value
+                IntOffset((tap.at.x - half).roundToInt(), (tap.at.y - half).roundToInt())
             },
-    ) {
-        val stroke = FOCUS_BOX_STROKE.toPx()
-        // The stroke is centred on the outline, so the outline sits half a stroke in from the edge.
-        val inset = stroke / 2
-        drawRoundRect(
-            color,
-            topLeft = Offset(inset, inset),
-            size = size.copy(width = size.width - stroke, height = size.height - stroke),
-            cornerRadius = CornerRadius(FOCUS_BOX_CORNER.toPx()),
-            style = Stroke(stroke),
-        )
-        val tick = FOCUS_BOX_TICK.toPx()
-        val mid = center
-        drawLine(color, Offset(mid.x, inset), Offset(mid.x, inset + tick), stroke)
-        drawLine(color, Offset(mid.x, size.height - inset), Offset(mid.x, size.height - inset - tick), stroke)
-        drawLine(color, Offset(inset, mid.y), Offset(inset + tick, mid.y), stroke)
-        drawLine(color, Offset(size.width - inset, mid.y), Offset(size.width - inset - tick, mid.y), stroke)
+        ) {
+            Canvas(Modifier.size(FOCUS_BOX_SIZE)) {
+                val stroke = FOCUS_BOX_STROKE.toPx()
+                // The stroke is centred on the outline, so the outline sits half a stroke in from the edge.
+                val inset = stroke / 2
+                drawRoundRect(
+                    color,
+                    topLeft = Offset(inset, inset),
+                    size = size.copy(width = size.width - stroke, height = size.height - stroke),
+                    cornerRadius = CornerRadius(FOCUS_BOX_CORNER.toPx()),
+                    style = Stroke(stroke),
+                )
+                val tick = FOCUS_BOX_TICK.toPx()
+                val mid = center
+                drawLine(color, Offset(mid.x, inset), Offset(mid.x, inset + tick), stroke)
+                drawLine(color, Offset(mid.x, size.height - inset), Offset(mid.x, size.height - inset - tick), stroke)
+                drawLine(color, Offset(inset, mid.y), Offset(inset + tick, mid.y), stroke)
+                drawLine(color, Offset(size.width - inset, mid.y), Offset(size.width - inset - tick, mid.y), stroke)
+            }
+        }
     }
 }

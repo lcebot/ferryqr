@@ -362,11 +362,11 @@ internal object PasskeyQr {
                     found = when (valueMajor) {
                         UINT -> value
                         TEXT, BYTES -> text(value)
-                        else -> null.also { skipBody(valueMajor, value) }
+                        else -> null.also { skipBody(valueMajor, value, depth = 1) }
                     }
                 } else {
-                    skipBody(keyMajor, keyValue)
-                    skip()
+                    skipBody(keyMajor, keyValue, depth = 1)
+                    skip(depth = 1)
                 }
             }
             return found
@@ -397,24 +397,30 @@ internal object PasskeyQr {
             return major to argument
         }
 
-        private fun skip() {
+        private fun skip(depth: Int) {
             val (major, argument) = head()
-            skipBody(major, argument)
+            skipBody(major, argument, depth)
         }
 
-        private fun skipBody(major: Int, argument: Long) {
+        /**
+         * Skips an item [depth] levels into the top map. Each level is a call deeper, and scanned
+         * data can nest thousands of levels in a code, so nesting deeper than [MAX_DEPTH] is taken
+         * as malformed before it can exhaust the stack.
+         */
+        private fun skipBody(major: Int, argument: Long, depth: Int) {
+            check(depth <= MAX_DEPTH)
             when (major) {
                 UINT, NEGATIVE, SIMPLE -> Unit
                 BYTES, TEXT -> {
                     check(argument in 0..(data.size - position).toLong())
                     position += argument.toInt()
                 }
-                ARRAY -> repeat(argument.toInt()) { skip() }
+                ARRAY -> repeat(argument.toInt()) { skip(depth + 1) }
                 MAP -> repeat(argument.toInt()) {
-                    skip()
-                    skip()
+                    skip(depth + 1)
+                    skip(depth + 1)
                 }
-                TAG -> skip()
+                TAG -> skip(depth + 1)
             }
         }
 
@@ -427,6 +433,9 @@ internal object PasskeyQr {
             const val MAP = 5
             const val TAG = 6
             const val SIMPLE = 7
+
+            /** Far beyond the level or two that real codes nest. */
+            const val MAX_DEPTH = 16
         }
     }
 }

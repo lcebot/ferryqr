@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.lerp
+import io.github.lcebot.ferryqr.EntryPresentation
 import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.history.HistoryEntry
 import kotlin.math.max
@@ -128,23 +129,22 @@ private class TileMotion(at: Rect) {
  * The favorites as tiles. A tap opens one, and a swipe deletes it or takes it out of the favorites
  * as a swipe on a row does, the tiles around it leaning with it. A long press lifts it and opens
  * its menu, unfolding the favorites first, and dragging it then closes the menu and moves it into
- * the place of the tile it is held over, [onReorder] keeping the order once it is let go. Tiles
+ * the place of the tile it is held over, the board keeping the order once it is let go. Tiles
  * slide into their new places, and come and go fading and growing or shrinking, on the theme's
- * motion.
+ * motion. [presentationOf] gives how the history lists show an entry, as each tile shows it.
  */
 @Composable
 internal fun FavoriteTiles(
     board: TileBoard,
     favorites: Map<String, HistoryEntry>,
+    presentationOf: (HistoryEntry) -> EntryPresentation?,
     inputs: TileInputs,
     arrangement: TileArrangement,
     rowsShown: Int,
     pendingUndo: Set<String>,
     list: MagneticList,
     actions: EntryActions,
-    onShift: (HistoryEntry, Int) -> Unit,
     onLift: () -> Unit,
-    onReorder: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val haptics = rememberHaptics()
@@ -164,7 +164,6 @@ internal fun FavoriteTiles(
     // colour and in the outline of the tile in hand.
     val zoneColor = colors.surfaceContainerLow
     val zoneShape = ListItemDefaults.shapes().draggedShape
-    val reorder by rememberUpdatedState(onReorder)
     val lift by rememberUpdatedState(onLift)
     val laidOut by rememberUpdatedState(arrangement)
     val latestInputs by rememberUpdatedState(inputs)
@@ -305,8 +304,8 @@ internal fun FavoriteTiles(
                                         board.drag(if (rtl) Offset(-amount.x, amount.y) else amount, viewConfiguration.touchSlop)
                                         if (!wasMoved && board.moved) menu = false
                                     },
-                                    onDragEnd = { board.drop(scope, settleSpec) { reorder() } },
-                                    onDragCancel = { board.drop(scope, settleSpec) { reorder() } },
+                                    onDragEnd = { board.drop(scope, settleSpec) },
+                                    onDragCancel = { board.drop(scope, settleSpec) },
                                 )
                             },
                     ) {
@@ -318,7 +317,7 @@ internal fun FavoriteTiles(
                             swipe.becomesFavorite,
                             shape,
                             Modifier.matchParentSize().graphicsLayer {
-                                translationX = magnet.backdrop.value.value
+                                translationX = onWholePixels(magnet.backdrop.value.value)
                                 alpha = swipe.backdrop.value
                             },
                         )
@@ -327,7 +326,7 @@ internal fun FavoriteTiles(
                         val later = stringResource(R.string.favorite_move_later)
                         FavoriteTile(
                             // Kept with the tile, so one fading out still shows its name.
-                            presentation = rememberPresentation(entry),
+                            presentation = rememberPresentation(entry, presentationOf(entry)),
                             shape = shape,
                             lifted = dragged && board.lifted,
                             raised = swipe.pull != null || swipe.acting,
@@ -336,15 +335,15 @@ internal fun FavoriteTiles(
                             },
                             // Without a finger to drag with, the order changes a tile at a time.
                             modifier = Modifier
-                                .graphicsLayer { translationX = swipe.shift.value.value + magnet.lean.value.value }
+                                .graphicsLayer { translationX = onWholePixels(swipe.shift.value.value + magnet.lean.value.value) }
                                 .semantics {
                                     onLongClick(moreLabel) {
                                         menu = true
                                         true
                                     }
                                     customActions = listOfNotNull(
-                                        CustomAccessibilityAction(earlier) { onShift(entry, -1); true }.takeIf { index > 0 },
-                                        CustomAccessibilityAction(later) { onShift(entry, 1); true }
+                                        CustomAccessibilityAction(earlier) { board.shift(tile, -1); true }.takeIf { index > 0 },
+                                        CustomAccessibilityAction(later) { board.shift(tile, 1); true }
                                             .takeIf { index in 0 until inputs.keys.lastIndex },
                                     )
                                 },
@@ -501,11 +500,15 @@ private fun tileShape(corners: TileCorners, magnet: Magnet): Shape {
     val topEnd by animateDpAsState(size(corners.topEnd), spec, label = "tile-top-end")
     val bottomEnd by animateDpAsState(size(corners.bottomEnd), spec, label = "tile-bottom-end")
     val bottomStart by animateDpAsState(size(corners.bottomStart), spec, label = "tile-bottom-start")
-    fun rounded(base: Dp, round: Follower) = maxOf(base, lerp(INNER_CORNER, OUTER_CORNER, round.value.value.coerceIn(0f, 1f)))
+    val roundTopStart by rememberRounding(magnet.topStart)
+    val roundTopEnd by rememberRounding(magnet.topEnd)
+    val roundBottomEnd by rememberRounding(magnet.bottomEnd)
+    val roundBottomStart by rememberRounding(magnet.bottomStart)
+    fun rounded(base: Dp, round: Float) = maxOf(base, lerp(INNER_CORNER, OUTER_CORNER, round))
     return RoundedCornerShape(
-        topStart = rounded(topStart, magnet.topStart),
-        topEnd = rounded(topEnd, magnet.topEnd),
-        bottomEnd = rounded(bottomEnd, magnet.bottomEnd),
-        bottomStart = rounded(bottomStart, magnet.bottomStart),
+        topStart = rounded(topStart, roundTopStart),
+        topEnd = rounded(topEnd, roundTopEnd),
+        bottomEnd = rounded(bottomEnd, roundBottomEnd),
+        bottomStart = rounded(bottomStart, roundBottomStart),
     )
 }

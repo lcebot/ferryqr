@@ -5,6 +5,7 @@ package io.github.lcebot.ferryqr.ui
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
@@ -15,23 +16,25 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.ContainedLoadingIndicator
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -86,7 +89,9 @@ fun ScanOverlay(
     onConfirmed: (Detection) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    BoxWithConstraints(modifier) {
+    // Camera pixels map onto the view from its left edge whatever the layout direction, so what is
+    // placed on a code starts from the top left corner and is moved by absolute offsets.
+    BoxWithConstraints(modifier, contentAlignment = AbsoluteAlignment.TopLeft) {
         // Read here rather than by the caller, so only the overlay follows the code frame by frame.
         val sighting = sighting()
         val density = LocalDensity.current
@@ -164,25 +169,33 @@ fun ScanOverlay(
 
         AnimatedVisibility(
             visible = confirming == null && sighting != null && lookingCloser,
-            enter = fadeIn(MaterialTheme.motionScheme.defaultEffectsSpec()) +
-                scaleIn(MaterialTheme.motionScheme.defaultSpatialSpec()),
-            exit = fadeOut(MaterialTheme.motionScheme.defaultEffectsSpec()) +
-                scaleOut(MaterialTheme.motionScheme.defaultSpatialSpec()),
+            enter = fadeIn(MaterialTheme.motionScheme.fastEffectsSpec()) +
+                scaleIn(MaterialTheme.motionScheme.fastSpatialSpec()),
+            exit = fadeOut(MaterialTheme.motionScheme.fastEffectsSpec()) +
+                scaleOut(MaterialTheme.motionScheme.fastSpatialSpec()),
             modifier = Modifier.centeredOn(LOADING_SIZE) { rect.value.center },
         ) {
-            LoadingIndicator(Modifier.size(LOADING_SIZE))
+            // Contained, since the camera image behind it may be as light as the indicator itself.
+            ContainedLoadingIndicator(Modifier.size(LOADING_SIZE))
         }
 
-        // Codes decoded while the rest of a multi-code frame is awaited get a marker as each one arrives.
-        if (confirming == null && sighting != null) {
-            sighting.found.forEach { detection ->
-                if (detection.corners.isNotEmpty()) {
-                    key(detection.text) {
-                        val c = detection.center
-                        val at = toView(sighting.frameWidth, sighting.frameHeight, c.x, c.y, c.x, c.y, viewWidth, viewHeight)
-                        FoundMarker(at.center)
-                    }
-                }
+        // Codes decoded while the rest of a multi-code frame is awaited get a marker as each one
+        // arrives. When the sighting ends, the markers last shown stay as long as the brackets do and
+        // leave with them, which also carries them through a frame or two that misses the code. A
+        // confirmed code hands its marker to the success badge at once, since the badge grows from it.
+        val spots = if (confirming == null && sighting != null) foundSpots(sighting, viewWidth, viewHeight) else null
+        val lastSpots = remember { LastSpots() }
+        SideEffect {
+            when {
+                spots != null -> lastSpots.value = spots
+                // Markers handed to the badge are done with, and must not come back once it has gone.
+                confirming != null -> lastSpots.value = emptyList()
+            }
+        }
+        val shownSpots = spots ?: if (confirming == null) lastSpots.value else emptyList()
+        shownSpots.forEach { spot ->
+            key(spot.text) {
+                FoundMarker(spot.center, visible = spots != null || visible)
             }
         }
 
@@ -198,37 +211,60 @@ fun ScanOverlay(
     }
 }
 
-/** Pops in with a light tick when its code is appended, then follows the code as the camera moves. */
-@Composable
-private fun FoundMarker(target: Offset) {
-    val haptics = rememberHaptics()
-    val pop = remember { Animatable(0f) }
-    val position = remember { Animatable(target, Offset.VectorConverter) }
-    val popSpec = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
-    val moveSpec = MaterialTheme.motionScheme.fastSpatialSpec<Offset>()
-    LaunchedEffect(Unit) {
-        haptics.found()
-        pop.animateTo(1f, popSpec)
+/** A decoded code's text and where its center falls on the view. */
+private class FoundSpot(val text: String, val center: Offset)
+
+/**
+ * The markers of the sighting composed last, held outside the snapshot system, since keeping them
+ * is no reason to compose again.
+ */
+private class LastSpots {
+    var value: List<FoundSpot> = emptyList()
+}
+
+/** The decoded codes of [sighting] that have a place in the frame, placed on a [viewWidth] by [viewHeight] view. */
+private fun foundSpots(sighting: Sighting, viewWidth: Float, viewHeight: Float): List<FoundSpot> =
+    sighting.found.filter { it.corners.isNotEmpty() }.map { detection ->
+        val c = detection.center
+        val at = toView(sighting.frameWidth, sighting.frameHeight, c.x, c.y, c.x, c.y, viewWidth, viewHeight)
+        FoundSpot(detection.text, at.center)
     }
+
+/**
+ * Pops in with a light tick when its code is appended, follows the code as the camera moves, and
+ * fades as it shrinks away once it is no longer [visible].
+ */
+@Composable
+private fun FoundMarker(target: Offset, visible: Boolean) {
+    val position = remember { Animatable(target, Offset.VectorConverter) }
+    val moveSpec = MaterialTheme.motionScheme.fastSpatialSpec<Offset>()
     LaunchedEffect(target) { position.animateTo(target, moveSpec) }
-    Box(
-        modifier = Modifier
-            .centeredOn(FOUND_SIZE) { position.value }
-            .size(FOUND_SIZE)
-            .graphicsLayer {
-                scaleX = pop.value
-                scaleY = pop.value
-            }
-            .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.primary),
-        contentAlignment = Alignment.Center,
+    // Starts hidden, so a marker composed for a code just appended pops in.
+    val shown = remember { MutableTransitionState(false) }
+    shown.targetState = visible
+    AnimatedVisibility(
+        visibleState = shown,
+        enter = scaleIn(MaterialTheme.motionScheme.fastSpatialSpec()),
+        exit = fadeOut(MaterialTheme.motionScheme.fastEffectsSpec()) +
+            scaleOut(MaterialTheme.motionScheme.fastSpatialSpec()),
+        modifier = Modifier.centeredOn(FOUND_SIZE) { position.value },
     ) {
-        Icon(
-            painterResource(R.drawable.ic_check),
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onPrimary,
-            modifier = Modifier.size(28.dp),
-        )
+        val haptics = rememberHaptics()
+        LaunchedEffect(Unit) { haptics.found() }
+        Box(
+            modifier = Modifier
+                .size(FOUND_SIZE)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primary),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                painterResource(R.drawable.ic_check),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.size(28.dp),
+            )
+        }
     }
 }
 
@@ -279,8 +315,11 @@ private fun SuccessBadge(center: () -> Offset, fromMarker: Boolean, onDone: () -
     }
 }
 
-/** Positions a [size] box so its center follows [center], read at layout time to avoid recomposing. */
-private fun Modifier.centeredOn(size: Dp, center: () -> Offset): Modifier = offset {
+/**
+ * Positions a [size] box so its center follows [center], read at layout time to avoid recomposing.
+ * The offset is absolute, as the camera's pixels are, so a right-to-left layout leaves it in place.
+ */
+private fun Modifier.centeredOn(size: Dp, center: () -> Offset): Modifier = absoluteOffset {
     val c = center()
     val half = size.roundToPx() / 2
     IntOffset(c.x.roundToInt() - half, c.y.roundToInt() - half)

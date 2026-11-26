@@ -171,7 +171,7 @@ internal fun SendMenu(apps: List<SendApp>, enabled: Boolean) {
 internal fun AppButton(app: SendApp, enabled: Boolean) {
     val alpha by animateFloatAsState(
         if (enabled && app.looksEnabled) 1f else 0.38f,
-        MaterialTheme.motionScheme.defaultEffectsSpec(),
+        MaterialTheme.motionScheme.fastEffectsSpec(),
         label = "app-button",
     )
     val description = app.label

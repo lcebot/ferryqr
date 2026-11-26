@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The window behind a page, in the colour of the surface the page draws, so nothing of another
-     colour shows while a page opens or a back gesture reveals its edges. -->
+<!-- The window behind a page, close to the background the page draws, for the frames before the
+     page is first drawn. Android 12 and 13 have no system colour for the dynamic scheme's background,
+     a tone of the neutral variant palette between the ones the system offers, so this is the nearest
+     tone of that palette, and each page sets its window to the exact colour once its theme is composed. -->
 <resources>
-    <color name="page_background">@android:color/system_neutral1_10</color>
+    <color name="page_background">@android:color/system_neutral2_10</color>
 </resources>

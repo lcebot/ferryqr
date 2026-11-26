@@ -4,11 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.PointF
 import android.graphics.Rect
 import androidx.camera.core.ImageProxy
-import kotlin.math.max
 import zxingcpp.BarcodeReader
-
-/** A region smaller than this is enlarged before a deep read, so its modules span several pixels. */
-private const val MIN_REGION_SIDE = 400
 
 class ZxingEngine {
 
@@ -67,33 +63,18 @@ class ZxingEngine {
     fun read(bitmap: Bitmap): List<Detection> = still.read(bitmap).mapNotNull { it.toDetection() }
 
     /**
-     * Reads [region] of [frame] at full resolution, which the fast read loses once it downscales,
-     * enlarged when small, with each deep reader in turn. It costs a few milliseconds, far less than
-     * the WeChat decoder, so it is tried first. Positions come back in [frame]'s pixels. The
-     * scanner and the image sheet share one engine and these readers with it, so one reads at a time.
+     * Reads [region] with each deep reader in turn, at the full resolution the fast read loses once
+     * it downscales. It costs a few milliseconds, far less than the WeChat decoder, so it is tried
+     * first. Positions come back in the pixels of the frame [region] was cut from. The scanner and
+     * the image sheet share one engine and these readers with it, so one reads at a time.
      */
     @Synchronized
-    fun readRegion(frame: Bitmap, region: Rect): List<Detection> {
-        val r = Rect(region)
-        if (!r.intersect(0, 0, frame.width, frame.height) || r.width() < 8 || r.height() < 8) return emptyList()
-        val crop = Bitmap.createBitmap(frame, r.left, r.top, r.width(), r.height())
-        val longest = max(r.width(), r.height())
-        val scale = if (longest < MIN_REGION_SIDE) MIN_REGION_SIDE.toFloat() / longest else 1f
-        val input = if (scale > 1f) {
-            Bitmap.createScaledBitmap(crop, (r.width() * scale).toInt(), (r.height() * scale).toInt(), true)
-        } else crop
-        try {
-            for (reader in deep) {
-                val found = reader.read(input).mapNotNull { it.toDetection() }
-                if (found.isNotEmpty()) {
-                    return found.map { d -> d.copy(corners = d.corners.map { PointF(r.left + it.x / scale, r.top + it.y / scale) }) }
-                }
-            }
-            return emptyList()
-        } finally {
-            if (input !== crop) input.recycle()
-            if (crop !== frame) crop.recycle()
+    fun readRegion(region: RegionCrop): List<Detection> {
+        for (reader in deep) {
+            val found = reader.read(region.image).mapNotNull { it.toDetection() }
+            if (found.isNotEmpty()) return found.map(region::toFrame)
         }
+        return emptyList()
     }
 }
 

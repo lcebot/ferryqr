@@ -26,7 +26,6 @@ import io.github.lcebot.ferryqr.content.Classifier
 import io.github.lcebot.ferryqr.content.Contact
 import io.github.lcebot.ferryqr.content.WifiPayload
 import io.github.lcebot.ferryqr.content.WifiSecurity
-import java.net.URISyntaxException
 
 internal object Launch {
 
@@ -159,9 +158,11 @@ internal object Launch {
      */
     fun schemeIntent(uri: String, scheme: String): Intent? {
         if (scheme != "intent") return browsable(Uri.parse(uri))
+        // Besides URISyntaxException, the parser lets the number parsing of typed extras and flags
+        // throw as it is, so a crafted code can make it throw nearly anything; all of it is unreadable.
         val intent = try {
             Intent.parseUri(uri, Intent.URI_INTENT_SCHEME)
-        } catch (e: URISyntaxException) {
+        } catch (e: Exception) {
             return null
         }
         intent.component = null

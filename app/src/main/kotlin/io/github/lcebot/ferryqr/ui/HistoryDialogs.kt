@@ -23,7 +23,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.lcebot.ferryqr.HistoryDialog
 import io.github.lcebot.ferryqr.HistoryViewModel
 import io.github.lcebot.ferryqr.R
-import io.github.lcebot.ferryqr.dispatch.EntryNames
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -82,7 +81,10 @@ internal fun DamagedHistoryDialog(vm: HistoryViewModel, show: Boolean, message: 
     )
 }
 
-/** The dialog the page shows over its list, if any; [message] tells how an action went. */
+/**
+ * The dialog the page shows over its list, if any; [message] tells how an action went. Naming an
+ * entry as it becomes a favorite is the favorite requester's own dialog.
+ */
 @Composable
 internal fun HistoryDialogs(vm: HistoryViewModel, dialog: HistoryDialog?, message: (Int) -> Unit) {
     val context = LocalContext.current
@@ -129,13 +131,8 @@ internal fun HistoryDialogs(vm: HistoryViewModel, dialog: HistoryDialog?, messag
                 }
             },
         )
-        is HistoryDialog.Name -> NameFavoriteDialog(
-            current = EntryNames(context, shown.entry.text, shown.entry.format, shown.entry.label).shortTitle,
-            onDismiss = { vm.show(null) },
-            onName = { name -> vm.name(shown.entry, name) },
-        )
         is HistoryDialog.Rename -> RenameDialog(
-            current = EntryNames(context, shown.entry.text, shown.entry.format, shown.entry.label).shortTitle,
+            current = shown.entry.content.names(context, shown.entry.label).shortTitle,
             onDismiss = { vm.show(null) },
             onRename = { name -> vm.rename(shown.entry, name) },
         )

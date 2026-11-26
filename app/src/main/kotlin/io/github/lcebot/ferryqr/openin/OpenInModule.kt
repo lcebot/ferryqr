@@ -25,6 +25,7 @@ import java.io.ByteArrayOutputStream
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import kotlin.coroutines.EmptyCoroutineContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -177,31 +178,51 @@ object OpenInModule {
      * as a result; without it the text is shown as a QR code, which suits QR content only.
      */
     fun handoff(context: Context, pkg: String, text: String, type: String? = null, picture: Bitmap? = null) {
+        // An app that does not take content only has its scanner opened, for the code to be scanned
+        // again; an older module there is left alone rather than handed what it may misread.
+        if (pkg !in _readyApps.value) return
+        val app = context.applicationContext
         // Only apps whose result is replaced read it.
-        val cameraFeed = AppSettings.of(context).cameraFeed(pkg).value
-        val jpeg = picture?.let(::jpeg)
-        handoff(context, pkg) { intent ->
+        val cameraFeed = AppSettings.of(app).cameraFeed(pkg).value
+        fun send(jpeg: ByteArray?) = handoff(app, pkg) { intent ->
             intent.putExtra(EXTRA_TEXT, text).putExtra(EXTRA_CAMERA_FEED, cameraFeed)
             if (type != null) intent.putExtra(EXTRA_TYPE, type)
             if (jpeg != null) intent.putExtra(EXTRA_IMAGE, jpeg)
         }
+        if (picture == null) send(null) else compressed(picture, ::send)
     }
 
     /** Like [handoff], for a code that cannot be read: the app's scanner is shown [image] instead. */
     fun handoff(context: Context, pkg: String, image: Bitmap) {
-        val jpeg = jpeg(image)
-        handoff(context, pkg) { it.putExtra(EXTRA_IMAGE, jpeg) }
-    }
-
-    private fun jpeg(image: Bitmap): ByteArray = ByteArrayOutputStream().use { out ->
-        image.compress(Bitmap.CompressFormat.JPEG, IMAGE_QUALITY, out)
-        out.toByteArray()
-    }
-
-    private fun handoff(context: Context, pkg: String, content: (Intent) -> Unit) {
-        // An app that does not take content only has its scanner opened, for the code to be scanned
-        // again; an older module there is left alone rather than handed what it may misread.
         if (pkg !in _readyApps.value) return
+        val app = context.applicationContext
+        compressed(image) { jpeg -> handoff(app, pkg) { it.putExtra(EXTRA_IMAGE, jpeg) } }
+    }
+
+    /**
+     * Hands [image] to [send] as a JPEG. A handoff starts on the main thread as its app is launched,
+     * so the image is compressed off that thread, and sent from it once done, while the app is
+     * still starting up to answer.
+     */
+    private fun compressed(image: Bitmap, send: (ByteArray) -> Unit) {
+        Dispatchers.Default.dispatch(EmptyCoroutineContext) {
+            // Nothing catches what is thrown here, so an image that cannot be compressed is left
+            // unsent rather than ending the app.
+            val jpeg = try {
+                if (image.isRecycled) return@dispatch
+                ByteArrayOutputStream().use { out ->
+                    image.compress(Bitmap.CompressFormat.JPEG, IMAGE_QUALITY, out)
+                    out.toByteArray()
+                }
+            } catch (e: RuntimeException) {
+                return@dispatch
+            }
+            main.post { send(jpeg) }
+        }
+    }
+
+    /** Sends what [content] puts in a handoff to [pkg], again until the app answers or the time is up. */
+    private fun handoff(context: Context, pkg: String, content: (Intent) -> Unit) {
         val app = context.applicationContext
         val id = SystemClock.elapsedRealtimeNanos()
         val giveUpAt = SystemClock.uptimeMillis() + HANDOFF_WINDOW_MS

@@ -61,6 +61,9 @@ private const val MUTE_KEEP_MS = 1500L
  * Codes the user dismissed are muted: they are dropped as soon as they are read, before anything
  * costly runs on them, until they have left the view.
  *
+ * Once it has reported a result it reports nothing more until [resume] or [reset], so the frames
+ * that arrive before the scanner takes the result up cannot report it a second time.
+ *
  * Runs on a single analysis thread; only [paused], [reset] and [resume] are touched from elsewhere.
  */
 class LiveAnalyzer(
@@ -80,9 +83,13 @@ class LiveAnalyzer(
         var wechatAt = 0L
     }
 
-    /** Set before every hit so a burst of frames cannot report the same code twice. */
+    /** Set by the scanner while it is doing anything but scanning, so frames are let go unread. */
     @Volatile
     var paused = false
+
+    /** Set as a result goes out, and cleared only by [resume] and [reset]. */
+    @Volatile
+    private var reported = false
 
     @Volatile
     private var clearRequested = false
@@ -132,7 +139,7 @@ class LiveAnalyzer(
     fun reset() {
         dismissed = null
         clearRequested = true
-        paused = false
+        reported = false
     }
 
     /**
@@ -142,7 +149,7 @@ class LiveAnalyzer(
      */
     fun resume(texts: Set<String>, miniCode: Boolean) {
         if (texts.isNotEmpty() || miniCode) dismissed = Dismissed(texts, miniCode)
-        paused = false
+        reported = false
     }
 
     private fun takeDismissed(now: Long) {
@@ -179,7 +186,7 @@ class LiveAnalyzer(
     }
 
     private fun process(image: ImageProxy) {
-        if (paused) return
+        if (paused || reported) return
         autoZoom.watchScene(image)
         if (clearRequested) {
             clearRequested = false
@@ -258,28 +265,38 @@ class LiveAnalyzer(
     }
 
     /**
-     * The frame upright, as [width] by [height] pixels. Its grey image for the detector is read
-     * straight from the camera's luma plane, and the colour bitmap, which costs several conversions
-     * of the whole frame, is made only for the steps that need one; each at most once.
+     * The frame upright, as [width] by [height] pixels. Its grey image for the detector and for deep
+     * reads is read straight from the camera's luma plane, and the colour bitmap, which costs several
+     * conversions of the whole frame, is made only for the steps that need colour: the frame handed
+     * on with a result and the crop of a mini program code. Each is made at most once.
      */
     private inner class UprightFrame(private val image: ImageProxy, val width: Int, val height: Int) {
         private var bitmap: Bitmap? = null
-        private var gray: Mat? = null
+        private var grayMat: Mat? = null
         private var grayTried = false
         var handedOn = false
 
         fun get(): Bitmap = bitmap ?: image.toUprightBitmap().also { bitmap = it }
 
-        fun survey(look: Look): Survey {
+        /** Null until OpenCV is loaded; the colour bitmap stands in for it until then. */
+        private fun gray(): Mat? {
             if (!grayTried) {
                 grayTried = true
-                gray = wechat.upright(image)
+                grayMat = wechat.upright(image)
             }
-            return gray?.let { wechat.survey(it, look) } ?: wechat.survey(get(), look)
+            return grayMat
+        }
+
+        fun survey(look: Look): Survey = gray()?.let { wechat.survey(it, look) } ?: wechat.survey(get(), look)
+
+        /** [region] of the frame on its own, as [regionCrop] cuts it. */
+        fun region(region: Rect, enlarged: Boolean): RegionCrop? {
+            val luma = gray()
+            return if (luma != null) luma.regionCrop(region, enlarged) else get().regionCrop(region, enlarged)
         }
 
         fun recycle() {
-            gray?.release()
+            grayMat?.release()
             if (!handedOn) bitmap?.recycle()
         }
     }
@@ -350,12 +367,11 @@ class LiveAnalyzer(
     private fun deepRead(frame: UprightFrame, now: Long) {
         if (candidates.any { it.kind == Kind.MINI }) survey(frame, Look.QUICK, now)
         for (candidate in candidates.filter { it.kind == Kind.QR }.sortedBy { it.seenAt }.take(DEEP_PER_PASS)) {
-            val bitmap = frame.get()
-            val region = candidate.region.paddedWithin(bitmap)
-            var read = zxing.readRegion(bitmap, region)
+            val region = candidate.region.paddedWithin(frame.width, frame.height)
+            var read = frame.region(region, enlarged = true)?.use { zxing.readRegion(it) }.orEmpty()
             if (read.isEmpty() && now - candidate.wechatAt >= WECHAT_INTERVAL_MS) {
                 candidate.wechatAt = now
-                read = wechat.decode(bitmap, region)
+                read = frame.region(region, enlarged = false)?.use { wechat.decode(it) }.orEmpty()
             }
             read.forEach { collect(it, now) }
         }
@@ -383,7 +399,7 @@ class LiveAnalyzer(
         if (miniHits < MINI_CONFIRMATIONS) return
         val crop = found.crop(frame.get()) ?: return
         startOver()
-        paused = true
+        reported = true
         onSighting(null)
         onMiniCode(crop)
     }
@@ -418,7 +434,7 @@ class LiveAnalyzer(
         val located = candidates.mapNotNull { it.mini?.asLocatedDetection(upright.width, upright.height) }
         val detections = collected.values.toList() + located
         startOver()
-        paused = true
+        reported = true
         onSighting(null)
         frame.handedOn = true
         onHit(upright, detections, shown)
@@ -435,11 +451,11 @@ private fun Rect.overlapsMostly(other: Rect): Boolean {
     return smaller > 0 && inter.width().toLong() * inter.height() * 2 > smaller
 }
 
-/** Padded so the decoders see the quiet zone around the symbol. */
-internal fun Rect.paddedWithin(frame: Bitmap): Rect {
+/** Padded so the decoders see the quiet zone around the symbol, within a [width] by [height] frame. */
+internal fun Rect.paddedWithin(width: Int, height: Int): Rect {
     val region = Rect(this)
     val pad = max(region.width(), region.height()) / 2 + MIN_REGION_PADDING
     region.inset(-pad, -pad)
-    if (!region.intersect(0, 0, frame.width, frame.height)) region.set(0, 0, frame.width, frame.height)
+    if (!region.intersect(0, 0, width, height)) region.set(0, 0, width, height)
     return region
 }

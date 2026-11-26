@@ -3,7 +3,6 @@
 package io.github.lcebot.ferryqr.ui
 
 import android.graphics.Bitmap
-import androidx.activity.compose.LocalActivity
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedContent
@@ -28,7 +27,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -58,7 +56,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -70,11 +67,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.lcebot.ferryqr.ImageScan
 import io.github.lcebot.ferryqr.ImageScanViewModel
 import io.github.lcebot.ferryqr.R
-import io.github.lcebot.ferryqr.content.Classifier
+import io.github.lcebot.ferryqr.dispatch.CardAction
 import io.github.lcebot.ferryqr.dispatch.CardSource
-import io.github.lcebot.ferryqr.dispatch.Cards
 import io.github.lcebot.ferryqr.dispatch.Kind
 import io.github.lcebot.ferryqr.dispatch.Origin
+import io.github.lcebot.ferryqr.dispatch.ReadContent
+import io.github.lcebot.ferryqr.dispatch.ResultCard
 import io.github.lcebot.ferryqr.scan.Detection
 import io.github.lcebot.ferryqr.scan.isLocatedMiniCode
 import kotlinx.coroutines.launch
@@ -113,7 +111,7 @@ fun ImageScanSheet(vm: ImageScanViewModel, onClose: () -> Unit) {
 
     val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
     val resize = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
-    ModalSheet(onDismissRequest = onClose, sheetState = sheetState) {
+    CardSheet(onDismissRequest = onClose, sheetState = sheetState, onHandoff = onClose) { onAction, onMessage ->
         AnimatedContent(
             targetState = result,
             contentKey = { read ->
@@ -129,8 +127,9 @@ fun ImageScanSheet(vm: ImageScanViewModel, onClose: () -> Unit) {
         ) { read ->
             when {
                 read == null -> Reading()
-                read is ImageScan.Read && read.detections.isNotEmpty() -> Found(read, onShown = vm::shown, onHandoff = onClose)
-                read is ImageScan.Read && read.miniCrop != null -> MiniFound(read.miniCrop, onHandoff = onClose)
+                read is ImageScan.Read && read.detections.isNotEmpty() ->
+                    Found(read, onShown = vm::shown, onAction = onAction, onMessage = onMessage)
+                read is ImageScan.Read && read.miniCrop != null -> MiniFound(read.miniCrop, onAction = onAction, onMessage = onMessage)
                 read is ImageScan.Read -> SheetMessage(
                     icon = R.drawable.ic_search_off,
                     title = R.string.image_no_code_title,
@@ -209,28 +208,26 @@ private fun SheetMessage(@DrawableRes icon: Int, @StringRes title: Int, @StringR
 }
 
 @Composable
-private fun Found(read: ImageScan.Read, onShown: (Detection) -> Unit, onHandoff: () -> Unit) {
-    val activity = LocalActivity.current ?: return
-    val context = LocalContext.current
+private fun Found(
+    read: ImageScan.Read,
+    onShown: (ReadContent) -> Unit,
+    onAction: (CardAction) -> Unit,
+    onMessage: (Int) -> Unit,
+) {
     val haptics = rememberHaptics()
     var selected by rememberSaveable { mutableIntStateOf(0) }
     val index = selected.coerceIn(read.detections.indices)
-    val detection = read.detections[index]
+    val content = read.contents[index]
     // A mini program code that could not be read has no content to route; WeChat gets its picture.
     // The card shown stays until the next one is ready, and the sheet keeps reading until the first is.
     val source = remember(read, index) {
         read.locatedCrops[index]?.let { CardSource.LocatedMini(it, live = false) }
-            ?: CardSource.Read(detection.text, detection.format, Origin.IMAGE)
+            ?: CardSource.Read(content, Origin.IMAGE)
     }
     val card = rememberResultCard(source)
 
-    LaunchedEffect(detection) { onShown(detection) }
+    LaunchedEffect(content) { onShown(content) }
 
-    // The sheet has no snackbar host, so the few messages it needs are toasts.
-    val onResult = rememberActionResultHandler(onHandoff, context::toast)
-
-    val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
-    val resize = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
     Column(
         modifier = Modifier
             .verticalScroll(rememberScrollState())
@@ -238,57 +235,72 @@ private fun Found(read: ImageScan.Read, onShown: (Detection) -> Unit, onHandoff:
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
         if (read.detections.size > 1) {
-            CodeChooser(read.thumbnails, read.detections, selected) { picked ->
+            CodeChooser(read.thumbnails, read.detections, read.contents, selected) { picked ->
                 if (picked != selected) haptics.step()
                 selected = picked
             }
         }
-        // Keyed on the code, so a card built again as an app becomes ready updates in place and keeps
-        // what was done on it, while another code crossfades in.
-        AnimatedContent(
-            targetState = card,
-            contentKey = { it?.let { shown -> shown.raw to shown.format } },
-            transitionSpec = { (fadeIn(fade) togetherWith fadeOut(fade)) using SizeTransform(clip = false) { _, _ -> resize } },
-            label = "image-card",
-        ) { shown ->
-            if (shown == null) {
-                Reading()
-            } else {
-                ResultCardContent(
-                    card = shown,
-                    onAction = { action -> onResult(action.run(activity)) },
-                    modifier = Modifier.padding(horizontal = 24.dp),
-                )
-            }
-        }
+        CardOrReading(
+            card = card,
+            onAction = onAction,
+            onMessage = onMessage,
+            cardModifier = Modifier.padding(horizontal = 24.dp),
+        )
     }
 }
 
 /** A probable mini program code, the only thing found in the image, offered to WeChat. */
 @Composable
-private fun MiniFound(crop: Bitmap, onHandoff: () -> Unit) {
-    val activity = LocalActivity.current ?: return
-    val context = LocalContext.current
+private fun MiniFound(crop: Bitmap, onAction: (CardAction) -> Unit, onMessage: (Int) -> Unit) {
     val card = rememberResultCard(remember(crop) { CardSource.LocatedMini(crop, live = false) })
-    val onResult = rememberActionResultHandler(onHandoff, context::toast)
-    val shown = card
-    if (shown == null) {
-        Reading()
-        return
-    }
-    ResultCardContent(
-        card = shown,
-        onAction = { action -> onResult(action.run(activity)) },
-        modifier = Modifier
+    CardOrReading(
+        card = card,
+        onAction = onAction,
+        onMessage = onMessage,
+        cardModifier = Modifier
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp)
             .padding(bottom = 24.dp),
     )
 }
 
+/**
+ * The reading state until [card] is built, then the card with [cardModifier], crossfading while the
+ * sheet resizes to it. Keyed on the code, so a card built again as an app becomes ready updates in
+ * place and keeps what was done on it, while another code crossfades in.
+ */
+@Composable
+private fun CardOrReading(
+    card: ResultCard?,
+    onAction: (CardAction) -> Unit,
+    onMessage: (Int) -> Unit,
+    cardModifier: Modifier,
+) {
+    val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+    val resize = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
+    AnimatedContent(
+        targetState = card,
+        contentKey = { it?.let { shown -> shown.raw to shown.format } },
+        transitionSpec = { (fadeIn(fade) togetherWith fadeOut(fade)) using SizeTransform(clip = false) { _, _ -> resize } },
+        label = "image-card",
+    ) { shown ->
+        if (shown == null) {
+            Reading()
+        } else {
+            ResultCardContent(card = shown, onAction = onAction, onMessage = onMessage, modifier = cardModifier)
+        }
+    }
+}
+
 /** Shown above the card only when the image holds several codes. */
 @Composable
-private fun CodeChooser(thumbnails: List<Bitmap?>, detections: List<Detection>, selected: Int, onSelect: (Int) -> Unit) {
+private fun CodeChooser(
+    thumbnails: List<Bitmap?>,
+    detections: List<Detection>,
+    contents: List<ReadContent>,
+    selected: Int,
+    onSelect: (Int) -> Unit,
+) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
             pluralStringResource(R.plurals.image_code_count, detections.size, detections.size),
@@ -301,21 +313,18 @@ private fun CodeChooser(thumbnails: List<Bitmap?>, detections: List<Detection>, 
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             itemsIndexed(detections, key = { _, d -> d.text }) { index, detection ->
-                CodeTile(thumbnails.getOrNull(index), detection, index == selected) { onSelect(index) }
+                CodeTile(thumbnails.getOrNull(index), detection, contents[index], index == selected) { onSelect(index) }
             }
         }
     }
 }
 
 @Composable
-private fun CodeTile(picture: Bitmap?, detection: Detection, selected: Boolean, onClick: () -> Unit) {
+private fun CodeTile(picture: Bitmap?, detection: Detection, content: ReadContent, selected: Boolean, onClick: () -> Unit) {
     val thumbnail = remember(picture) { picture?.asImageBitmap() }
-    val kind = remember(detection) {
-        if (detection.isLocatedMiniCode) Kind(R.string.kind_mini_program, R.drawable.ic_qr_code_scanner)
-        else Cards.kindOf(Classifier.classify(detection.text, detection.format))
-    }
+    val kind = if (detection.isLocatedMiniCode) Kind(R.string.kind_mini_program, R.drawable.ic_qr_code_scanner) else content.kind
     val description = if (detection.isLocatedMiniCode) stringResource(R.string.mini_headline) else detection.text
-    val effects = MaterialTheme.motionScheme.defaultEffectsSpec<Color>()
+    val effects = MaterialTheme.motionScheme.fastEffectsSpec<Color>()
     val container by animateColorAsState(
         if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
         effects,
@@ -324,7 +333,7 @@ private fun CodeTile(picture: Bitmap?, detection: Detection, selected: Boolean, 
     Surface(
         selected = selected,
         onClick = onClick,
-        shape = RoundedCornerShape(20.dp),
+        shape = MaterialTheme.shapes.largeIncreased,
         color = container,
         border = if (selected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
         modifier = Modifier.width(TILE_WIDTH),
@@ -337,7 +346,7 @@ private fun CodeTile(picture: Bitmap?, detection: Detection, selected: Boolean, 
             Box(
                 modifier = Modifier
                     .size(THUMBNAIL_SIZE)
-                    .clip(RoundedCornerShape(12.dp))
+                    .clip(MaterialTheme.shapes.medium)
                     .background(Color.White),
                 contentAlignment = Alignment.Center,
             ) {

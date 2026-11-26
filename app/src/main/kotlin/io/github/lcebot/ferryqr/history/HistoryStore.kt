@@ -3,11 +3,9 @@ package io.github.lcebot.ferryqr.history
 import android.content.Context
 import android.util.AtomicFile
 import io.github.lcebot.ferryqr.AppSettings
-import io.github.lcebot.ferryqr.content.Classifier
-import io.github.lcebot.ferryqr.content.sensitiveKind
 import io.github.lcebot.ferryqr.dispatch.EntryNames
-import io.github.lcebot.ferryqr.scan.Detection
-import io.github.lcebot.ferryqr.scan.isLocatedMiniCode
+import io.github.lcebot.ferryqr.dispatch.ReadContent
+import io.github.lcebot.ferryqr.scan.MINI_LOCATED_FORMAT
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.OutputStream
@@ -15,11 +13,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -45,6 +46,18 @@ data class HistoryEntry(
 ) {
     val favorite: Boolean get() = favoritedAt > 0L
     val shortcut: Boolean get() = shortcutAt > 0L
+
+    /** What the entry holds, read once for every place that shows, names or opens it. */
+    val content: ReadContent get() = ReadContent.of(text, format)
+}
+
+/** What asking to make content a favorite, or to stop it being one, came to. */
+sealed interface FavoriteRequest {
+    /** The change is made. */
+    data object Done : FavoriteRequest
+
+    /** Nothing has changed yet: the content becomes a favorite once named, the name starting from [initialName]. */
+    data class NeedsName(val initialName: String) : FavoriteRequest
 }
 
 /**
@@ -90,15 +103,19 @@ class HistoryStore private constructor(private val context: Context) {
 
     init {
         scope.launch {
-            val read = runCatching { read() }.getOrDefault(emptyList())
+            val read = runCatching { read() }.getOrElse { FileRead(emptyList(), writable = false) }
             _damaged.value = unreadable.exists()
             synchronized(lock) {
-                var current = read
+                var current = read.entries
                 pending.forEach { current = limited(it(current)) }
                 pending.clear()
                 _entries.value = current
-                if (current != read) saves.trySend(Unit)
+                if (current != read.entries) saves.trySend(Unit)
             }
+            // A file that could neither be read nor set aside holds the only copy of the history, so
+            // for the rest of the process nothing is written over it, and the shortcuts stay as they
+            // were with it. The entries still change in memory, so the app keeps working meanwhile.
+            if (!read.writable) return@launch
             // Shortcuts outlive the process, so they are brought in line with the file once it is read.
             syncShortcuts(_entries.value.orEmpty())
             for (request in saves) {
@@ -141,21 +158,24 @@ class HistoryStore private constructor(private val context: Context) {
     suspend fun find(text: String): HistoryEntry? = entries.filterNotNull().first().find { it.text == text }
 
     /**
-     * Records a scan. Sensitive content is left out where the settings say so; an entry it already
-     * has stays as it was, and favoriting such content still keeps it, as the user asked for that.
+     * The entry with [text], or null while the history has none, from once the file is read. Only
+     * changes to that entry reach its collectors, so one control following one content is left
+     * alone as the rest of the history changes.
      */
-    private fun add(text: String, format: String) {
-        val kind = Classifier.classify(text, format).sensitiveKind
-        if (kind != null && !AppSettings.of(context).keeps(kind).value) return
-        addEntry(text, format)
-    }
+    fun entryOf(text: String): Flow<HistoryEntry?> =
+        entries.filterNotNull().map { all -> all.find { it.text == text } }.distinctUntilChanged()
 
     /**
-     * Records a code that was read and shown or handed on, the one way scans enter history. A mini
-     * program code that was only located has no content to keep.
+     * Records [content], read from a code that was shown or handed on, the one way scans enter
+     * history. A mini program code that was only located has no content to keep. Sensitive content
+     * is left out where the settings say so; an entry it already has stays as it was, and favoriting
+     * such content still keeps it, as the user asked for that.
      */
-    fun record(detection: Detection) {
-        if (!detection.isLocatedMiniCode) add(detection.text, detection.format)
+    fun record(content: ReadContent) {
+        if (content.format == MINI_LOCATED_FORMAT) return
+        val kind = content.sensitiveKind
+        if (kind != null && !AppSettings.of(context).keeps(kind).value) return
+        addEntry(content.text, content.format)
     }
 
     private fun addEntry(text: String, format: String) = update { entries ->
@@ -165,19 +185,43 @@ class HistoryStore private constructor(private val context: Context) {
     }
 
     /**
+     * Makes the content a favorite or stops it being one, the one way everything that favorites
+     * goes. Making it one asks for its name first where the settings say so and it has no name of
+     * its own, or always where [askName] does, as naming and favoriting at once does; then nothing
+     * changes until [nameFavorite].
+     */
+    fun requestFavorite(content: ReadContent, favorite: Boolean, askName: Boolean = false): FavoriteRequest {
+        if (favorite) {
+            val names = content.names(context, _entries.value?.find { it.text == content.text }?.label)
+            if (askName || (AppSettings.of(context).namesFavorites.value && !names.hasOwnName)) {
+                return FavoriteRequest.NeedsName(names.shortTitle)
+            }
+        }
+        setFavorite(content, favorite)
+        return FavoriteRequest.Done
+    }
+
+    /**
+     * Makes the content a favorite under [name], which [requestFavorite] asked for; a blank one
+     * leaves it showing its content.
+     */
+    fun nameFavorite(content: ReadContent, name: String) = setFavorite(content, true, name)
+
+    /**
      * Favoriting content that is not in the history, such as a created code, adds it as well. An
      * entry that stops being a favorite also leaves the app shortcuts. A [label] given with a new
      * favorite names it in the same step, a blank one leaving it to show its content.
      */
-    fun setFavorite(text: String, format: String, favorite: Boolean, label: String? = null) = update { entries ->
+    private fun setFavorite(content: ReadContent, favorite: Boolean, label: String? = null) = update { entries ->
+        val text = content.text
         val now = System.currentTimeMillis()
         val old = entries.find { it.text == text }
         // A new favorite goes to the top, above whatever order the user gave the others.
         val top = (entries.filter { it.favorite }.minOfOrNull { it.favoriteRank } ?: 0) - 1
-        val name = label?.let { ownLabel(text, format, it) }
+        val name = label?.let { ownLabel(content, it) }
         when {
             old == null && favorite ->
-                listOf(HistoryEntry(text, format, now, favoritedAt = now, label = name, favoriteRank = top)) + entries
+                listOf(HistoryEntry(text, content.format, now, favoritedAt = now, label = name, favoriteRank = top)) + entries
             old == null || old.favorite == favorite -> entries
             else -> entries.map {
                 when {
@@ -197,12 +241,6 @@ class HistoryStore private constructor(private val context: Context) {
 
     /** Moves the favorite with [text] to the top of the favorites. */
     fun moveFavoriteToTop(text: String) = moveFavorite(text) { 0 }
-
-    /**
-     * Moves the favorite with [text] [by] places among the favorites, later for a positive count,
-     * from wherever it is when the change applies rather than where a screen last saw it.
-     */
-    fun moveFavorite(text: String, by: Int) = moveFavorite(text) { it + by }
 
     private fun moveFavorite(text: String, to: (Int) -> Int) = update { entries ->
         val order = favoritesOf(entries).map { it.text }.toMutableList()
@@ -229,7 +267,7 @@ class HistoryStore private constructor(private val context: Context) {
 
     /** A [label] that is no name of the user's own, see [ownLabel], removes the name. */
     fun rename(text: String, label: String) = update { entries ->
-        entries.map { if (it.text == text) it.copy(label = ownLabel(it.text, it.format, label)) else it }
+        entries.map { if (it.text == text) it.copy(label = ownLabel(it.content, label)) else it }
     }
 
     /**
@@ -237,15 +275,8 @@ class HistoryStore private constructor(private val context: Context) {
      * [EntryNames.isOwnName]. Accepted unchanged, a title FerryQR shows anyway changes nothing, so
      * the content still counts as unnamed and goes on following its own title.
      */
-    private fun ownLabel(text: String, format: String, label: String): String? =
-        label.trim().takeIf { EntryNames(context, text, format, null).isOwnName(it) }
-
-    /**
-     * Whether making the content a favorite asks for its name first: the settings say so, and it
-     * has no name of its own. Everything that makes a favorite asks this.
-     */
-    fun asksName(text: String, format: String, label: String?): Boolean =
-        AppSettings.of(context).namesFavorites.value && !EntryNames(context, text, format, label).hasOwnName
+    private fun ownLabel(content: ReadContent, label: String): String? =
+        label.trim().takeIf { content.names(context, null).isOwnName(it) }
 
     fun delete(entry: HistoryEntry) = update { entries -> entries.filter { it.text != entry.text } }
 
@@ -279,16 +310,22 @@ class HistoryStore private constructor(private val context: Context) {
         return if (dropped.isEmpty()) entries else entries.filterNot { it in dropped }
     }
 
+    /** What reading the file came to: the entries it could read, and whether saving may write over it. */
+    private class FileRead(val entries: List<HistoryEntry>, val writable: Boolean = true)
+
     /**
      * The entries in the file, an entry that cannot be read left out. A file that cannot be read
      * in full is first set aside as it is, unless one already waits there, so the next save does
-     * not leave it lost.
+     * not leave it lost. A file whose bytes cannot be read at all is copied aside as a file, and
+     * where that copy cannot be made, saving must not write over it.
      */
-    private fun read(): List<HistoryEntry> {
+    private fun read(): FileRead {
         val bytes = try {
             file.readFully()
         } catch (e: FileNotFoundException) {
-            return emptyList()
+            return FileRead(emptyList())
+        } catch (e: Exception) {
+            return FileRead(emptyList(), writable = setAside { file.baseFile.copyTo(unreadable) })
         }
         var whole = true
         val entries = try {
@@ -314,14 +351,25 @@ class HistoryStore private constructor(private val context: Context) {
             whole = false
             emptyList()
         }
-        if (!whole && !unreadable.exists()) {
-            try {
-                unreadable.writeBytes(bytes)
-            } catch (e: Exception) {
-                // Without the copy the file is still read as far as it can be; only exporting it is lost.
-            }
+        // Without the copy the file is still read as far as it can be; only exporting it is lost.
+        if (!whole) setAside { unreadable.writeBytes(bytes) }
+        return FileRead(entries)
+    }
+
+    /**
+     * Keeps the history file that could not be read in full at [unreadable] through [copy], where
+     * [damaged] offers it for exporting. False when it is not kept: one set aside earlier already
+     * waits there and is not written over, or the copy failed, which leaves no part of it behind.
+     */
+    private fun setAside(copy: () -> Unit): Boolean {
+        if (unreadable.exists()) return false
+        return try {
+            copy()
+            true
+        } catch (e: Exception) {
+            unreadable.delete()
+            false
         }
-        return entries
     }
 
     private fun save(entries: List<HistoryEntry>) {

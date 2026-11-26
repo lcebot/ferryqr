@@ -4,14 +4,16 @@ package io.github.lcebot.ferryqr.ui
 
 import android.graphics.Bitmap
 import androidx.activity.compose.PredictiveBackHandler
-import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.scaleIn
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -28,6 +30,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -76,6 +79,8 @@ fun PickOverlay(
     }
     val haptics = rememberHaptics()
     val image = remember(frame) { frame.asImageBitmap() }
+    // The markers sit on the codes in the frame's own pixels, which run from the left edge whatever
+    // the layout direction, so they start from the top left corner and move by absolute offsets.
     BoxWithConstraints(
         Modifier
             .fillMaxSize()
@@ -84,7 +89,8 @@ fun PickOverlay(
                 scaleX = 1f - backProgress * 0.08f
                 scaleY = 1f - backProgress * 0.08f
             }
-            .background(Color.Black)
+            .background(Color.Black),
+        contentAlignment = AbsoluteAlignment.TopLeft,
     ) {
         val viewWidth = constraints.maxWidth.toFloat()
         val viewHeight = constraints.maxHeight.toFloat()
@@ -106,27 +112,27 @@ fun PickOverlay(
             // A code that already had a marker while the camera ran keeps it without popping again;
             // codes that arrived with the frozen frame pop in one after another.
             val wasShown = detection.text in alreadyShown
-            val pop = remember(detection) { Animatable(if (wasShown) 1f else 0f) }
+            val pop = remember(detection) { MutableTransitionState(wasShown) }
             LaunchedEffect(detection) {
                 if (wasShown) return@LaunchedEffect
                 delay(fresh.indexOf(detection) * STAGGER_MS)
-                pop.animateTo(1f, popSpec)
+                pop.targetState = true
             }
-            FilledIconButton(
-                onClick = { haptics.tap(); onPick(detection) },
-                shapes = IconButtonDefaults.shapes(),
-                modifier = Modifier
-                    .offset { IntOffset((x - half).roundToInt(), (y - half).roundToInt()) }
-                    .size(MARKER_SIZE)
-                    .graphicsLayer {
-                        scaleX = pop.value
-                        scaleY = pop.value
-                    },
+            AnimatedVisibility(
+                visibleState = pop,
+                enter = scaleIn(popSpec),
+                modifier = Modifier.absoluteOffset { IntOffset((x - half).roundToInt(), (y - half).roundToInt()) },
             ) {
-                Icon(
-                    painterResource(R.drawable.ic_arrow_forward),
-                    contentDescription = if (detection.isLocatedMiniCode) stringResource(R.string.mini_headline) else detection.text,
-                )
+                FilledIconButton(
+                    onClick = { haptics.tap(); onPick(detection) },
+                    shapes = IconButtonDefaults.shapes(),
+                    modifier = Modifier.size(MARKER_SIZE),
+                ) {
+                    Icon(
+                        painterResource(R.drawable.ic_arrow_forward),
+                        contentDescription = if (detection.isLocatedMiniCode) stringResource(R.string.mini_headline) else detection.text,
+                    )
+                }
             }
         }
 

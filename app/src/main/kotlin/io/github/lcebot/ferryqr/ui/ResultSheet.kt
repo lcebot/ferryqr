@@ -5,9 +5,10 @@
 package io.github.lcebot.ferryqr.ui
 
 import android.graphics.Bitmap
-import android.widget.Toast
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -31,7 +32,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -49,15 +49,18 @@ import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
@@ -95,9 +98,13 @@ import io.github.lcebot.ferryqr.scan.MINI_PROGRAM_FORMAT
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-/** With [closing] set, the sheet slides away as when dismissed, and then [onDismiss] follows. */
+/**
+ * A result card in a sheet of its own, which shows what the card's actions report. [onHandoff]
+ * follows an action another app took over. With [closing] set, the sheet slides away as when
+ * dismissed, and then [onDismiss] follows.
+ */
 @Composable
-fun ResultSheet(card: ResultCard, onDismiss: () -> Unit, onAction: (CardAction) -> Unit, closing: Boolean = false) {
+fun ResultSheet(card: ResultCard, onDismiss: () -> Unit, onHandoff: () -> Unit, closing: Boolean = false) {
     val state = rememberBottomSheetState(
         initialValue = SheetValue.Hidden,
         enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded),
@@ -108,10 +115,11 @@ fun ResultSheet(card: ResultCard, onDismiss: () -> Unit, onAction: (CardAction) 
         state.hide()
         dismiss()
     }
-    ModalSheet(onDismissRequest = onDismiss, sheetState = state) {
+    CardSheet(onDismissRequest = onDismiss, sheetState = state, onHandoff = onHandoff) { onAction, onMessage ->
         ResultCardContent(
             card = card,
             onAction = onAction,
+            onMessage = onMessage,
             modifier = Modifier
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp)
@@ -123,10 +131,15 @@ fun ResultSheet(card: ResultCard, onDismiss: () -> Unit, onAction: (CardAction) 
 /**
  * The body of a result card, shared by the scanner's sheet and the image sheet. A code drawn again
  * in history can be drawn in another format for the reader at hand, for as long as the card is open;
- * the entry keeps the format it was read in.
+ * the entry keeps the format it was read in. [onMessage] shows what the code's toolbar reports.
  */
 @Composable
-fun ResultCardContent(card: ResultCard, onAction: (CardAction) -> Unit, modifier: Modifier = Modifier) {
+fun ResultCardContent(
+    card: ResultCard,
+    onAction: (CardAction) -> Unit,
+    onMessage: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val original = remember(card.format) { CodeType.ofReaderName(card.format) }
     // Keyed on the content rather than the card, which is built again whenever an app's readiness
     // changes, so the format picked stays until another code is shown.
@@ -179,10 +192,7 @@ fun ResultCardContent(card: ResultCard, onAction: (CardAction) -> Unit, modifier
                 modifier = Modifier.align(Alignment.CenterHorizontally),
             )
             // In history the original is out of sight, so the drawing can be kept or passed on.
-            if (card.exportable) {
-                val context = LocalContext.current
-                CodeToolbar(bitmap, onMessage = { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() })
-            }
+            if (card.exportable) CodeToolbar(bitmap, onMessage = onMessage)
         }
         if (card.headline.isNotEmpty()) {
             SelectionContainer {
@@ -205,23 +215,20 @@ fun ResultCardContent(card: ResultCard, onAction: (CardAction) -> Unit, modifier
             }
         }
         card.sections.forEach { CardSectionView(it) }
-        card.notes.forEach { note ->
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    painterResource(R.drawable.ic_warning),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.tertiary,
-                    modifier = Modifier.size(18.dp),
+        // A card built again as an app becomes ready can gain or lose notes and change its actions.
+        // Both are one item of the column, so the gap between them comes and goes with the notes
+        // rather than staying behind while they are gone, and none trails a card without actions.
+        if (card.notes.isNotEmpty() || card.actions.isNotEmpty()) {
+            Column {
+                CardNotes(card.notes)
+                val gap by animateDpAsState(
+                    if (card.notes.isNotEmpty() && card.actions.isNotEmpty()) 16.dp else 4.dp,
+                    MaterialTheme.motionScheme.defaultSpatialSpec(),
+                    label = "notes-gap",
                 )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    note,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.tertiary,
-                )
+                CardActions(card.actions, onAction, Modifier.padding(top = gap))
             }
         }
-        CardActions(card.actions, onAction, Modifier.padding(top = 4.dp))
     }
     if (picking) {
         FormatPickerSheet(
@@ -234,6 +241,58 @@ fun ResultCardContent(card: ResultCard, onAction: (CardAction) -> Unit, modifier
             },
             onDismiss = { picking = false },
         )
+    }
+}
+
+/**
+ * The card's notes, the column's gap apart. A note that comes with a card built again
+ * fades in while the notes make room for it, and one that leaves fades out before they close up.
+ * The notes the card opens with are there from the start.
+ */
+@Composable
+private fun CardNotes(notes: List<String>) {
+    val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+    // Every note in sight, those still fading out included, each where it was among the rest.
+    val shown = remember { notes.toMutableStateList() }
+    val opening = remember { notes.toMutableSet() }
+    LaunchedEffect(notes) {
+        notes.forEachIndexed { index, note ->
+            if (note !in shown) shown.add(index.coerceAtMost(shown.size), note)
+        }
+    }
+    // Clipped, so a note fading in is uncovered as the notes grow rather than drawn over the actions.
+    Column(
+        Modifier.clipToBounds().animateSize(MaterialTheme.motionScheme.defaultSpatialSpec()),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        shown.forEach { note ->
+            key(note) {
+                val visible = remember { MutableTransitionState(note in opening) }
+                visible.targetState = note in notes
+                AnimatedVisibility(visibleState = visible, enter = fadeIn(fade), exit = fadeOut(fade)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            painterResource(R.drawable.ic_warning),
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.tertiary,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            note,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.tertiary,
+                        )
+                    }
+                }
+                if (visible.isIdle && !visible.currentState) {
+                    LaunchedEffect(Unit) {
+                        opening -= note
+                        shown -= note
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -279,7 +338,7 @@ private fun CardSectionView(section: CardSection) {
                     style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
+                        .clip(MaterialTheme.shapes.medium)
                         .background(colors.surfaceContainerHighest)
                         .padding(12.dp),
                 )
@@ -308,13 +367,13 @@ private fun CardActions(actions: List<CardAction>, onAction: (CardAction) -> Uni
             Button(onClick = { onAction(primary) }, shapes = ButtonDefaults.shapes()) {
                 ActionIcon(primary, ButtonDefaults.IconSize)
                 Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-                Text(labelOf(primary))
+                ActionLabel(primary)
             }
             labeled.forEach { action ->
                 FilledTonalButton(onClick = { onAction(action) }, shapes = ButtonDefaults.shapes()) {
                     ActionIcon(action, ButtonDefaults.IconSize)
                     Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-                    Text(labelOf(action))
+                    ActionLabel(action)
                 }
             }
         },
@@ -327,11 +386,15 @@ private val ACTION_LINE_GAP = 12.dp
 /**
  * [main] and [tools] on one line, [tools] at its end, when the width holds both. Otherwise [tools]
  * go on a line above [main], and each wraps onto further lines when it is too long by itself, as
- * on a narrow screen or with large text. Items on a line are centred on each other.
+ * on a narrow screen or with large text. Items on a line are centred on each other. The lines
+ * resize on a spring when the actions change, as when a card is built again.
  */
 @Composable
 private fun ActionLines(main: @Composable () -> Unit, tools: @Composable () -> Unit, modifier: Modifier = Modifier) {
-    Layout(contents = listOf(main, tools), modifier = modifier.fillMaxWidth()) { (mainItems, toolItems), constraints ->
+    Layout(
+        contents = listOf(main, tools),
+        modifier = modifier.fillMaxWidth().animateSize(MaterialTheme.motionScheme.defaultSpatialSpec()),
+    ) { (mainItems, toolItems), constraints ->
         val loose = constraints.copy(minWidth = 0, minHeight = 0)
         val mains = mainItems.map { it.measure(loose) }
         val tooling = toolItems.map { it.measure(loose) }
@@ -404,6 +467,20 @@ private fun ToolButton(action: CardAction, onAction: (CardAction) -> Unit) {
 }
 
 private val ACTION_ICON_SIZE = 24.dp
+
+/** An action's label, which crossfades when a card built again names the action another way. */
+@Composable
+private fun ActionLabel(action: CardAction) {
+    val fade = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
+    val resize = MaterialTheme.motionScheme.fastSpatialSpec<IntSize>()
+    AnimatedContent(
+        targetState = labelOf(action),
+        transitionSpec = { (fadeIn(fade) togetherWith fadeOut(fade)) using SizeTransform { _, _ -> resize } },
+        label = "action-label",
+    ) { label ->
+        Text(label)
+    }
+}
 
 @Composable
 private fun labelOf(action: CardAction): String = when (val app = action.appName) {
@@ -528,7 +605,7 @@ private fun CodeImage(
             } else {
                 Box(
                     modifier = area
-                        .clip(RoundedCornerShape(20.dp))
+                        .clip(MaterialTheme.shapes.largeIncreased)
                         .background(Color.White)
                         .combinedClickable(
                             onClickLabel = clickLabel,
@@ -550,8 +627,8 @@ private fun CodeImage(
                     )
                 }
             }
-            val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
-            val resize = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
+            val fade = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
+            val resize = MaterialTheme.motionScheme.fastSpatialSpec<IntSize>()
             AnimatedContent(
                 targetState = enlarged,
                 transitionSpec = { (fadeIn(fade) togetherWith fadeOut(fade)) using SizeTransform { _, _ -> resize } },

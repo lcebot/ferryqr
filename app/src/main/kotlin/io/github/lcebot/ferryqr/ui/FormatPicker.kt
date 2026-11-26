@@ -72,12 +72,11 @@ import kotlinx.coroutines.withContext
 private val PREVIEW_HEIGHT = 72.dp
 
 /**
- * The tile's corners and padding, from the shape and spacing scales. The preview inside is as much
- * less rounded as the padding is wide, so the two outlines run parallel.
+ * The tile's padding, from the spacing scale. The tile takes the large shape and the preview inside
+ * it the extra small one, which is as much less rounded as this padding is wide, so the two outlines
+ * run parallel.
  */
-private val TILE_CORNER = 16.dp
 private val TILE_PADDING = 12.dp
-private val PREVIEW_CORNER = TILE_CORNER - TILE_PADDING
 
 /**
  * White space around every preview, the same for all of them. Previews are drawn without their
@@ -174,7 +173,7 @@ private fun FormatTile(type: CodeType, option: FormatOption?, selected: Boolean,
         selected = selected,
         onClick = onClick,
         enabled = option != null && available,
-        shape = RoundedCornerShape(TILE_CORNER),
+        shape = MaterialTheme.shapes.large,
         color = colors.surfaceContainerHigh,
         border = if (selected) BorderStroke(2.dp, colors.primary) else null,
         modifier = Modifier.fillMaxWidth().semantics { role = Role.RadioButton },
@@ -184,7 +183,7 @@ private fun FormatTile(type: CodeType, option: FormatOption?, selected: Boolean,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(PREVIEW_HEIGHT)
-                    .clip(RoundedCornerShape(PREVIEW_CORNER))
+                    .clip(MaterialTheme.shapes.extraSmall)
                     .background(previewColor),
                 contentAlignment = Alignment.Center,
             ) {

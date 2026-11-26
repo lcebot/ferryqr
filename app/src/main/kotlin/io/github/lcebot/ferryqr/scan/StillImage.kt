@@ -39,8 +39,9 @@ suspend fun readStillImage(context: Context, uri: Uri, zxing: ZxingEngine, wecha
         val deep = survey.regions
             .filter { region -> known.none { region.contains(it.bounds.centerX().toInt(), it.bounds.centerY().toInt()) } }
             .flatMap { region ->
-                val padded = region.paddedWithin(frame)
-                zxing.readRegion(frame, padded).ifEmpty { wechat.decode(frame, padded) }
+                val padded = region.paddedWithin(frame.width, frame.height)
+                frame.regionCrop(padded, enlarged = true)?.use { zxing.readRegion(it) }.orEmpty()
+                    .ifEmpty { frame.regionCrop(padded, enlarged = false)?.use { wechat.decode(it) }.orEmpty() }
             }
         val detections = found.mergedWith(survey.read).mergedWith(deep)
         if (detections.isEmpty()) {

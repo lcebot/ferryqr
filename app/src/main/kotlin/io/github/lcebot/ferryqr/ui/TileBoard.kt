@@ -42,10 +42,13 @@ internal data class TileInputs(
  * scrolls the list for as a [FavoritesReorder]. Screens read only its snapshot state. What the tiles
  * are laid out from comes from the history as it is composed, through [update], and the height of
  * their rows from the layout, through [measured], for the gestures alone, which act on what is on
- * screen between compositions.
+ * screen between compositions. Every order the tiles are moved into is kept through [keeper].
  */
 @Stable
-internal class TileBoard(private val haptics: Haptics) : FavoritesReorder {
+internal class TileBoard(
+    private val haptics: Haptics,
+    keeper: FavoriteOrderKeeper,
+) : FavoritesReorder, FavoriteOrderKeeper by keeper {
     /** The favorites' contents in the order the tiles show them while one is in hand. */
     val order = FavoriteOrder()
 
@@ -193,10 +196,25 @@ internal class TileBoard(private val haptics: Haptics) : FavoritesReorder {
     }
 
     /**
-     * Lets go of the tile in hand. One only held stays where it is; one dragged glides into its
-     * place on [spec] once [onReorder] has kept the new order.
+     * Moves [tile] [by] places in the order shown and keeps the new order at once, for screen
+     * readers, which move a tile at a time with no drop to wait for.
      */
-    fun drop(scope: CoroutineScope, spec: FiniteAnimationSpec<Rect>, onReorder: () -> Unit) {
+    fun shift(tile: String, by: Int) {
+        val from = keys.indexOf(tile)
+        val to = from + by
+        if (from < 0 || to !in keys.indices || to == from) return
+        val next = keys.toMutableList().apply { add(to, removeAt(from)) }
+        // Until the history is composed again, a further move must already see the new order.
+        keys = next
+        haptics.step()
+        commit(next)
+    }
+
+    /**
+     * Lets go of the tile in hand. One only held stays where it is; one dragged has its new order
+     * kept and glides into its place on [spec].
+     */
+    fun drop(scope: CoroutineScope, spec: FiniteAnimationSpec<Rect>) {
         val tile = key ?: return
         lifted = false
         lastOver = null
@@ -204,7 +222,7 @@ internal class TileBoard(private val haptics: Haptics) : FavoritesReorder {
             key = null
             return
         }
-        onReorder()
+        commit(order.toList())
         val arrangement = arrange()
         val target = arrangement.byKey[tile]?.let { arrangement.rectOf(it, heights) }
         settling = scope.launch {

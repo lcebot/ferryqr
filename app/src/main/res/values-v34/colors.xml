@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The window behind a page, in the colour of the background the page draws, so nothing of another
+     colour shows while a page opens or a back gesture reveals its edges. From Android 14 the dynamic
+     scheme takes its background straight from this system colour. -->
+<resources>
+    <color name="page_background">@android:color/system_background_light</color>
+</resources>

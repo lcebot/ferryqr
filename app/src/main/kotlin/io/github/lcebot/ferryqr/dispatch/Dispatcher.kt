@@ -13,7 +13,7 @@ import io.github.lcebot.ferryqr.content.OtpPayload
 import io.github.lcebot.ferryqr.content.Payload
 import io.github.lcebot.ferryqr.content.SchemePayload
 import io.github.lcebot.ferryqr.content.WebPayload
-import io.github.lcebot.ferryqr.generate.MiniCodeArt
+import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * What [Dispatcher.autoLaunch] works from: the apps the content goes to, in the order [Ferries.rank]
@@ -30,12 +30,22 @@ class LaunchPlan internal constructor(
 
 object Dispatcher {
 
-    /** [ready] holds the packages of the apps that take content through the module. */
-    fun plan(context: Context, payload: Payload, ready: Set<String>): LaunchPlan = LaunchPlan(
-        ranked = if (payload is WebPayload || payload is SchemePayload) Ferries.rank(context, payload, ready) else emptyList(),
-        picture = (payload as? MiniProgramPayload)?.let { MiniCodeArt.draw(it.raw) },
-        ready = ready,
-    )
+    /**
+     * [ready] holds the packages of the apps that take content through the module. The picture is
+     * the drawing the card shows too. Scanned content is untrusted, and content that planning fails
+     * on, however malformed, is planned for no app at all, which leaves it to the system or its card.
+     */
+    fun plan(context: Context, payload: Payload, ready: Set<String>): LaunchPlan = try {
+        LaunchPlan(
+            ranked = if (payload is WebPayload || payload is SchemePayload) Ferries.rank(context, payload, ready) else emptyList(),
+            picture = (payload as? MiniProgramPayload)?.let { Cards.miniCodeDrawing(it.raw) },
+            ready = ready,
+        )
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        LaunchPlan(ranked = emptyList(), picture = null, ready = ready)
+    }
 
     /**
      * Hands the payload straight to the app that owns it, without showing anything, as [plan] has

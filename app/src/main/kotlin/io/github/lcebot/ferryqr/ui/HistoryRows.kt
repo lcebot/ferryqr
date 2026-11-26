@@ -2,7 +2,6 @@
 
 package io.github.lcebot.ferryqr.ui
 
-import android.content.Context
 import android.text.format.DateFormat
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
@@ -37,6 +36,7 @@ import androidx.compose.material3.MenuAnchorPosition
 import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -57,6 +57,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -65,9 +66,8 @@ import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import io.github.lcebot.ferryqr.EntryPresentation
 import io.github.lcebot.ferryqr.R
-import io.github.lcebot.ferryqr.dispatch.EntryNames
-import io.github.lcebot.ferryqr.dispatch.Kind
 import io.github.lcebot.ferryqr.history.FavoriteShortcuts
 import io.github.lcebot.ferryqr.history.HistoryEntry
 import java.text.BreakIterator
@@ -75,20 +75,16 @@ import java.util.Date
 import kotlin.math.roundToInt
 
 /**
- * How an entry is shown, worked out once for its content and name: its [kind], the [title] a row
- * shows, and the shorter [tileTitle] a tile shows, which the tiles' widths are measured from too.
+ * How [entry] is shown: [listed], as the history lists worked it out, or else
+ * worked out here, for an entry the lists do not hold as it is, such as a tile fading out once
+ * deleted. Its content and names are then still kept for the process from when the lists held
+ * it, as a rule, so it is seldom classified or named again on the main thread.
  */
-internal class EntryPresentation(val kind: Kind, val title: String, val tileTitle: String)
-
-internal fun presentationOf(context: Context, entry: HistoryEntry): EntryPresentation {
-    val names = EntryNames(context, entry.text, entry.format, entry.label)
-    return EntryPresentation(names.kind, names.rowTitle, names.tileTitle)
-}
-
 @Composable
-internal fun rememberPresentation(entry: HistoryEntry): EntryPresentation {
+internal fun rememberPresentation(entry: HistoryEntry, listed: EntryPresentation?): EntryPresentation {
     val context = LocalContext.current
-    return remember(entry.text, entry.format, entry.label) { presentationOf(context, entry) }
+    val languages = LocalConfiguration.current.locales
+    return listed ?: remember(entry.text, entry.format, entry.label, languages) { EntryPresentation.of(context, entry) }
 }
 
 /**
@@ -102,12 +98,12 @@ internal fun EntryAvatar(@DrawableRes icon: Int, favorite: Boolean) {
     val colors = MaterialTheme.colorScheme
     val container by animateColorAsState(
         if (favorite) colors.tertiaryContainer else colors.primaryContainer,
-        MaterialTheme.motionScheme.defaultEffectsSpec(),
+        MaterialTheme.motionScheme.fastEffectsSpec(),
         label = "entry-icon-container",
     )
     val onContainer by animateColorAsState(
         if (favorite) colors.onTertiaryContainer else colors.onPrimaryContainer,
-        MaterialTheme.motionScheme.defaultEffectsSpec(),
+        MaterialTheme.motionScheme.fastEffectsSpec(),
         label = "entry-icon",
     )
     Box(
@@ -183,6 +179,7 @@ internal class EntryActions(
 @Composable
 internal fun ReorderRow(
     entry: HistoryEntry,
+    listed: EntryPresentation?,
     shape: Shape,
     lifted: Boolean,
     onDragStart: () -> Unit,
@@ -206,11 +203,14 @@ internal fun ReorderRow(
     ) {
         EntryItem(
             entry,
+            listed,
             shape,
             onClick = {},
             onLongClick = null,
             interactionSource = interactions,
             trailingOverride = {
+                // The drag is detected outside the minimum interactive size, so a touch anywhere in
+                // it picks the row up, not only one on the glyph.
                 Icon(
                     painterResource(R.drawable.ic_drag_indicator),
                     contentDescription = stringResource(R.string.favorite_drag),
@@ -226,8 +226,8 @@ internal fun ReorderRow(
                                 },
                             )
                         }
-                        .size(40.dp)
-                        .padding(8.dp),
+                        .minimumInteractiveComponentSize()
+                        .size(24.dp),
                 )
             },
         )
@@ -245,6 +245,7 @@ internal fun ReorderRow(
 @Composable
 internal fun EntryRow(
     entry: HistoryEntry,
+    listed: EntryPresentation?,
     group: Any,
     index: Int,
     count: Int,
@@ -278,7 +279,9 @@ internal fun EntryRow(
     }
     // What a swipe shows behind the row takes the row's own shape, rounding with it as it is pulled
     // and comes loose, so it matches the corners of the neighbours that round toward it.
-    val shape = segmentShape(index, count, magnet.topStart.value.value, magnet.bottomStart.value.value)
+    val roundTop by rememberRounding(magnet.topStart)
+    val roundBottom by rememberRounding(magnet.bottomStart)
+    val shape = segmentShape(index, count, roundTop, roundBottom)
     Box(
         modifier
             .onSizeChanged { width = it.width }
@@ -292,9 +295,10 @@ internal fun EntryRow(
             shape,
             Modifier.matchParentSize().graphicsLayer { alpha = swipe.backdrop.value },
         )
-        Box(Modifier.graphicsLayer { translationX = swipe.shift.value.value + magnet.lean.value.value }) {
+        Box(Modifier.graphicsLayer { translationX = onWholePixels(swipe.shift.value.value + magnet.lean.value.value) }) {
             EntryItem(
                 entry,
+                listed,
                 shape,
                 onClick = { actions.onOpen(entry) },
                 onLongClick = { menu = true },
@@ -310,10 +314,14 @@ internal fun EntryRow(
     }
 }
 
-/** [trailingOverride] replaces what the row shows at its end, as the handle does while reordering. */
+/**
+ * [listed] is how the history lists show [entry]. [trailingOverride] replaces what the row shows at
+ * its end, as the handle does while reordering.
+ */
 @Composable
 private fun EntryItem(
     entry: HistoryEntry,
+    listed: EntryPresentation?,
     shape: Shape,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)?,
@@ -321,7 +329,7 @@ private fun EntryItem(
     interactionSource: MutableInteractionSource? = null,
 ) {
     val context = LocalContext.current
-    val shown = rememberPresentation(entry)
+    val shown = rememberPresentation(entry, listed)
     val time = remember(entry.time) { DateFormat.getTimeFormat(context).format(Date(entry.time)) }
     // A favorite is kept for what it is rather than when it was scanned.
     val timeTrailing: (@Composable () -> Unit)? = if (entry.favorite) null else {
