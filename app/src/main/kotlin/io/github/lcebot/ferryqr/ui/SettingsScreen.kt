@@ -7,7 +7,6 @@ package io.github.lcebot.ferryqr.ui
 import androidx.annotation.StringRes
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material3.Label
-import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.SliderState
@@ -23,6 +22,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -71,6 +71,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.state.ToggleableState
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -317,7 +318,8 @@ private fun FavoriteSettings() {
             contentPadding = SETTING_ROW_PADDING,
             supportingContent = {
                 // The slider runs from 0 to 1, a stop for each value between the ends. While held, its
-                // value indicator shows the value above the handle.
+                // value indicator shows the value above the handle: a pill in the inverse surface
+                // colours with the value centred in it, padded as Material's own slider label is.
                 val first = AppSettings.FOLDED_ROWS.first
                 val span = AppSettings.FOLDED_ROWS.last - first
                 val slider = remember { SliderState(value = (rows - first).toFloat() / span, steps = span - 1) }
@@ -337,8 +339,19 @@ private fun FavoriteSettings() {
                     thumb = {
                         Label(
                             label = {
-                                PlainTooltip {
-                                    Text(rows.toString(), style = MaterialTheme.typography.labelLarge)
+                                Box(
+                                    modifier = Modifier
+                                        .defaultMinSize(minWidth = VALUE_INDICATOR_MIN_WIDTH, minHeight = VALUE_INDICATOR_MIN_HEIGHT)
+                                        .background(MaterialTheme.colorScheme.inverseSurface, CircleShape)
+                                        .padding(VALUE_INDICATOR_PADDING),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text(
+                                        rows.toString(),
+                                        style = MaterialTheme.typography.labelLarge.copy(fontFeatureSettings = "tnum"),
+                                        color = MaterialTheme.colorScheme.inverseOnSurface,
+                                        textAlign = TextAlign.Center,
+                                    )
                                 }
                             },
                             interactionSource = interactions,
@@ -544,6 +557,14 @@ internal val SECTION_GAP = 12.dp
 private val PAGE_TOP = 16.dp
 
 internal val SETTING_CONTROL_GAP = 12.dp
+
+/**
+ * A slider's value indicator, as Material's own slider label measures it: 10dp beside the value,
+ * the value indicator's 12dp above and below it, and no smaller than 28 by 32dp.
+ */
+private val VALUE_INDICATOR_PADDING = PaddingValues(horizontal = 10.dp, vertical = 12.dp)
+private val VALUE_INDICATOR_MIN_WIDTH = 28.dp
+private val VALUE_INDICATOR_MIN_HEIGHT = 32.dp
 
 /**
  * Setting rows keep their text 16dp from every edge. A row of one line is 56dp tall at least, which

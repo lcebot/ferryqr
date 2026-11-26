@@ -2,21 +2,13 @@
 
 package io.github.lcebot.ferryqr.ui
 
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationVector1D
-import androidx.compose.animation.core.AnimationVector2D
+import androidx.compose.animation.core.AnimationVector4D
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -53,10 +45,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.Measurable
@@ -85,7 +75,6 @@ import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.content.Classifier
 import io.github.lcebot.ferryqr.dispatch.Cards
 import io.github.lcebot.ferryqr.history.HistoryEntry
-import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -116,30 +105,26 @@ internal fun tileChrome(layoutDirection: LayoutDirection): Dp {
 /** Columns of the grid are at least this wide, which makes four across a phone held upright. */
 internal val GRID_COLUMN = 80.dp
 
-/**
- * A tile held with the finger this far above or below the favorites leaves them when let go. Held
- * beside them, past their side edges, it is deleted from the start side and leaves the favorites
- * from the end side, the same sides a swipe uses for the same actions.
- */
-internal val TILE_OUT_MARGIN = 24.dp
-
 /** How far past the edge of the favorites a swiped tile flies, beyond the list's margin and the system bars. */
 private val FLY_MARGIN = 48.dp
 
 /** The group the tiles form for a swipe. */
 private const val TILES_GROUP = "favorites:tiles"
 
-/** How much the tiles directly above and below a pulled tile lean, against those beside it in its row. */
+/**
+ * The share of the finger's travel the tiles beside a pulled tile lean by: a little more than the
+ * rows next to a pulled row, so that the tiles three steps away still visibly move.
+ */
+private const val NEAR_TILE_SHARE = 0.21f
+
+/** How much more weakly a tile is pulled across an edge above or below it than across one beside it. */
 private const val VERTICAL_SHARE = 0.6f
 
-/**
- * How much a tile one step further from a pulled tile leans, against the one nearer: a third, as a
- * notification two rows away leans against one next to it.
- */
-private const val INDIRECT_SHARE = 1f / 3
+/** How much more weakly a tile one step further from a pulled tile leans than the nearer one. */
+private const val NEIGHBOUR_DECAY = 0.5f
 
-/** What letting go of a tile does. */
-internal enum class DropZone { NONE, DELETE, UNFAVORITE }
+/** How many steps from a pulled tile the tiles around it lean. */
+private const val NEIGHBOUR_STEPS = 3
 
 /**
  * Where a tile goes, with [x] measured from the start edge of the favorites, so the same
@@ -245,10 +230,12 @@ internal class RowHeights(private val heights: IntArray, private val gap: Int) {
 internal class TileCorners(val topStart: Boolean, val topEnd: Boolean, val bottomStart: Boolean, val bottomEnd: Boolean)
 
 /**
- * Lays out tiles of the widths [widthOf] gives, in rows [available] wide, each tile keeping its
- * width wherever it goes. Without [columns], each row takes as many tiles as fit and ends after the
- * last. With [columns], each tile spans as many columns as its width needs, so tiles line up in
- * columns, and a row ends where the next tile no longer fits.
+ * Lays out tiles of the widths [widthOf] gives, in rows [available] wide. Without [columns], each
+ * row takes as many tiles as fit, and every row but the last shares what it has left over evenly
+ * among its tiles, so it is filled; the last keeps its tiles at their own widths, as the last line
+ * of justified text does, rather than stretching a few tiles across the whole width. With
+ * [columns], each tile spans as many columns as its width needs, so tiles line up in columns, and
+ * a row ends where the next tile no longer fits.
  */
 internal fun arrangeTiles(
     keys: List<String>,
@@ -269,16 +256,31 @@ internal fun arrangeTiles(
     }
     var row = mutableListOf<Pair<String, IntRange>>()
     if (columns == null) {
-        var x = 0
+        val rows = mutableListOf<MutableList<Pair<String, Int>>>()
+        var used = 0
         keys.forEach { key ->
             val width = widthOf(key).coerceIn(1, available)
-            if (row.isNotEmpty() && x + width > available) {
-                addRow(row)
-                row = mutableListOf()
-                x = 0
+            val last = rows.lastOrNull()
+            if (last != null && used + gap + width <= available) {
+                last += key to width
+                used += gap + width
+            } else {
+                rows += mutableListOf(key to width)
+                used = width
             }
-            row += key to (x..x + width)
-            x += width + gap
+        }
+        rows.forEachIndexed { index, tiles ->
+            val spare = if (index == rows.lastIndex) 0 else available - tiles.sumOf { it.second } - gap * (tiles.size - 1)
+            var x = 0
+            addRow(
+                tiles.mapIndexed { i, (key, width) ->
+                    // The pixels that do not divide evenly go to the first tiles, one each.
+                    val share = spare / tiles.size + if (i < spare % tiles.size) 1 else 0
+                    val start = x
+                    x += width + share + gap
+                    key to (start..start + width + share)
+                },
+            )
         }
     } else {
         val pitch = (available + gap).toFloat() / columns
@@ -294,8 +296,8 @@ internal fun arrangeTiles(
             row += key to (edge(column)..edge(column + span) - gap)
             column += span
         }
+        if (row.isNotEmpty()) addRow(row)
     }
-    if (row.isNotEmpty()) addRow(row)
     return TileArrangement(spots, rowEnds.size, rowEnds.toIntArray(), gap)
 }
 
@@ -303,51 +305,64 @@ internal fun arrangeTiles(
 internal fun gridColumns(available: Int, gap: Int, column: Int): Int = max(2, (available + gap) / (column + gap))
 
 /**
- * How the tile [key] stands to a pulled tile, a notification's swipe carried over to two
- * dimensions. The tiles next to it in its row lean most, those in the rows above and below that
- * overlap it [VERTICAL_SHARE] as much, and those one step further, the next but one in its row,
- * the nearest at its corners and those two rows away that overlap it, [INDIRECT_SHARE] as much
- * again. Each rounds on the sides facing it, and the nearest stay rounded there once it is loose.
+ * How the tiles stand to the pulled tile [pulled], a notification's swipe carried over to two
+ * dimensions. Tiles that share an edge are neighbours: those beside each other in a row, and those
+ * in rows next to each other that overlap. The tiles next to the pulled one are a step from it,
+ * their neighbours two, and so on to [NEIGHBOUR_STEPS]. A tile leans by [NEAR_TILE_SHARE], less by
+ * [VERTICAL_SHARE] for each edge above or below crossed on the way to it, and by [NEIGHBOUR_DECAY]
+ * for each step past the first, along whichever way pulls it most. It rounds on the sides facing
+ * the pulled tile, as strongly as its steps from it make it, and the nearest stay rounded there
+ * once it is loose. Only the first [rowsShown] rows take part.
  */
-internal fun tileRelation(pull: Pull, key: String, arrangement: TileArrangement, rowsShown: Int): Relation? {
-    if (pull.group != TILES_GROUP) return null
-    if (pull.key == key) return Relation(0f, 1f, Sides.ALL, Sides.ALL)
-    val pulled = arrangement.byKey[pull.key] ?: return null
-    val tile = arrangement.byKey[key] ?: return null
-    if (tile.row >= rowsShown) return null
-    val rows = tile.row - pulled.row
-    val across = when {
-        tile.x + tile.width <= pulled.x -> Sides.END
-        tile.x >= pulled.x + pulled.width -> Sides.START
-        else -> 0
+internal fun tileNeighbours(pulled: String, arrangement: TileArrangement, rowsShown: Int): Map<String, Relation> {
+    val origin = arrangement.byKey[pulled] ?: return emptyMap()
+    val rows = arrangement.spots.filter { it.row < rowsShown }.groupBy { it.row }
+    val edges = HashMap<String, MutableList<Pair<TileSpot, Float>>>()
+    fun link(a: TileSpot, b: TileSpot, pull: Float) {
+        edges.getOrPut(a.key) { mutableListOf() } += b to pull
+        edges.getOrPut(b.key) { mutableListOf() } += a to pull
     }
-    val upDown = when {
-        rows < 0 -> Sides.BOTTOM
-        rows > 0 -> Sides.TOP
-        else -> 0
-    }
-    val overlaps = tile.x < pulled.x + pulled.width && pulled.x < tile.x + tile.width
-    val near = NEAR_SHARE
-    val vertical = NEAR_SHARE * VERTICAL_SHARE
-    return when (abs(rows)) {
-        0 -> {
-            val inRow = arrangement.inRow(tile.row)
-            when (abs(inRow.indexOf(tile) - inRow.indexOf(pulled))) {
-                1 -> Relation(near, NEAR_ROUNDNESS, across, across)
-                2 -> Relation(near * INDIRECT_SHARE, FAR_ROUNDNESS, across, 0)
-                else -> null
+    rows.forEach { (row, tiles) ->
+        tiles.zipWithNext { a, b -> link(a, b, 1f) }
+        rows[row + 1]?.forEach { below ->
+            tiles.forEach { above ->
+                if (above.x < below.x + below.width && below.x < above.x + above.width) link(above, below, VERTICAL_SHARE)
             }
         }
-        1 -> if (overlaps) {
-            Relation(vertical, NEAR_ROUNDNESS, upDown, upDown)
-        } else {
-            val inRow = arrangement.inRow(tile.row)
-            val corner = tile === inRow.lastOrNull { it.x + it.width <= pulled.x } ||
-                tile === inRow.firstOrNull { it.x >= pulled.x + pulled.width }
-            if (corner) Relation(vertical * INDIRECT_SHARE, FAR_ROUNDNESS, upDown or across, 0) else null
+    }
+    val strength = HashMap<String, Float>()
+    val steps = HashMap<String, Int>()
+    var reached = mapOf(pulled to 1f)
+    for (step in 1..NEIGHBOUR_STEPS) {
+        val next = HashMap<String, Float>()
+        reached.forEach { (from, pull) ->
+            edges[from]?.forEach { (tile, across) ->
+                if (tile.key == pulled) return@forEach
+                val value = pull * across * if (step == 1) 1f else NEIGHBOUR_DECAY
+                steps.putIfAbsent(tile.key, step)
+                if (value > (strength[tile.key] ?: 0f)) {
+                    strength[tile.key] = value
+                    next[tile.key] = value
+                }
+            }
         }
-        2 -> if (overlaps) Relation(vertical * INDIRECT_SHARE, FAR_ROUNDNESS, upDown, 0) else null
-        else -> null
+        reached = next
+    }
+    return strength.mapValues { (key, value) ->
+        val tile = arrangement.byKey.getValue(key)
+        val across = when {
+            tile.x + tile.width <= origin.x -> Sides.END
+            tile.x >= origin.x + origin.width -> Sides.START
+            else -> 0
+        }
+        val upDown = when {
+            tile.row < origin.row -> Sides.BOTTOM
+            tile.row > origin.row -> Sides.TOP
+            else -> 0
+        }
+        val step = steps.getValue(key)
+        val sides = upDown or across
+        Relation(NEAR_TILE_SHARE * value, NEIGHBOUR_ROUNDNESS[step - 1], sides, if (step == 1) sides else 0)
     }
 }
 
@@ -357,21 +372,15 @@ internal fun tileRelation(pull: Pull, key: String, arrangement: TileArrangement,
  * works on what is on screen.
  */
 @Stable
-internal class TileBoard(private val haptics: Haptics, private val swipeHaptics: SwipeHaptics) {
+internal class TileBoard(private val haptics: Haptics) {
     /** The favorites' contents in the order the tiles show them while one is in hand. */
     val order = mutableStateListOf<String>()
-
-    /** Favorites let go of to leave, gone from the tiles before the history reports them gone. */
-    val removing = mutableStateListOf<String>()
 
     /** Every favorite shown and not yet faded out, so one that leaves can fade where it was. */
     val retained = mutableStateMapOf<String, HistoryEntry>()
 
     /** Where each tile was last placed, where one that leaves fades out. */
     val lastRects = HashMap<String, Rect>()
-
-    /** What a tile let go of to leave was doing, so it fades out looking as it did when let go. */
-    val departed = HashMap<String, DropZone>()
 
     /**
      * Tiles deleted while their deletion can still be undone. One swiped away stays, out of sight
@@ -394,8 +403,6 @@ internal class TileBoard(private val haptics: Haptics, private val swipeHaptics:
     /** Whether the tile in hand has moved far enough to be dragged rather than only held. */
     var moved by mutableStateOf(false)
         private set
-    var zone by mutableStateOf(DropZone.NONE)
-        private set
     private var grab = Offset.Zero
     private var travel = Offset.Zero
     private var settling: Job? = null
@@ -412,7 +419,6 @@ internal class TileBoard(private val haptics: Haptics, private val swipeHaptics:
     var gap = 0
     var columns: Int? = null
     var rowsShown = 0
-    var outMargin = 0f
 
     /**
      * How tall each row of tiles comes out as the list item lays its tiles out, the same as a
@@ -421,6 +427,24 @@ internal class TileBoard(private val haptics: Haptics, private val swipeHaptics:
     var heights = RowHeights(IntArray(0), 0)
 
     fun arrange(keys: List<String> = this.keys) = arrangeTiles(keys, { widths[it] ?: 0 }, available, gap, columns)
+
+    private var neighboursOf: Triple<Pull, TileArrangement, Int>? = null
+    private var neighbours: Map<String, Relation> = emptyMap()
+
+    /**
+     * How [tile] stands to [pull] among [arrangement], or null where it takes no part. The tiles
+     * around a pull are worked out once for it, and looked up on every step of the finger.
+     */
+    fun relation(pull: Pull, tile: String, arrangement: TileArrangement): Relation? {
+        if (pull.group != TILES_GROUP) return null
+        if (pull.key == tile) return Relation(0f, 1f, Sides.ALL, Sides.ALL)
+        val worked = neighboursOf
+        if (worked == null || worked.first !== pull || worked.second !== arrangement || worked.third != rowsShown) {
+            neighbours = tileNeighbours(pull.key as? String ?: return null, arrangement, rowsShown)
+            neighboursOf = Triple(pull, arrangement, rowsShown)
+        }
+        return neighbours[tile]
+    }
 
     /** Picks up the tile [tile], held at [grab] from its start and top edges. */
     fun pickUp(tile: String, grab: Offset) {
@@ -439,7 +463,6 @@ internal class TileBoard(private val haptics: Haptics, private val swipeHaptics:
         lastOver = tile
         lifted = true
         moved = false
-        zone = DropZone.NONE
     }
 
     /** Moves the tile in hand by [delta], from the start edge; past [slop] it is being dragged. */
@@ -458,27 +481,10 @@ internal class TileBoard(private val haptics: Haptics, private val swipeHaptics:
         follow()
     }
 
-    /**
-     * Marks what letting go would do where the finger is, with a click on crossing into or out of
-     * a place that removes the tile, and otherwise moves the tile into the place it is held over.
-     */
+    /** Moves the tile in hand into the place it is held over. */
     private fun follow() {
         val tile = key ?: return
         val finger = at + grab
-        val now = when {
-            finger.y < -outMargin || finger.y > heights.total(rowsShown) + outMargin -> DropZone.UNFAVORITE
-            finger.x < 0f -> DropZone.DELETE
-            finger.x > available -> DropZone.UNFAVORITE
-            else -> DropZone.NONE
-        }
-        if (now != zone) {
-            zone = now
-            swipeHaptics.threshold()
-        }
-        if (now != DropZone.NONE) {
-            lastOver = null
-            return
-        }
         val hover = arrange().hover(tile, keys, finger, rowsShown, heights)
         val over = hover?.over ?: tile
         if (over == lastOver) return
@@ -494,11 +500,10 @@ internal class TileBoard(private val haptics: Haptics, private val swipeHaptics:
     }
 
     /**
-     * Lets go of the tile in hand. One only held stays where it is; one dragged to a place that
-     * removes it fades out where it was let go while [onDrop] removes it; any other glides into its
-     * place on [spec] once [onDrop] has kept its new order.
+     * Lets go of the tile in hand. One only held stays where it is; one dragged glides into its
+     * place on [spec] once [onReorder] has kept the new order.
      */
-    fun drop(scope: CoroutineScope, spec: FiniteAnimationSpec<Rect>, onDrop: (String, DropZone) -> Unit) {
+    fun drop(scope: CoroutineScope, spec: FiniteAnimationSpec<Rect>, onReorder: () -> Unit) {
         val tile = key ?: return
         lifted = false
         lastOver = null
@@ -506,18 +511,7 @@ internal class TileBoard(private val haptics: Haptics, private val swipeHaptics:
             key = null
             return
         }
-        val dropped = zone
-        zone = DropZone.NONE
-        if (dropped != DropZone.NONE) {
-            departed[tile] = dropped
-            lastRects[tile] = Rect(at, size)
-            removing.add(tile)
-            key = null
-            moved = false
-            onDrop(tile, dropped)
-            return
-        }
-        onDrop(tile, DropZone.NONE)
+        onReorder()
         val arrangement = arrange()
         val target = arrangement.byKey[tile]?.let { arrangement.rectOf(it, heights) }
         settling = scope.launch {
@@ -538,7 +532,6 @@ internal class TileBoard(private val haptics: Haptics, private val swipeHaptics:
         undoable.remove(tile)
         retained.remove(tile)
         lastRects.remove(tile)
-        departed.remove(tile)
     }
 }
 
@@ -562,13 +555,21 @@ private class TileShow(visible: Boolean) {
 }
 
 /**
- * Where a tile in its place is drawn while it moves to a new place. The tiles are laid out by hand,
- * so each follows its place from where it is drawn, as a lazy list's items do, rather than from
- * where a separate pass of the layout might put it.
+ * Where a tile in its place is drawn, and how wide, while it moves to a new place, whose width can
+ * differ as rows share out what they have left. The tiles are laid out by hand, so each follows its
+ * place from where it is drawn, as a lazy list's items do, rather than from where a separate pass
+ * of the layout might put it.
  */
-private class TileMotion(at: Offset) {
-    val offset: Animatable<Offset, AnimationVector2D> = Animatable(at, Offset.VectorConverter)
+private class TileMotion(at: Rect) {
+    val rect: Animatable<Rect, AnimationVector4D> = Animatable(at, Rect.VectorConverter)
     var target = at
+
+    /** Heads for [place] from wherever the tile is drawn, unless it is already heading there. */
+    fun follow(place: Rect, scope: CoroutineScope, spec: FiniteAnimationSpec<Rect>) {
+        if (place == target) return
+        target = place
+        scope.launch { rect.animateTo(place, spec) }
+    }
 }
 
 /**
@@ -612,9 +613,9 @@ private class HeightAnimationElement(val spec: FiniteAnimationSpec<Int>) : Modif
  * The favorites as tiles. A tap opens one, and a swipe deletes it or takes it out of the favorites
  * as a swipe on a row does, the tiles around it leaning with it. A long press lifts it and opens
  * its menu, unfolding the favorites first, and dragging it then closes the menu and moves it into
- * the place of the tile it is held over; let go beside or outside the favorites, it is deleted or
- * leaves them, as [onDrop] decides. Tiles slide into their new places, and come and go fading and
- * growing or shrinking, on the theme's motion.
+ * the place of the tile it is held over, [onReorder] keeping the order once it is let go. Tiles
+ * slide into their new places, and come and go fading and growing or shrinking, on the theme's
+ * motion.
  */
 @Composable
 internal fun FavoriteTiles(
@@ -625,7 +626,7 @@ internal fun FavoriteTiles(
     actions: EntryActions,
     onShift: (HistoryEntry, Int) -> Unit,
     onLift: () -> Unit,
-    onDrop: (HistoryEntry, DropZone) -> Unit,
+    onReorder: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -637,7 +638,7 @@ internal fun FavoriteTiles(
     val flyMargin = with(density) { FLY_MARGIN.toPx() }
     val motion = MaterialTheme.motionScheme
     val settleSpec = motion.fastSpatialSpec<Rect>()
-    val moveSpec = motion.defaultSpatialSpec<Offset>()
+    val moveSpec = motion.defaultSpatialSpec<Rect>()
     val heightSpec = motion.defaultSpatialSpec<Int>()
     val showSpec = motion.defaultEffectsSpec<Float>()
     val growSpec = motion.defaultSpatialSpec<Float>()
@@ -646,9 +647,8 @@ internal fun FavoriteTiles(
     // colour and in the outline of the tile in hand.
     val zoneColor = colors.surfaceContainerLow
     val zoneShape = ListItemDefaults.shapes().draggedShape
-    val drop by rememberUpdatedState(onDrop)
+    val reorder by rememberUpdatedState(onReorder)
     val lift by rememberUpdatedState(onLift)
-    val current by rememberUpdatedState(favorites)
     val laidOut by rememberUpdatedState(arrangement)
 
     val present = board.keys.mapNotNull { favorites[it] }
@@ -666,7 +666,7 @@ internal fun FavoriteTiles(
     val ghost = remember { Animatable(0f) }
     // Kept apart from the state the layout reads, as the layout sets it.
     val ghostMotion = remember { arrayOfNulls<TileMotion>(1) }
-    val ghostShown = board.key != null && board.lifted && board.moved && board.zone == DropZone.NONE
+    val ghostShown = board.key != null && board.lifted && board.moved
     LaunchedEffect(ghostShown) { ghost.animateTo(if (ghostShown) 1f else 0f, showSpec) }
 
     fun visible(tile: String, gone: Boolean): Boolean {
@@ -697,7 +697,7 @@ internal fun FavoriteTiles(
                     val tile = entry.text
                     val isVisible = visible(tile, gone)
                     val progress = shown.getOrPut(tile) { TileShow(isVisible && tile in initial) }
-                    val magnet = rememberMagnet(list, detachAt) { pull -> tileRelation(pull, tile, laidOut, board.rowsShown) }
+                    val magnet = rememberMagnet(list, detachAt) { pull -> board.relation(pull, tile, laidOut) }
                     val swipe = rememberEntrySwipe(
                         entry = entry,
                         group = TILES_GROUP,
@@ -730,13 +730,12 @@ internal fun FavoriteTiles(
                     }
                     val active by rememberUpdatedState(isVisible)
                     val dragged = board.key == tile
-                    val departedAs = if (gone) board.departed[tile] else null
-                    val zone = if (dragged) board.zone else departedAs ?: DropZone.NONE
                     val spot = arrangement.byKey[tile]
                     val corners = if (spot != null && !gone) arrangement.cornersOf(spot, board.rowsShown) else ALL_INNER
                     val shape = tileShape(corners, magnet)
                     val index = board.keys.indexOf(tile)
                     var menu by remember { mutableStateOf(false) }
+                    var touch by remember { mutableStateOf(Offset.Zero) }
                     // A long press that lifts the tile is not also a tap when the finger lifts
                     // without moving; each new touch starts unmarked.
                     val longPressed = remember { booleanArrayOf(false) }
@@ -748,11 +747,9 @@ internal fun FavoriteTiles(
                                 scaleY = progress.scale.value
                             }
                             .entrySwipe(swipe, enabled = isVisible && board.key == null)
-                            .pointerInput(Unit) {
-                                awaitEachGesture {
-                                    awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                                    longPressed[0] = false
-                                }
+                            .trackTouch {
+                                touch = it
+                                longPressed[0] = false
                             }
                             .pointerInput(tile, rtl) {
                                 detectDragGesturesAfterLongPress(
@@ -772,8 +769,8 @@ internal fun FavoriteTiles(
                                         board.drag(if (rtl) Offset(-amount.x, amount.y) else amount, viewConfiguration.touchSlop)
                                         if (!wasMoved && board.moved) menu = false
                                     },
-                                    onDragEnd = { board.drop(scope, settleSpec) { k, z -> current[k]?.let { drop(it, z) } } },
-                                    onDragCancel = { board.drop(scope, settleSpec) { k, z -> current[k]?.let { drop(it, z) } } },
+                                    onDragEnd = { board.drop(scope, settleSpec) { reorder() } },
+                                    onDragCancel = { board.drop(scope, settleSpec) { reorder() } },
                                 )
                             },
                     ) {
@@ -786,8 +783,8 @@ internal fun FavoriteTiles(
                             // Kept with the tile, so one fading out still shows its name.
                             title = remember(entry.label, entry.format) { tileTitle(context, entry) },
                             shape = shape,
-                            lifted = (dragged && board.lifted) || departedAs != null,
-                            zone = zone,
+                            lifted = dragged && board.lifted,
+                            raised = swipe.pull != null || swipe.acting,
                             onClick = {
                                 if (!longPressed[0] && active) actions.onOpen(entry)
                             },
@@ -806,7 +803,7 @@ internal fun FavoriteTiles(
                                     )
                                 },
                         )
-                        EntryMenu(entry = entry, expanded = menu && !gone, onDismiss = { menu = false }, actions = actions)
+                        EntryMenu(entry = entry, at = touch, expanded = menu && !gone, onDismiss = { menu = false }, actions = actions)
                     }
                 }
             }
@@ -816,18 +813,19 @@ internal fun FavoriteTiles(
         // The drop zone comes after the tiles.
         val measurables = all.subList(0, tiles.size)
         val zone = all[tiles.size]
-        // Tiles in their places take the height the list item gives itself, as the rows below do,
-        // and each row is as tall as its tallest tile. Only a name too long for a whole row wraps to
-        // a second line, and such a tile has its row to itself, so a row never holds tiles of
-        // different heights. The tile in hand and those fading out keep the size they were drawn
-        // at, and a row holding only the tile in hand keeps its height.
+        // Tiles in their places take the height the list item gives itself at the width they are
+        // drawn at, as the rows below do, and each row is as tall as its tallest tile. Only a name
+        // too long for a whole row wraps to a second line, and such a tile has its row to itself,
+        // so a row never holds tiles of different heights. The tile in hand and those fading out
+        // keep the size they were drawn at, and a row holding only the tile in hand keeps its height.
         val placeables = arrayOfNulls<Placeable>(measurables.size)
         val tallest = IntArray(arrangement.rows)
         measurables.forEachIndexed { i, measurable ->
             val (entry, gone) = tiles[i]
             if (gone || entry.text == board.key) return@forEachIndexed
             val spot = arrangement.byKey[entry.text] ?: return@forEachIndexed
-            placeables[i] = measurable.measure(Constraints(minWidth = spot.width, maxWidth = spot.width))
+            val width = motions[entry.text]?.rect?.value?.width?.roundToInt() ?: spot.width
+            placeables[i] = measurable.measure(Constraints(minWidth = width, maxWidth = width))
                 .also { tallest[spot.row] = max(tallest[spot.row], it.height) }
         }
         board.key?.let { arrangement.byKey[it] }?.let { spot ->
@@ -835,54 +833,55 @@ internal fun FavoriteTiles(
         }
         val heights = RowHeights(tallest, arrangement.gap)
         board.heights = heights
+        // Where each tile is drawn: a tile in its place glides to a new one, in place and width,
+        // from where it is drawn; the tile in hand and one fading out are drawn where they are, and
+        // a tile set down starts afresh in its place.
         val placed = measurables.mapIndexed { i, measurable ->
             val (entry, gone) = tiles[i]
             val tile = entry.text
-            val rect = when {
-                tile == board.key -> Rect(board.at, board.size)
-                gone -> board.lastRects[tile]
-                else -> arrangement.byKey[tile]?.let { arrangement.rectOf(it, heights) }
+            val drawn = when {
+                tile == board.key -> {
+                    motions.remove(tile)
+                    Rect(board.at, board.size)
+                }
+                gone -> {
+                    motions.remove(tile)
+                    board.lastRects[tile]
+                }
+                else -> arrangement.byKey[tile]?.let { spot ->
+                    val place = arrangement.rectOf(spot, heights)
+                    val moving = motions.getOrPut(tile) { TileMotion(place) }
+                    moving.follow(place, scope, moveSpec)
+                    moving.rect.value
+                }
             } ?: return@mapIndexed null
             val placeable = placeables[i] ?: measurable.measure(
-                Constraints.fixed(rect.width.roundToInt().coerceAtLeast(0), rect.height.roundToInt().coerceAtLeast(0)),
+                Constraints.fixed(drawn.width.roundToInt().coerceAtLeast(0), drawn.height.roundToInt().coerceAtLeast(0)),
             )
-            placeable to rect
+            placeable to drawn.topLeft
         }
-        // The drop zone follows the place of the tile in hand as the other tiles do theirs.
-        val held = board.key?.let { arrangement.byKey[it] }?.let { arrangement.rectOf(it, heights) }
-        val zonePlaceable = held?.let {
-            zone.measure(Constraints.fixed(board.size.width.roundToInt(), board.size.height.roundToInt()))
+        // The drop zone marks where the tile in hand will land, as large as its place there, and
+        // follows that place as the tiles do theirs; appearing, it starts in the place.
+        val landing = board.key?.let { arrangement.byKey[it] }?.let { arrangement.rectOf(it, heights) }
+        val zoneDrawn = landing?.let { place ->
+            val moving = ghostMotion[0]?.takeIf { ghost.value > 0f } ?: TileMotion(place).also { ghostMotion[0] = it }
+            moving.follow(place, scope, moveSpec)
+            moving.rect.value
+        }
+        val zonePlaceable = zoneDrawn?.let {
+            zone.measure(Constraints.fixed(it.width.roundToInt().coerceAtLeast(0), it.height.roundToInt().coerceAtLeast(0)))
         }
         layout(constraints.maxWidth, heights.total(board.rowsShown)) {
-            if (held != null && zonePlaceable != null) {
-                // Appearing, it starts in the place; shown, it glides to the next one.
-                val moving = ghostMotion[0]?.takeIf { ghost.value > 0f } ?: TileMotion(held.topLeft).also { ghostMotion[0] = it }
-                if (moving.target != held.topLeft) {
-                    moving.target = held.topLeft
-                    scope.launch { moving.offset.animateTo(held.topLeft, moveSpec) }
-                }
-                if (ghost.value > 0f) zonePlaceable.placeRelative(moving.offset.value.x.roundToInt(), moving.offset.value.y.roundToInt())
+            if (zoneDrawn != null && zonePlaceable != null && ghost.value > 0f) {
+                zonePlaceable.placeRelative(zoneDrawn.left.roundToInt(), zoneDrawn.top.roundToInt())
             }
             placed.forEachIndexed { i, item ->
-                val (placeable, rect) = item ?: return@forEachIndexed
+                val (placeable, at) = item ?: return@forEachIndexed
                 val (entry, gone) = tiles[i]
                 val tile = entry.text
-                // A tile in its place glides to a new one from where it is drawn; the tile in hand
-                // and one fading out are drawn where they are, and a tile set down starts afresh.
-                val at = if (tile == board.key || gone) {
-                    motions.remove(tile)
-                    rect.topLeft
-                } else {
-                    val moving = motions.getOrPut(tile) { TileMotion(rect.topLeft) }
-                    if (moving.target != rect.topLeft) {
-                        moving.target = rect.topLeft
-                        scope.launch { moving.offset.animateTo(rect.topLeft, moveSpec) }
-                    }
-                    moving.offset.value
-                }
                 // Once faded out, a hidden tile is not placed, so it takes no touches.
                 if (!visible(tile, gone) && (shown[tile]?.alpha?.value ?: 0f) == 0f) return@forEachIndexed
-                if (!gone) board.lastRects[tile] = Rect(at, rect.size)
+                if (!gone) board.lastRects[tile] = Rect(at, Size(placeable.width.toFloat(), placeable.height.toFloat()))
                 // The tile in hand and one being swiped, flying off or flying back are what the user
                 // is doing, so they are drawn over every other tile.
                 val swiped = swipes[tile]?.let { it.pull != null || it.acting } == true
@@ -896,6 +895,9 @@ internal fun FavoriteTiles(
     }
 }
 
+/** Level 4, the elevation a list item takes while dragged. */
+private val SWIPED_ELEVATION = 8.dp
+
 /** How small a tile is as it fades out or before it fades in. */
 private const val HIDDEN_SCALE = 0.8f
 
@@ -903,9 +905,8 @@ private val ALL_INNER = TileCorners(topStart = false, topEnd = false, bottomStar
 
 /**
  * One favorite as a tile: its icon, and its name over its kind, in the list item's own padding,
- * colours, press shape and dragged look. Held over a place that removes it, it takes the colours
- * of what letting go would do, as a swiped row shows behind it: the error colours to delete, and
- * the primary colours of other entries to leave the favorites.
+ * colours, press shape and dragged look. While [raised], swiped, it takes the dragged elevation. Lifted, the tile turns tertiary container itself and its
+ * avatar blends into it, leaving the icon in the colour a reorderable list gives a dragged item's.
  */
 @Composable
 private fun FavoriteTile(
@@ -913,7 +914,7 @@ private fun FavoriteTile(
     title: String,
     shape: Shape,
     lifted: Boolean,
-    zone: DropZone,
+    raised: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -930,39 +931,6 @@ private fun FavoriteTile(
     val payload = remember(entry.text, entry.format) { Classifier.classify(entry.text, entry.format) }
     val kind = remember(payload) { Cards.kindOf(payload) }
     val colors = MaterialTheme.colorScheme
-    val effects = MaterialTheme.motionScheme.defaultEffectsSpec<Color>()
-    val iconContainer by animateColorAsState(
-        when {
-            zone == DropZone.DELETE -> colors.error
-            zone == DropZone.UNFAVORITE -> colors.primary
-            // Lifted, the tile turns tertiary container itself and the avatar blends into it,
-            // leaving its icon in the colour a reorderable list gives a dragged item's icon.
-            else -> colors.tertiaryContainer
-        },
-        effects,
-        label = "tile-icon-container",
-    )
-    val iconColor by animateColorAsState(
-        when {
-            zone == DropZone.DELETE -> colors.onError
-            zone == DropZone.UNFAVORITE -> colors.onPrimary
-            else -> colors.onTertiaryContainer
-        },
-        effects,
-        label = "tile-icon",
-    )
-    val (container, content) = when (zone) {
-        DropZone.DELETE -> colors.errorContainer to colors.onErrorContainer
-        DropZone.UNFAVORITE -> colors.primaryContainer to colors.onPrimaryContainer
-        DropZone.NONE -> Color.Unspecified to Color.Unspecified
-    }
-    val icon = when (zone) {
-        DropZone.DELETE -> R.drawable.ic_delete
-        DropZone.UNFAVORITE -> R.drawable.ic_star
-        DropZone.NONE -> kind.icon
-    }
-    val spatial = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
-    val fade = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
     ListItem(
         onClick = onClick,
         modifier = modifier,
@@ -973,26 +941,19 @@ private fun FavoriteTile(
                 modifier = Modifier
                     .size(TILE_ICON)
                     .clip(MaterialShapes.Cookie4Sided.toShape())
-                    .background(iconContainer),
+                    .background(colors.tertiaryContainer),
                 contentAlignment = Alignment.Center,
             ) {
-                AnimatedContent(
-                    targetState = icon,
-                    transitionSpec = { (scaleIn(spatial, initialScale = 0.6f) + fadeIn(fade)) togetherWith fadeOut(fade) },
-                    label = "tile-icon-glyph",
-                ) { glyph ->
-                    Icon(painterResource(glyph), contentDescription = null, tint = iconColor, modifier = Modifier.size(20.dp))
-                }
+                Icon(painterResource(kind.icon), contentDescription = null, tint = colors.onTertiaryContainer, modifier = Modifier.size(20.dp))
             }
         },
         supportingContent = { Text(stringResource(kind.label), maxLines = 1, overflow = TextOverflow.Ellipsis) },
         shapes = ListItemDefaults.shapes(shape = shape),
-        colors = ListItemDefaults.colors(
-            containerColor = colors.surfaceContainer,
-            contentColor = colors.onSurface,
-            draggedContainerColor = container,
-            draggedContentColor = content,
-        ),
+        colors = ListItemDefaults.colors(containerColor = colors.surfaceContainer, contentColor = colors.onSurface),
+        // A tile swiped across the tiles beside it is raised as a dragged list item is, so its
+        // shadow keeps it apart from tiles of the same colour it passes over; the list item moves
+        // between its elevations on its own spatial motion.
+        elevation = ListItemDefaults.elevation(elevation = if (raised) SWIPED_ELEVATION else 0.dp),
     ) {
         // Two lines at most and broken as a history row's title is, which only a name too long
         // for a whole row comes to.

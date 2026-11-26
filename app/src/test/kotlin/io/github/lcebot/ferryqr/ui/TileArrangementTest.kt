@@ -19,12 +19,13 @@ class TileArrangementTest {
     private val even = RowHeights(intArrayOf(10, 10), 2)
 
     @Test
-    fun compactRowsKeepEachTileItsWidth() {
+    fun compactRowsFillTheWidthButTheLast() {
         val tiles = compact(listOf("a", "b", "c", "d"))
         // 30 and 40 fit with a gap; 50 more would not, so it starts the next row with 20.
         assertEquals(2, tiles.rows)
         assertEquals(listOf("a", "b"), tiles.inRow(0).map { it.key })
-        assertEquals(listOf(0 to 30, 32 to 40, 0 to 50, 52 to 20), tiles.spots.map { it.x to it.width })
+        // The first row shares its 28 left over, 14 each; the last keeps its tiles' own widths.
+        assertEquals(listOf(0 to 44, 46 to 54, 0 to 50, 52 to 20), tiles.spots.map { it.x to it.width })
     }
 
     @Test
@@ -73,7 +74,7 @@ class TileArrangementTest {
         val keys = listOf("a", "b", "c", "d")
         val tiles = compact(keys)
         // Anywhere over "b", "d" takes its place, and "b" moves aside toward where "d" was.
-        listOf(33f, 70f).forEach { x ->
+        listOf(50f, 95f).forEach { x ->
             val hover = tiles.hover("d", keys, Offset(x, 5f), tiles.rows, even)!!
             assertEquals("b", hover.over)
             assertEquals(1, hover.at)
@@ -88,9 +89,9 @@ class TileArrangementTest {
     fun aHeldTilePastTheEndOfARowFollowsItsLast() {
         val keys = listOf("a", "b", "c", "d")
         val tiles = compact(keys)
-        val hover = tiles.hover("d", keys, Offset(90f, 5f), tiles.rows, even)!!
-        assertEquals("end:0", hover.over)
-        assertEquals(2, hover.at)
+        val hover = tiles.hover("a", keys, Offset(90f, 17f), tiles.rows, even)!!
+        assertEquals("end:1", hover.over)
+        assertEquals(3, hover.at)
         // With one row shown, a finger far below still reads as the first row.
         assertEquals(1, tiles.hover("a", keys, Offset(99f, 500f), 1, even)!!.at)
     }
@@ -106,5 +107,24 @@ class TileArrangementTest {
         // A row the measurement has not reached yet takes the tallest.
         assertEquals(20, heights.height(3))
         assertEquals(46, heights.top(3))
+    }
+
+    @Test
+    fun neighboursFollowSharedEdges() {
+        // "a" and "b" share the first row; below, "c" overlaps "a" and "d" overlaps "b".
+        val tiles = grid(listOf("a", "b", "c", "d"))
+        val near = tileNeighbours("a", tiles, tiles.rows)
+        assertEquals(setOf("b", "c", "d"), near.keys)
+        // Beside it leans most, below it less, and "d", two steps away either way, less again.
+        assertEquals(0.21f, near.getValue("b").share, 0.0001f)
+        assertEquals(0.21f * 0.6f, near.getValue("c").share, 0.0001f)
+        assertEquals(0.21f * 0.6f * 0.5f, near.getValue("d").share, 0.0001f)
+        // Each rounds on the sides facing "a", and only the nearest stay rounded once it is loose.
+        assertEquals(Sides.START, near.getValue("b").sides)
+        assertEquals(Sides.TOP, near.getValue("c").sides)
+        assertEquals(Sides.TOP or Sides.START, near.getValue("d").sides)
+        assertEquals(0, near.getValue("d").looseSides)
+        // Folded to its first row, only "b" takes part.
+        assertEquals(setOf("b"), tileNeighbours("a", tiles, 1).keys)
     }
 }

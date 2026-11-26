@@ -42,6 +42,10 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.calculateEndPadding
@@ -79,6 +83,10 @@ import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
+import androidx.collection.intListOf
+import kotlin.math.roundToInt
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.material3.MenuAnchorPosition
 import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
@@ -220,12 +228,7 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
     var naming by remember { mutableStateOf<HistoryEntry?>(null) }
     var suggestTiles by remember { mutableStateOf(false) }
     var tilesSuggested by remember { mutableStateOf(prefs.getBoolean(PREF_TILES_SUGGESTED, false)) }
-    val swipeHaptics = rememberSwipeHaptics(haptics)
-    val board = remember(haptics, swipeHaptics) { TileBoard(haptics, swipeHaptics) }
-    // A tile let go of to leave shows as leaving until the history no longer counts it a favorite.
-    LaunchedEffect(favorites) {
-        board.removing.retainAll { text -> text in favoritesByKey }
-    }
+    val board = remember(haptics) { TileBoard(haptics) }
     // While reordering, the favorites follow [order], the contents in their new order, which is saved when done.
     var reordering by remember { mutableStateOf(false) }
     val order = remember { mutableStateListOf<String>() }
@@ -345,16 +348,11 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
                     max(name, kind) + chrome
                 }
             }
-            board.keys = if (board.key != null) {
-                board.order.filter { it in favoritesByKey && it !in board.removing }
-            } else {
-                favorites.map { it.text }.filter { it !in board.removing }
-            }
+            board.keys = if (board.key != null) board.order.filter { it in favoritesByKey } else favorites.map { it.text }
             board.widths = tileWidths
             board.available = available
             board.gap = gap
             board.columns = if (layout == FavoriteLayout.GRID) gridColumns(available, gap, with(density) { GRID_COLUMN.roundToPx() }) else null
-            board.outMargin = with(density) { TILE_OUT_MARGIN.toPx() }
             val tileArrangement = board.arrange()
             val tilesFoldable = tiled && tileArrangement.rows > foldedRows
             board.rowsShown = if (tilesFoldable && folded) foldedRows else tileArrangement.rows
@@ -584,18 +582,9 @@ fun HistoryScreen(onBack: () -> Unit, openText: String? = null, onOpened: () -> 
                                         prefs.edit().putBoolean(PREF_FAVORITES_FOLDED, false).apply()
                                     }
                                 },
-                                onDrop = { entry, dropped ->
-                                    when (dropped) {
-                                        DropZone.DELETE -> delete(entry)
-                                        DropZone.UNFAVORITE -> {
-                                            haptics.toggle(false)
-                                            store.setFavorite(entry.text, entry.format, false)
-                                        }
-                                        DropZone.NONE -> store.setFavoriteOrder(board.order.toList())
-                                    }
-                                },
-                                // Above the rows around it, so a tile dragged out of the favorites
-                                // stays in sight over them.
+                                onReorder = { store.setFavoriteOrder(board.order.toList()) },
+                                // Above the rows around it, so a tile dragged or swiped past the
+                                // favorites stays in sight over them.
                                 modifier = animateRow().zIndex(1f),
                             )
                         }
@@ -944,6 +933,7 @@ private fun EntryRow(
     modifier: Modifier = Modifier,
 ) {
     var menu by remember { mutableStateOf(false) }
+    var touch by remember { mutableStateOf(Offset.Zero) }
     val density = LocalDensity.current
     val magnet = rememberRowMagnet(list, entry.text, group, index, with(density) { DETACH_AT.toPx() })
     var width by remember { mutableIntStateOf(0) }
@@ -962,6 +952,7 @@ private fun EntryRow(
     Box(
         modifier
             .onSizeChanged { width = it.width }
+            .trackTouch { touch = it }
             .entrySwipe(swipe),
     ) {
         SwipeBackground(swipe.direction, swipe.armed, swipe.becomesFavorite, shape, Modifier.matchParentSize())
@@ -975,6 +966,7 @@ private fun EntryRow(
         }
         EntryMenu(
             entry = entry,
+            at = touch,
             expanded = menu,
             onDismiss = { menu = false },
             actions = actions,
@@ -1118,10 +1110,35 @@ internal fun SwipeBackground(
     }
 }
 
-/** The long-press menu, in the grouped expressive style: what to do with the entry, then deleting it. */
+/** Where each touch on the modified element goes down, so a menu it opens can open there. */
+internal fun Modifier.trackTouch(onDown: (Offset) -> Unit): Modifier = pointerInput(Unit) {
+    awaitEachGesture { onDown(awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial).position) }
+}
+
+/**
+ * The long-press menu, in the grouped expressive style: what to do with the entry, then deleting it.
+ * It opens at [at], where the long press touched the entry, as a context menu opens at its pointer:
+ * from there toward the end and downward, or toward the start or upward where there is no room.
+ */
 @Composable
-internal fun EntryMenu(entry: HistoryEntry, expanded: Boolean, onDismiss: () -> Unit, actions: EntryActions) {
-    DropdownMenuPopup(expanded = expanded, onDismissRequest = onDismiss) {
+internal fun EntryMenu(entry: HistoryEntry, at: Offset, expanded: Boolean, onDismiss: () -> Unit, actions: EntryActions) {
+    val position = remember(at) {
+        MenuAnchorPosition.Custom(
+            xCandidates = {
+                val x = anchorBounds.left + at.x.roundToInt()
+                if (layoutDirection == LayoutDirection.Ltr) intListOf(x, x - menuSize.width) else intListOf(x - menuSize.width, x)
+            },
+            yCandidates = {
+                val y = anchorBounds.top + at.y.roundToInt()
+                intListOf(y, y - menuSize.height)
+            },
+        )
+    }
+    DropdownMenuPopup(
+        expanded = expanded,
+        onDismissRequest = onDismiss,
+        popupPositionProvider = MenuDefaults.rememberDropdownMenuPopupPositionProvider(position),
+    ) {
         val keep = buildList {
             if (entry.favorite) {
                 add(MenuEntry(R.string.favorite_remove, R.drawable.ic_star_filled) { actions.onFavorite(entry, false) })

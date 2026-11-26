@@ -253,7 +253,7 @@ internal fun rememberMagnet(list: MagneticList, detachAt: Float, relate: (Pull) 
                 if (next != mode) {
                     val rejoined = next.phase == PullPhase.Pulling && mode.phase == PullPhase.Detached && next.pull === mode.pull
                     when {
-                        next.phase == PullPhase.Detached -> magnet.lean.animateWith(settle, 0f)
+                        next.phase == PullPhase.Detached -> magnet.lean.animateWith(settle)
                         next.phase == PullPhase.Released -> magnet.lean.animateWith(settle, (next.pull?.releaseVelocity ?: 0f) * goal.share)
                         rejoined -> magnet.lean.animateWith(quick, 0f)
                         next.pull == null -> magnet.lean.animateWith(settle)
@@ -313,12 +313,11 @@ private fun rowRelation(pull: Pull, place: Triple<Any, Any, Int>): Relation? {
     return Relation(leanShare(distance), ROUNDNESS_MULTIPLIERS[distance + 3], sides, loose)
 }
 
-/** The share of the finger's travel the direct neighbours of a pulled entry lean by. */
-internal val NEAR_SHARE = TRANSLATION_MULTIPLIERS[1]
-
-/** The roundness of the direct neighbours of a pulled entry, and of those one step further. */
-internal val NEAR_ROUNDNESS = ROUNDNESS_MULTIPLIERS[2]
-internal val FAR_ROUNDNESS = ROUNDNESS_MULTIPLIERS[1]
+/**
+ * How strongly the neighbours of a pulled entry round, from the nearest to those three steps away,
+ * as the rows around a pulled row do.
+ */
+internal val NEIGHBOUR_ROUNDNESS = floatArrayOf(ROUNDNESS_MULTIPLIERS[2], ROUNDNESS_MULTIPLIERS[1], ROUNDNESS_MULTIPLIERS[0])
 
 private fun targets(pull: Pull, relation: Relation, detachAt: Float): Targets {
     val mode = Mode(pull, pull.phase, pull.dismissing)
@@ -336,9 +335,12 @@ private fun targets(pull: Pull, relation: Relation, detachAt: Float): Targets {
             val pulled = (abs(PULLED_SHARE * pull.finger) / detachAt).coerceAtMost(MAX_PRE_DETACH_ROUNDNESS)
             sides(relation.sides, relation.roundness * pulled).copy(lean = relation.share * pull.finger)
         }
+        // Once the entry comes loose, its neighbours stay as far as the pull took them, where it
+        // came loose, and return with the release, rather than settling back while the finger still
+        // holds it, as notifications do: the entry still being held, nothing has let them go yet.
+        PullPhase.Detached -> sides(relation.looseSides, 1f).copy(lean = relation.share * sign(pull.finger) * detachAt)
         // An entry flying off keeps the corners it came loose with until it is gone.
-        PullPhase.Detached, PullPhase.Released ->
-            if (pull.phase == PullPhase.Released && !pull.dismissing) sides(0, 0f) else sides(relation.looseSides, 1f)
+        PullPhase.Released -> if (!pull.dismissing) sides(0, 0f) else sides(relation.looseSides, 1f)
     }
 }
 
