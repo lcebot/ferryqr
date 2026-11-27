@@ -167,8 +167,11 @@ fun ScanOverlay(
             )
         }
 
+        // It comes later than the brackets, only once looking closer has gone on for a moment, so a
+        // code read at the first closer look never makes it blink. When the code leaves, it stays
+        // with the brackets through the frames that miss it and leaves with them.
         AnimatedVisibility(
-            visible = confirming == null && sighting != null && lookingCloser,
+            visible = confirming == null && lookingCloser && (sighting != null || visible),
             enter = fadeIn(MaterialTheme.motionScheme.fastEffectsSpec()) +
                 scaleIn(MaterialTheme.motionScheme.fastSpatialSpec()),
             exit = fadeOut(MaterialTheme.motionScheme.fastEffectsSpec()) +
