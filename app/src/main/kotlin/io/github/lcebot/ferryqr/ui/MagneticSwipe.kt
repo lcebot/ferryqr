@@ -387,13 +387,13 @@ private fun Magnet.respring(
             PullPhase.Released -> follower.animateWith(back, if (others.isEmpty()) release * share else null)
             PullPhase.Pulling -> when {
                 rejoined -> follower.animateWith(quick, fromRest)
-                before == null && after?.pose?.leans == true -> follower.animateWith(back)
+                before == null && after.pose.leans -> follower.animateWith(back)
             }
             null -> if (before?.pose?.leans == true) follower.animateWith(back)
         }
     }
     val rounds = when (phase) {
-        PullPhase.Pulling -> rejoined || (before == null && after?.pose?.rounds == true)
+        PullPhase.Pulling -> rejoined || (before == null && after.pose.rounds)
         null -> before?.pose?.rounds == true
         else -> true
     }
