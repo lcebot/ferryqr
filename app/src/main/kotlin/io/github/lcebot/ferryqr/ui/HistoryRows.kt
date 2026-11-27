@@ -73,8 +73,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.unit.dp
-import io.github.lcebot.ferryqr.EntryPresentation
 import io.github.lcebot.ferryqr.R
+import io.github.lcebot.ferryqr.dispatch.ContentNames
 import io.github.lcebot.ferryqr.history.FavoriteShortcuts
 import io.github.lcebot.ferryqr.history.HistoryEntry
 import java.text.BreakIterator
@@ -82,16 +82,15 @@ import java.util.Date
 import kotlin.math.roundToInt
 
 /**
- * How [entry] is shown: [listed], as the history lists worked it out, or else
- * worked out here, for an entry the lists do not hold as it is, such as a tile fading out once
- * deleted. Its content and names are then still kept for the process from when the lists held
- * it, as a rule, so it is seldom classified or named again on the main thread.
+ * The names [entry] is shown by: [listed], as the history lists hold them, or else those the process
+ * keeps, for an entry the lists do not hold as it is, such as a tile fading out once deleted. Those
+ * were kept when the lists held the entry, as a rule, so it is seldom named again on the main thread.
  */
 @Composable
-internal fun rememberPresentation(entry: HistoryEntry, listed: EntryPresentation?): EntryPresentation {
+internal fun rememberNames(entry: HistoryEntry, listed: ContentNames?): ContentNames {
     val context = LocalContext.current
     val languages = LocalConfiguration.current.locales
-    return listed ?: remember(entry.text, entry.format, entry.label, languages) { EntryPresentation.of(context, entry) }
+    return listed ?: remember(entry.text, entry.format, entry.label, languages) { entry.content.names(context, entry.label) }
 }
 
 /**
@@ -204,7 +203,7 @@ internal class RowReorder(
 @Composable
 internal fun EntryRow(
     entry: HistoryEntry,
-    listed: EntryPresentation?,
+    listed: ContentNames?,
     group: Any,
     index: Int,
     count: Int,
@@ -226,6 +225,7 @@ internal fun EntryRow(
         group = group,
         index = index,
         list = list,
+        magnet = magnet,
         flyTo = { width.toFloat() },
         onDelete = actions.onDelete,
         onFavorite = actions.onFavorite,
@@ -291,13 +291,13 @@ internal fun EntryRow(
 }
 
 /**
- * [listed] is how the history lists show [entry]. A favorite row reordered through [reorder] shows
- * its drag handle at its end while that is active.
+ * [listed] is the names the history lists show [entry] by. A favorite row reordered through
+ * [reorder] shows its drag handle at its end while that is active.
  */
 @Composable
 private fun EntryItem(
     entry: HistoryEntry,
-    listed: EntryPresentation?,
+    listed: ContentNames?,
     shape: Shape,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)?,
@@ -305,7 +305,7 @@ private fun EntryItem(
     reorder: RowReorder?,
 ) {
     val context = LocalContext.current
-    val shown = rememberPresentation(entry, listed)
+    val shown = rememberNames(entry, listed)
     val time = remember(entry.time) { DateFormat.getTimeFormat(context).format(Date(entry.time)) }
     val handle = reorder?.let { rememberHandleShow(it.active) }
     // A favorite is kept for what it is rather than when it was scanned, so its trailing slot holds
@@ -347,7 +347,7 @@ private fun EntryItem(
                 contentColor = MaterialTheme.colorScheme.onSurface,
             ),
         ) {
-            Box(room) { EntryTitle(shown.title) }
+            Box(room) { EntryTitle(shown.rowTitle) }
         }
     }
 }

@@ -1,6 +1,3 @@
-// rememberBottomSheetState is an experimental Material 3 API.
-@file:OptIn(ExperimentalMaterial3Api::class)
-
 package io.github.lcebot.ferryqr.ui
 
 import android.graphics.Bitmap
@@ -30,13 +27,10 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -64,7 +58,14 @@ import io.github.lcebot.ferryqr.generate.CodeProblem
 import io.github.lcebot.ferryqr.generate.CodeType
 import io.github.lcebot.ferryqr.generate.Generated
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/**
+ * How many previews are drawn at once. A few at a time fill the tiles sooner than one after another,
+ * while leaving cores for the main thread as the sheet slides up.
+ */
+private const val PREVIEWS_AT_ONCE = 3
 
 /** How tall each format's preview is; wide enough tiles show a barcode at a readable size. */
 private val PREVIEW_HEIGHT = 72.dp
@@ -89,7 +90,9 @@ private class FormatOption(val type: CodeType, val preview: Bitmap?, val problem
  * Every format FerryQR can draw, each previewed with [text] itself so the right one is found by
  * sight rather than by name, grouped into 2D codes, product barcodes and other barcodes. A format
  * that cannot hold the text is greyed out with the reason in place of its preview. [selected] is
- * marked, and [original] is the format the code was read in, when it came from a scan.
+ * marked, and [original] is the format the code was read in, when it came from a scan. A format
+ * picked goes to [onPick] at once, and the sheet then closes as a [SheetCloser] closes it, after
+ * which [onDismiss] follows once, as it does for a dismissal.
  */
 @Composable
 fun FormatPickerSheet(
@@ -104,19 +107,24 @@ fun FormatPickerSheet(
     // so the sheet opens at its height rather than growing once the previews are ready.
     val options = remember(text) { mutableStateMapOf<CodeType, FormatOption>() }
     LaunchedEffect(text) {
+        // Each preview is independent, so several are drawn together, started in the order the
+        // formats are listed, and each tile shows its own as soon as it is ready.
+        val drawing = Dispatchers.Default.limitedParallelism(PREVIEWS_AT_ONCE)
         for (type in CodeType.entries) {
-            options[type] = withContext(Dispatchers.Default) {
-                // With nothing typed yet, every format can still be chosen; there is just nothing to preview.
-                if (text.isEmpty()) return@withContext FormatOption(type, null, null)
-                when (val result = CodeGenerator.generate(text, type, quietZone = false, withAlternatives = false)) {
-                    is Generated.Code -> FormatOption(type, result.bitmap, null)
-                    is Generated.Unfit -> FormatOption(type, null, result.problem)
+            launch {
+                options[type] = withContext(drawing) {
+                    // With nothing typed yet, every format can still be chosen; there is just nothing to preview.
+                    if (text.isEmpty()) return@withContext FormatOption(type, null, null)
+                    when (val result = CodeGenerator.generate(text, type, quietZone = false, withAlternatives = false)) {
+                        is Generated.Code -> FormatOption(type, result.bitmap, null)
+                        is Generated.Unfit -> FormatOption(type, null, result.problem)
+                    }
                 }
             }
         }
     }
-    val sheet = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded))
-    ModalSheet(onDismissRequest = onDismiss, sheetState = sheet) {
+    val closer = rememberSheetCloser<Unit> { onDismiss() }
+    ModalSheet(closer, dismissal = Unit) {
         Text(
             stringResource(R.string.format_pick_title),
             style = MaterialTheme.typography.titleLarge,
@@ -147,6 +155,7 @@ fun FormatPickerSheet(
                         onClick = {
                             haptics.step()
                             onPick(type)
+                            closer.close(Unit)
                         },
                     )
                 }
@@ -160,11 +169,12 @@ fun FormatPickerSheet(
 private fun FormatTile(type: CodeType, option: FormatOption?, selected: Boolean, original: Boolean, onClick: () -> Unit) {
     val available = option?.problem == null
     val colors = MaterialTheme.colorScheme
-    val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+    // The text, the preview's backdrop and the preview itself are small parts of the tile.
+    val fade = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
     val textAlpha by animateFloatAsState(if (available) 1f else 0.38f, fade, label = "format-text")
     val previewColor by animateColorAsState(
         if (available) Color.White else colors.surfaceContainerHighest,
-        MaterialTheme.motionScheme.defaultEffectsSpec(),
+        MaterialTheme.motionScheme.fastEffectsSpec(),
         label = "format-preview-color",
     )
     Surface(

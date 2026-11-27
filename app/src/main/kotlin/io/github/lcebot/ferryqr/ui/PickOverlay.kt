@@ -60,7 +60,8 @@ private const val STAGGER_MS = 70L
 
 /**
  * Freezes the frame that contained several codes and lets the user tap the one they meant. Only
- * while [active] does it take the back gesture.
+ * while [active] does it take taps and the back gesture, so the copy fading out after a pick or a
+ * close stays inert.
  */
 @Composable
 fun PickOverlay(
@@ -120,7 +121,7 @@ fun PickOverlay(
         val popSpec = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
 
         Image(image, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f)))
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.scrim.copy(alpha = PICKER_SCRIM_ALPHA)))
 
         val fresh = detections.filter { it.text !in alreadyShown }
         detections.forEach { detection ->
@@ -142,13 +143,17 @@ fun PickOverlay(
                 modifier = Modifier.absoluteOffset { IntOffset((x - half).roundToInt(), (y - half).roundToInt()) },
             ) {
                 // A fixed colour keeps one light tone in both themes, which the frozen camera image
-                // behind needs.
+                // behind needs. The copy fading out is disabled in the same colours, so it fades out
+                // as it was rather than greying first.
                 FilledIconButton(
                     onClick = { haptics.tap(); onPick(detection) },
+                    enabled = active,
                     shapes = IconButtonDefaults.shapes(pressedShape = IconButtonDefaults.mediumPressedShape),
                     colors = IconButtonDefaults.filledIconButtonColors(
                         containerColor = MaterialTheme.colorScheme.primaryFixed,
                         contentColor = MaterialTheme.colorScheme.onPrimaryFixed,
+                        disabledContainerColor = MaterialTheme.colorScheme.primaryFixed,
+                        disabledContentColor = MaterialTheme.colorScheme.onPrimaryFixed,
                     ),
                     modifier = Modifier.size(MARKER_SIZE),
                 ) {
@@ -173,7 +178,12 @@ fun PickOverlay(
         )
         FilledTonalIconButton(
             onClick = { haptics.tap(); onClose() },
+            enabled = active,
             shapes = IconButtonDefaults.shapes(pressedShape = IconButtonDefaults.mediumPressedShape),
+            // Disabled in its enabled colours, as the markers are.
+            colors = IconButtonDefaults.filledTonalIconButtonColors().let {
+                it.copy(disabledContainerColor = it.containerColor, disabledContentColor = it.contentColor)
+            },
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()

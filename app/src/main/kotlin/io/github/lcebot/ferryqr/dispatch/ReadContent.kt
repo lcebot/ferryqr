@@ -9,10 +9,13 @@ import io.github.lcebot.ferryqr.content.SensitiveKind
 import io.github.lcebot.ferryqr.content.sensitiveKind
 
 /**
- * Room for a whole history, 500 entries besides the favorites, with room to spare, so the history
- * lists, the shortcuts, the naming dialogs and the store all find the reading the others made.
+ * Room for a whole history several times over. History keeps at most 500 entries besides the
+ * favorites, and the cards, the shortcuts and the naming dialogs keep readings and names of their
+ * own beside those of the history lists, so every layer finds the reading the others made, and
+ * the history lists still find every entry named once it has been, which is what lets them show
+ * from the first frame.
  */
-private const val CACHED = 1024
+private const val CACHED = 4096
 
 /**
  * Content that was read, [text] in [format], classified once into [payload], from which every layer
@@ -38,7 +41,7 @@ class ReadContent private constructor(val text: String, val format: String) {
      */
     fun names(context: Context, label: String?): ContentNames {
         val app = context.applicationContext
-        val key = NamesKey(this, label, app.resources.configuration.locales)
+        val key = NamesKey(text, format, label, app.resources.configuration.locales)
         return NAMES.get(key) ?: ContentNames(app, this, label).also { NAMES.put(key, it) }
     }
 
@@ -46,11 +49,23 @@ class ReadContent private constructor(val text: String, val format: String) {
 
     override fun hashCode(): Int = 31 * text.hashCode() + format.hashCode()
 
-    private data class NamesKey(val content: ReadContent, val label: String?, val locales: LocaleList)
+    /**
+     * Names are kept by text and format rather than by content, so whether they are kept can be asked
+     * without classifying the content.
+     */
+    private data class NamesKey(val text: String, val format: String, val label: String?, val locales: LocaleList)
 
     companion object {
         private val CONTENTS = LruCache<Pair<String, String>, ReadContent>(CACHED)
         private val NAMES = LruCache<NamesKey, ContentNames>(CACHED)
+
+        /**
+         * The names [names] gives the content [text] read in [format] under [label], in the language
+         * of [context], when they are kept already, else null. Nothing is classified or named, so the
+         * main thread can ask.
+         */
+        fun knownNames(context: Context, text: String, format: String, label: String?): ContentNames? =
+            NAMES.get(NamesKey(text, format, label, context.applicationContext.resources.configuration.locales))
 
         /**
          * The content [text] read in [format], classified here unless it was already. Classifying

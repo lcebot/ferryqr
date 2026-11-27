@@ -12,6 +12,7 @@ import androidx.core.graphics.createBitmap
 import androidx.core.graphics.drawable.IconCompat
 import io.github.lcebot.ferryqr.HistoryActivity
 import io.github.lcebot.ferryqr.MainActivity
+import io.github.lcebot.ferryqr.dispatch.cutToCodePoints
 import kotlin.math.roundToInt
 
 /**
@@ -112,9 +113,5 @@ object FavoriteShortcuts {
     }
 }
 
-/** Cuts at whole code points, so an emoji or other surrogate pair is never split. */
-private fun String.shortened(max: Int): String {
-    val oneLine = replace(Regex("\\s+"), " ").trim()
-    if (oneLine.codePointCount(0, oneLine.length) <= max) return oneLine
-    return oneLine.substring(0, oneLine.offsetByCodePoints(0, max - 1)) + "\u2026"
-}
+/** On one line, as a launcher shows a label, and cut to [max] code points. */
+private fun String.shortened(max: Int): String = replace(Regex("\\s+"), " ").trim().cutToCodePoints(max)

@@ -18,7 +18,7 @@ import io.github.lcebot.ferryqr.history.HistoryStore
 import io.github.lcebot.ferryqr.openin.OpenInModule
 import io.github.lcebot.ferryqr.scan.Detection
 import io.github.lcebot.ferryqr.scan.Engines
-import io.github.lcebot.ferryqr.scan.StillResult
+import io.github.lcebot.ferryqr.scan.StillOutcome
 import io.github.lcebot.ferryqr.scan.isLocatedMiniCode
 import io.github.lcebot.ferryqr.scan.locatedCrop
 import io.github.lcebot.ferryqr.scan.readStillImage
@@ -88,18 +88,22 @@ sealed interface ImageScan {
     ) : ImageScan
 
     companion object {
-        fun of(read: StillResult.Read): Read {
-            val frame = read.frame
-            val many = read.detections.size > 1
-            // A cut covering the whole image is the image itself, which is about to go, so it is copied.
-            fun Bitmap?.own(): Bitmap? = this?.let { if (it === frame) it.copy(Bitmap.Config.ARGB_8888, false) else it }
-            return Read(
-                detections = read.detections,
-                contents = read.detections.map { ReadContent.of(it.text, it.format) },
-                thumbnails = read.detections.map { if (many) it.thumbnail(frame).own() else null },
-                locatedCrops = read.detections.map { if (it.isLocatedMiniCode) it.locatedCrop(frame).own() else null },
-                miniCrop = if (read.detections.isEmpty()) read.miniCodes.firstOrNull()?.crop(frame).own() else null,
-            ).also { frame.recycle() }
+        fun of(outcome: StillOutcome): ImageScan = when (outcome) {
+            StillOutcome.Unreadable -> Unreadable
+            StillOutcome.Empty -> Read(emptyList(), emptyList(), emptyList(), emptyList(), miniCrop = null)
+            is StillOutcome.LocatedMini -> Read(emptyList(), emptyList(), emptyList(), emptyList(), miniCrop = outcome.crop)
+            is StillOutcome.Codes -> {
+                val frame = outcome.frame
+                val detections = outcome.detections
+                val many = detections.size > 1
+                Read(
+                    detections = detections,
+                    contents = detections.map { ReadContent.of(it.text, it.format) },
+                    thumbnails = detections.map { if (many) it.thumbnail(frame) else null },
+                    locatedCrops = detections.map { if (it.isLocatedMiniCode) it.locatedCrop(frame) else null },
+                    miniCrop = null,
+                ).also { outcome.release() }
+            }
         }
     }
 }
@@ -123,10 +127,9 @@ class ImageScanViewModel(app: Application) : AndroidViewModel(app) {
         if (loaded) return
         loaded = true
         viewModelScope.launch {
-            _result.value = when (val read = readStillImage(getApplication<Application>(), uri, zxing, wechat)) {
-                StillResult.Unreadable -> ImageScan.Unreadable
-                is StillResult.Read -> withContext(Dispatchers.Default) { ImageScan.of(read) }
-            }
+            val outcome = readStillImage(getApplication<Application>(), uri, zxing, wechat)
+            // Cutting the thumbnails and crops from the image takes a moment, so it stays off the main thread.
+            _result.value = withContext(Dispatchers.Default) { ImageScan.of(outcome) }
         }
         viewModelScope.launch { OpenInModule.refresh() }
     }

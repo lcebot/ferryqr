@@ -4,6 +4,9 @@
 package io.github.lcebot.ferryqr.ui
 
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -12,8 +15,12 @@ import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.lerp
@@ -47,6 +54,33 @@ internal fun SectionHeader(text: String, modifier: Modifier = Modifier, top: Dp 
         color = MaterialTheme.colorScheme.primary,
         modifier = modifier.padding(start = LIST_TEXT_INSET, end = LIST_TEXT_INSET, top = top, bottom = SECTION_GAP),
     )
+}
+
+/**
+ * A section's header with [actions] at its end, spaced from the list as a header without them is.
+ * The actions are taller than the title's line and centred on it, reaching into the space above and
+ * below rather than pushing the section's rows further away than another section's are.
+ */
+@Composable
+internal fun SectionHeader(text: String, modifier: Modifier = Modifier, actions: @Composable RowScope.() -> Unit) {
+    val title = MaterialTheme.typography.titleSmall
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(start = LIST_TEXT_INSET, top = SECTION_TOP, bottom = SECTION_GAP),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(text, style = title, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
+        val line = with(LocalDensity.current) { title.lineHeight.roundToPx() }
+        Row(
+            modifier = Modifier.layout { measurable, constraints ->
+                val buttons = measurable.measure(constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity))
+                layout(buttons.width, line) { buttons.place(0, (line - buttons.height) / 2) }
+            },
+            verticalAlignment = Alignment.CenterVertically,
+            content = actions,
+        )
+    }
 }
 
 /**

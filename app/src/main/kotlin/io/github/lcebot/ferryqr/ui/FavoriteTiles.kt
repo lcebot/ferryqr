@@ -50,17 +50,16 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.lerp
-import io.github.lcebot.ferryqr.EntryPresentation
 import io.github.lcebot.ferryqr.R
+import io.github.lcebot.ferryqr.dispatch.ContentNames
 import io.github.lcebot.ferryqr.history.HistoryEntry
 import kotlin.math.max
 import kotlin.math.roundToInt
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 /**
@@ -109,36 +108,18 @@ private class TileShow(visible: Boolean) {
 }
 
 /**
- * Where a tile in its place is drawn, and how wide, while it moves to a new place, whose width can
- * differ as rows share out what they have left. The tiles are laid out by hand, so each follows its
- * place from where it is drawn, as a lazy list's items do, rather than from where a separate pass
- * of the layout might put it. The layout only reads where it is drawn, and an effect moves it.
- */
-private class TileMotion(at: Rect) {
-    val rect: Animatable<Rect, AnimationVector4D> = Animatable(at, Rect.VectorConverter)
-    var target = at
-
-    /** Heads for [place] from wherever the tile is drawn, unless it is already heading there. */
-    fun follow(place: Rect, scope: CoroutineScope, spec: FiniteAnimationSpec<Rect>) {
-        if (place == target) return
-        target = place
-        scope.launch { rect.animateTo(place, spec) }
-    }
-}
-
-/**
  * The favorites as tiles. A tap opens one, and a swipe deletes it or takes it out of the favorites
  * as a swipe on a row does, the tiles around it leaning with it. A long press lifts it and opens
  * its menu, unfolding the favorites first, and dragging it then closes the menu and moves it into
  * the place of the tile it is held over, the board keeping the order once it is let go. Tiles
  * slide into their new places, and come and go fading and growing or shrinking, on the theme's
- * motion. [presentationOf] gives how the history lists show an entry, as each tile shows it.
+ * motion. [namesOf] gives the names the history lists show an entry by, as each tile shows it.
  */
 @Composable
 internal fun FavoriteTiles(
     board: TileBoard,
     favorites: Map<String, HistoryEntry>,
-    presentationOf: (HistoryEntry) -> EntryPresentation?,
+    namesOf: (HistoryEntry) -> ContentNames?,
     inputs: TileInputs,
     arrangement: TileArrangement,
     rowsShown: Int,
@@ -157,7 +138,7 @@ internal fun FavoriteTiles(
     val motion = MaterialTheme.motionScheme
     val settleSpec = motion.fastSpatialSpec<Rect>()
     val moveSpec = motion.defaultSpatialSpec<Rect>()
-    val heightSpec = motion.defaultSpatialSpec<IntSize>()
+    val heightSpec = motion.defaultSpatialSpec<Size>()
     val showSpec = motion.defaultEffectsSpec<Float>()
     val growSpec = motion.defaultSpatialSpec<Float>()
     val colors = MaterialTheme.colorScheme
@@ -185,7 +166,13 @@ internal fun FavoriteTiles(
     // tiles by. Each tile hands over its own once its composition is kept.
     val shown = remember { HashMap<String, TileShow>() }
     val swipes = remember { HashMap<String, EntrySwipe>() }
-    val motions = remember { HashMap<String, TileMotion>() }
+    // Where each tile in its place is drawn, and how wide, while it moves to a new place, whose width
+    // can differ as rows share out what they have left. The tiles are laid out by hand, so each
+    // follows its place from where it is drawn, as a lazy list's items do, rather than from where a
+    // separate pass of the layout might put it. The layout only reads where it is drawn, and an
+    // effect moves it, springing on from where it is and as fast as it moves when its place changes
+    // again on the way.
+    val motions = remember { HashMap<String, SpringFollower<Rect, AnimationVector4D>>() }
     val ghost = remember { Animatable(0f) }
     val ghostShown = board.key != null && board.lifted && board.moved
     LaunchedEffect(ghostShown) { ghost.animateTo(if (ghostShown) 1f else 0f, showSpec) }
@@ -195,26 +182,31 @@ internal fun FavoriteTiles(
     // them, so measuring starts nothing itself.
     val targets = remember { mutableStateOf<Map<String, Rect>>(emptyMap()) }
     val zoneTarget = remember { mutableStateOf<Rect?>(null) }
-    val zoneMotion = remember { mutableStateOf<TileMotion?>(null) }
+    val zoneMotion = remember { SpringFollower(Animatable(Rect.Zero, Rect.VectorConverter)) }
     val move by rememberUpdatedState(moveSpec)
     LaunchedEffect(Unit) {
-        snapshotFlow { targets.value }.collect { settled ->
+        snapshotFlow { targets.value }.collectLatest { settled ->
             // A tile in hand or fading out has no place to follow, so one set down starts afresh in its place.
-            motions.keys.retainAll(settled.keys)
-            settled.forEach { (tile, place) ->
-                val moving = motions[tile]
-                if (moving == null) motions[tile] = TileMotion(place) else moving.follow(place, this@LaunchedEffect, move)
+            motions.forEach { (tile, moving) -> if (tile !in settled) moving.unplace() }
+            coroutineScope {
+                settled.forEach { (tile, place) ->
+                    val moving = motions.getOrPut(tile) { SpringFollower(Animatable(place, Rect.VectorConverter)) }
+                    launch { moving.moveTo(place, move) }
+                }
             }
         }
     }
     LaunchedEffect(Unit) {
-        snapshotFlow { zoneTarget.value }.collect { place ->
-            if (place == null) return@collect
+        snapshotFlow { zoneTarget.value }.collectLatest { place ->
+            if (place == null) return@collectLatest
             // Appearing, the drop zone starts in its place; still in view, it glides to the next one.
-            val moving = zoneMotion.value?.takeIf { ghost.value > 0f }
-            if (moving == null) zoneMotion.value = TileMotion(place) else moving.follow(place, this@LaunchedEffect, move)
+            if (ghost.value == 0f) zoneMotion.unplace()
+            zoneMotion.moveTo(place, move)
         }
     }
+
+    /** Where [tile] is drawn while it follows its place, or null while it has none to follow. */
+    fun drawnAt(tile: String): Rect? = motions[tile]?.takeIf { it.placed }?.value?.value
 
     fun visible(tile: String, gone: Boolean): Boolean {
         if (gone) return false
@@ -257,12 +249,13 @@ internal fun FavoriteTiles(
                     val tile = entry.text
                     val isVisible = visible(tile, gone)
                     val progress = remember { TileShow(isVisible && tile in initial) }
-                    val magnet = rememberMagnet(list, detachAt) { pull -> board.relation(pull, tile, laidOut) }
+                    val magnet = rememberMagnet(list, tile, detachAt, NEAR_TILE_SHARE) { pull -> board.relation(pull, tile, laidOut) }
                     val swipe = rememberEntrySwipe(
                         entry = entry,
                         group = TILES_GROUP,
                         index = 0,
                         list = list,
+                        magnet = magnet,
                         flyTo = { side -> flyDistance(tile, side) },
                         onDelete = actions.onDelete,
                         onFavorite = actions.onFavorite,
@@ -361,7 +354,7 @@ internal fun FavoriteTiles(
                         val later = stringResource(R.string.favorite_move_later)
                         FavoriteTile(
                             // Kept with the tile, so one fading out still shows its name.
-                            presentation = rememberPresentation(entry, presentationOf(entry)),
+                            names = rememberNames(entry, namesOf(entry)),
                             shape = shape,
                             lifted = dragged && board.lifted,
                             raised = swipe.pull != null || swipe.acting,
@@ -409,7 +402,7 @@ internal fun FavoriteTiles(
             val (entry, gone) = tiles[i]
             if (gone || entry.text == board.key) return@forEachIndexed
             val spot = arrangement.byKey[entry.text] ?: return@forEachIndexed
-            val width = atLeastOwn(entry.text, motions[entry.text]?.rect?.value?.width ?: spot.width.toFloat())
+            val width = atLeastOwn(entry.text, drawnAt(entry.text)?.width ?: spot.width.toFloat())
             placeables[i] = measurable.measure(Constraints(minWidth = width, maxWidth = width))
                 .also { tallest[spot.row] = max(tallest[spot.row], it.height) }
         }
@@ -431,7 +424,7 @@ internal fun FavoriteTiles(
                 else -> arrangement.byKey[tile]?.let { spot ->
                     val place = arrangement.rectOf(spot, heights)
                     settled[tile] = place
-                    motions[tile]?.rect?.value ?: place
+                    drawnAt(tile) ?: place
                 }
             } ?: return@mapIndexed null
             val placeable = placeables[i] ?: measurable.measure(
@@ -444,7 +437,7 @@ internal fun FavoriteTiles(
         // follows that place as the tiles do theirs.
         val landing = board.key?.let { arrangement.byKey[it] }?.let { arrangement.rectOf(it, heights) }
         zoneTarget.value = landing
-        val zoneDrawn = landing?.let { place -> zoneMotion.value?.takeIf { ghost.value > 0f }?.rect?.value ?: place }
+        val zoneDrawn = landing?.let { place -> zoneMotion.takeIf { it.placed && ghost.value > 0f }?.value?.value ?: place }
         val zonePlaceable = zoneDrawn?.let {
             zone.measure(Constraints.fixed(it.width.roundToInt().coerceAtLeast(0), it.height.roundToInt().coerceAtLeast(0)))
         }
@@ -481,13 +474,13 @@ private const val HIDDEN_SCALE = 0.8f
 private val ALL_INNER = TileCorners(topStart = false, topEnd = false, bottomStart = false, bottomEnd = false)
 
 /**
- * One favorite as a tile: its icon, and its name over its kind, as [presentation] gives them, in
+ * One favorite as a tile: its icon, and its name over its kind, as [names] give them, in
  * the list item's own padding, colours, press shape and dragged look, with the avatar and title a
  * history row has. While [raised], swiped, it takes the dragged elevation.
  */
 @Composable
 private fun FavoriteTile(
-    presentation: EntryPresentation,
+    names: ContentNames,
     shape: Shape,
     lifted: Boolean,
     raised: Boolean,
@@ -500,8 +493,8 @@ private fun FavoriteTile(
         modifier = modifier,
         interactionSource = rememberLiftedInteraction(lifted),
         verticalAlignment = Alignment.CenterVertically,
-        leadingContent = { EntryAvatar(presentation.kind.icon, favorite = true) },
-        supportingContent = { Text(stringResource(presentation.kind.label), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        leadingContent = { EntryAvatar(names.kind.icon, favorite = true) },
+        supportingContent = { Text(stringResource(names.kind.label), maxLines = 1, overflow = TextOverflow.Ellipsis) },
         shapes = ListItemDefaults.shapes(shape = shape),
         colors = ListItemDefaults.colors(containerColor = colors.surfaceContainer, contentColor = colors.onSurface),
         // A tile swiped across the tiles beside it is raised as a dragged list item is, so its
@@ -510,7 +503,7 @@ private fun FavoriteTile(
         elevation = ListItemDefaults.elevation(elevation = if (raised) SWIPED_ELEVATION else 0.dp),
     ) {
         // Only a name too long for a whole row comes to a second line.
-        EntryTitle(presentation.tileTitle)
+        EntryTitle(names.tileTitle)
     }
 }
 

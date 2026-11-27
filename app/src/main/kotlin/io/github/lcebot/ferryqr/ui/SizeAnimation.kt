@@ -6,6 +6,7 @@ import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.layout.Measurable
 import androidx.compose.ui.layout.MeasureResult
 import androidx.compose.ui.layout.MeasureScope
@@ -15,7 +16,10 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.constrainHeight
 import androidx.compose.ui.unit.constrainWidth
+import androidx.compose.ui.unit.toSize
 import kotlin.math.max
+import kotlin.math.roundToInt
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /**
@@ -31,12 +35,17 @@ import kotlinx.coroutines.launch
  * before it hides what has not yet been reached while growing, where that is wanted. What it holds
  * sits at [alignment] within the size reported, so content centred in a container stays centred
  * while the container takes its new size.
+ *
+ * The size follows each new one through a [SpringFollower], from where it has got to and as fast as
+ * it moves, so a size that changes again on the way moves on in its next frame rather than holding
+ * for one while a new animation starts. It moves in fractions of a pixel and is rounded only where it is
+ * reported.
  */
-internal fun Modifier.animateSize(spec: FiniteAnimationSpec<IntSize>, alignment: Alignment = Alignment.TopStart): Modifier =
+internal fun Modifier.animateSize(spec: FiniteAnimationSpec<Size>, alignment: Alignment = Alignment.TopStart): Modifier =
     this.then(SizeAnimationElement(spec, alignment))
 
 private class SizeAnimationElement(
-    val spec: FiniteAnimationSpec<IntSize>,
+    val spec: FiniteAnimationSpec<Size>,
     val alignment: Alignment,
 ) : ModifierNodeElement<SizeAnimationNode>() {
     override fun create() = SizeAnimationNode(spec, alignment)
@@ -52,11 +61,12 @@ private class SizeAnimationElement(
 }
 
 private class SizeAnimationNode(
-    var spec: FiniteAnimationSpec<IntSize>,
+    var spec: FiniteAnimationSpec<Size>,
     var alignment: Alignment,
 ) : Modifier.Node(), LayoutModifierNode {
-    private var size: Animatable<IntSize, AnimationVector2D>? = null
+    private var size: SpringFollower<Size, AnimationVector2D>? = null
     private var target = IntSize.Zero
+    private var following: Job? = null
 
     // Whether the size has reached the target in each direction, from where on it stays at least as large.
     private var widthReached = true
@@ -65,18 +75,19 @@ private class SizeAnimationNode(
     override fun MeasureScope.measure(measurable: Measurable, constraints: Constraints): MeasureResult {
         val placeable = measurable.measure(constraints)
         val goal = IntSize(placeable.width, placeable.height)
-        val shown = size ?: Animatable(goal, IntSize.VectorConverter).also {
+        val shown = size ?: SpringFollower(Animatable(goal.toSize(), Size.VectorConverter)).also {
             size = it
             target = goal
         }
         if (goal != target) {
-            val from = shown.value
+            val from = shown.value.value.rounded()
             target = goal
             widthReached = from.width >= goal.width
             heightReached = from.height >= goal.height
-            coroutineScope.launch { shown.animateTo(goal, spec) }
+            following?.cancel()
+            following = coroutineScope.launch { shown.follow(goal.toSize(), spec) }
         }
-        val now = shown.value
+        val now = shown.value.value.rounded()
         if (now.width >= target.width) widthReached = true
         if (now.height >= target.height) heightReached = true
         val width = if (widthReached) max(now.width, target.width) else now.width
@@ -88,3 +99,6 @@ private class SizeAnimationNode(
         }
     }
 }
+
+/** On whole pixels, and never below none, since a spring shrinking a size to nothing runs past it. */
+private fun Size.rounded() = IntSize(width.roundToInt().coerceAtLeast(0), height.roundToInt().coerceAtLeast(0))

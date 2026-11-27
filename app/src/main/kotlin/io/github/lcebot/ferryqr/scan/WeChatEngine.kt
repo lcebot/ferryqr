@@ -65,6 +65,18 @@ class Survey(val read: List<Detection>, val located: List<MiniCode>, val regions
 class UprightBuffer {
     internal var mat: Mat? = null
 
+    private var luma = ByteArray(0)
+
+    /**
+     * Room for [size] grey pixels, the frame's pixels copied out for the mini program code reader,
+     * which reads them while a code waits as often as the frame is turned. It grows only with the
+     * frame and may be longer than asked for.
+     */
+    internal fun luma(size: Int): ByteArray {
+        if (luma.size < size) luma = ByteArray(size)
+        return luma
+    }
+
     /** Gives the native image back at once rather than when the collector gets to it. */
     fun release() {
         mat?.release()
@@ -180,8 +192,12 @@ class WeChatEngine(context: Context) {
         }
     }
 
-    /** [survey] on a grey image, such as one from [upright]; [gray] stays the caller's to release. */
-    fun survey(gray: Mat, look: Look): Survey {
+    /**
+     * [survey] on a grey image, such as one from [upright]; [gray] stays the caller's to release.
+     * With [buffer], the one [gray] was turned into, its pixels are read out into the buffer's room
+     * rather than a new array.
+     */
+    fun survey(gray: Mat, look: Look, buffer: UprightBuffer? = null): Survey {
         if (!ensureReady()) return Survey.NONE
         return try {
             val boxes = synchronized(lock) { proposals(gray, look.detectorArea) }
@@ -192,7 +208,8 @@ class WeChatEngine(context: Context) {
                 .filter { (score, box) -> score >= QR_REGION_SCORE && mini.none { it.covers(box) } }
                 .map { it.second }
             if (mini.isEmpty()) return Survey(emptyList(), emptyList(), regions)
-            val pixels = ByteArray(gray.cols() * gray.rows())
+            val size = gray.cols() * gray.rows()
+            val pixels = buffer?.luma(size) ?: ByteArray(size)
             gray.get(0, 0, pixels)
             val frame = LumaImage(pixels, gray.cols(), gray.rows())
             val read = mini.associateWith { it.read(frame) }

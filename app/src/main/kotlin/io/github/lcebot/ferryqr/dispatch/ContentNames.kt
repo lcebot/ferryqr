@@ -6,12 +6,29 @@ import io.github.lcebot.ferryqr.content.TextPayload
 import io.github.lcebot.ferryqr.content.WebPayload
 
 /**
+ * The most code points a row's or a tile's title keeps. A row or tile shows two lines at most, which
+ * even a wide window fills with far fewer, so cutting content of a few kilobytes, such as a boarding
+ * pass or a PDF417 code, to this many spares breaking and measuring the rest and changes nothing shown.
+ */
+private const val TITLE_CODE_POINTS = 1000
+
+/**
+ * This string as it stands when it holds at most [max] code points, else cut at whole code points to
+ * [max] with the ellipsis that ends it, so no emoji or other surrogate pair is split.
+ */
+internal fun String.cutToCodePoints(max: Int): String {
+    // A string of at most that many chars holds at most that many code points.
+    if (length <= max || codePointCount(0, length) <= max) return this
+    return substring(0, offsetByCodePoints(0, max - 1)) + "…"
+}
+
+/**
  * Every name [content] goes by, worked out from its one reading, so a row, a tile, a shortcut, the
  * naming dialog and a card call it the same way, and a name the user gives is told apart from those
  * FerryQR would show anyway by the same rules that show them. [label] is the name the user gave,
  * if any. [ReadContent.names] hands them out, kept for each language and shared by every thread.
  */
-class ContentNames internal constructor(context: Context, private val content: ReadContent, val label: String?) {
+class ContentNames internal constructor(context: Context, val content: ReadContent, val label: String?) {
     private val payload = content.payload
 
     /** The name the content carries, as [Titles] gives it. */
@@ -28,11 +45,14 @@ class ContentNames internal constructor(context: Context, private val content: R
      */
     val headline: String = carried.name ?: (payload as? WebPayload)?.host ?: payload.raw
 
-    /** As a list row shows it: its name, else the name it carries, else the content itself. */
-    val rowTitle: String = label ?: carried.name ?: payload.raw
+    /**
+     * As a list row shows it: its name, else the name it carries, else the content itself, cut to a
+     * length two lines cannot show in full.
+     */
+    val rowTitle: String = (label ?: carried.name ?: payload.raw).cutToCodePoints(TITLE_CODE_POINTS)
 
-    /** As a tile shows it: its name, else [headline]. */
-    val tileTitle: String = label ?: headline
+    /** As a tile shows it: its name, else [headline], cut as [rowTitle] is. */
+    val tileTitle: String = (label ?: headline).cutToCodePoints(TITLE_CODE_POINTS)
 
     /**
      * The short title FerryQR gives it by itself, which a shortcut shows and a name starts from: the

@@ -72,9 +72,6 @@ internal class ActiveFerry(
     val exclusive: Boolean = false,
     private val handoff: (Activity, String) -> Boolean,
 ) : Ferry {
-    /** Whether [text] is one of this app's own codes, which only its scanner opens properly. */
-    fun claims(text: String) = KnownLink.of(text)?.owner == pkg
-
     override fun isReady(ready: Set<String>): Boolean = route != Route.MODULE || pkg in ready
 
     override fun label(context: Context): String = context.getString(name)

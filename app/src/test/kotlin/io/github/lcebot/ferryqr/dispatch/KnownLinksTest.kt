@@ -2,9 +2,8 @@ package io.github.lcebot.ferryqr.dispatch
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
-import kotlin.test.assertTrue
 
 /**
  * The forms come from each app's own scanner and links, so every one of them leads somewhere in
@@ -27,9 +26,9 @@ class KnownLinksTest {
             "https://weixin.qq.com/g/abc",
             "https://u.wechat.com/abc",
             "https://example.com/wechat/oauth2/authorize",
-        ).forEach { assertTrue(ActiveFerries.WECHAT.claims(it), it) }
+        ).forEach { assertEquals(ActiveFerries.WECHAT, ActiveFerries.claimant(it), it) }
         listOf("https://payapp.wechatpay.cn/other", "https://qr.alipay.com/abc").forEach {
-            assertFalse(ActiveFerries.WECHAT.claims(it), it)
+            assertNotEquals(ActiveFerries.WECHAT, ActiveFerries.claimant(it), it)
         }
     }
 

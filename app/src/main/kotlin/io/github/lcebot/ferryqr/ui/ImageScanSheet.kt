@@ -36,18 +36,14 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -64,8 +60,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.lcebot.ferryqr.ImageScan
 import io.github.lcebot.ferryqr.ImageScanViewModel
@@ -78,7 +72,6 @@ import io.github.lcebot.ferryqr.dispatch.ReadContent
 import io.github.lcebot.ferryqr.dispatch.ResultCard
 import io.github.lcebot.ferryqr.scan.Detection
 import io.github.lcebot.ferryqr.scan.isLocatedMiniCode
-import kotlinx.coroutines.launch
 
 private val TILE_WIDTH = 96.dp
 private val THUMBNAIL_SIZE = 80.dp
@@ -92,26 +85,6 @@ private val THUMBNAIL_SIZE = 80.dp
 fun ImageScanSheet(vm: ImageScanViewModel, onClose: () -> Unit) {
     val haptics = rememberHaptics()
     val result by vm.result.collectAsStateWithLifecycle()
-    val sheetState = rememberBottomSheetState(
-        initialValue = SheetValue.Hidden,
-        enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded),
-    )
-    val scope = rememberCoroutineScope()
-
-    fun dismiss() {
-        scope.launch { sheetState.hide() }.invokeOnCompletion { onClose() }
-    }
-
-    // After a handoff the sheet slides away as when dismissed rather than vanishing as the other app
-    // opens. Covered by that app, the activity stops and draws no frames, so the slide would only end
-    // on return; once stopped, the sheet closes at once instead.
-    var handedOff by remember { mutableStateOf(false) }
-    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { if (handedOff) onClose() }
-
-    fun handOff() {
-        handedOff = true
-        dismiss()
-    }
 
     LaunchedEffect(result) {
         when (val read = result) {
@@ -122,11 +95,30 @@ fun ImageScanSheet(vm: ImageScanViewModel, onClose: () -> Unit) {
         }
     }
 
+    var selected by rememberSaveable { mutableIntStateOf(0) }
+    val scanned = result as? ImageScan.Read
+    val index = scanned?.detections?.takeIf { it.isNotEmpty() }?.let { selected.coerceIn(it.indices) }
+    val content = if (scanned != null && index != null) scanned.contents[index] else null
+    LaunchedEffect(content) { content?.let(vm::shown) }
+    // Built here rather than where the card shows, so the sheet keeps its one reading state until
+    // the first card is ready. A mini program code that could not be read has no content to route;
+    // WeChat gets its picture.
+    val source = remember(scanned, index) {
+        when {
+            scanned == null -> null
+            index != null -> scanned.locatedCrops[index]?.let { CardSource.LocatedMini(it, live = false) }
+                ?: CardSource.Read(scanned.contents[index], Origin.IMAGE)
+            else -> scanned.miniCrop?.let { CardSource.LocatedMini(it, live = false) }
+        }
+    }
+    val card = rememberResultCard(source)
+    val shown = result.takeUnless { source != null && card == null }
+
     val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
     val resize = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
-    CardSheet(onDismissRequest = onClose, sheetState = sheetState, onHandoff = ::handOff) { onAction, onMessage ->
+    CardSheet(onClosed = { onClose() }) { onAction, onMessage, close ->
         AnimatedContent(
-            targetState = result,
+            targetState = shown,
             contentKey = { read ->
                 when {
                     read !is ImageScan.Read -> read
@@ -140,20 +132,31 @@ fun ImageScanSheet(vm: ImageScanViewModel, onClose: () -> Unit) {
         ) { read ->
             when {
                 read == null -> Reading()
-                read is ImageScan.Read && read.detections.isNotEmpty() ->
-                    Found(read, onShown = vm::shown, onAction = onAction, onMessage = onMessage)
-                read is ImageScan.Read && read.miniCrop != null -> MiniFound(read.miniCrop, onAction = onAction, onMessage = onMessage)
+                // The sheet reads on until the first card exists, so these always have one to show.
+                read is ImageScan.Read && read.detections.isNotEmpty() -> card?.let {
+                    Found(
+                        read,
+                        card = it,
+                        selected = selected,
+                        onSelect = { picked -> selected = picked },
+                        onAction = onAction,
+                        onMessage = onMessage,
+                    )
+                }
+                read is ImageScan.Read && read.miniCrop != null -> card?.let {
+                    MiniFound(it, onAction = onAction, onMessage = onMessage)
+                }
                 read is ImageScan.Read -> SheetMessage(
                     icon = R.drawable.ic_search_off,
                     title = R.string.image_no_code_title,
                     body = R.string.image_no_code_body,
-                    onClose = ::dismiss,
+                    onClose = close,
                 )
                 else -> SheetMessage(
                     icon = R.drawable.ic_broken_image,
                     title = R.string.image_unreadable,
                     body = R.string.image_unreadable_body,
-                    onClose = ::dismiss,
+                    onClose = close,
                 )
             }
         }
@@ -223,24 +226,13 @@ private fun SheetMessage(@DrawableRes icon: Int, @StringRes title: Int, @StringR
 @Composable
 private fun Found(
     read: ImageScan.Read,
-    onShown: (ReadContent) -> Unit,
+    card: ResultCard,
+    selected: Int,
+    onSelect: (Int) -> Unit,
     onAction: (CardAction) -> Unit,
     onMessage: (Int) -> Unit,
 ) {
     val haptics = rememberHaptics()
-    var selected by rememberSaveable { mutableIntStateOf(0) }
-    val index = selected.coerceIn(read.detections.indices)
-    val content = read.contents[index]
-    // A mini program code that could not be read has no content to route; WeChat gets its picture.
-    // The card shown stays until the next one is ready, and the sheet keeps reading until the first is.
-    val source = remember(read, index) {
-        read.locatedCrops[index]?.let { CardSource.LocatedMini(it, live = false) }
-            ?: CardSource.Read(content, Origin.IMAGE)
-    }
-    val card = rememberResultCard(source)
-
-    LaunchedEffect(content) { onShown(content) }
-
     Column(
         modifier = Modifier
             .verticalScroll(rememberScrollState())
@@ -250,10 +242,10 @@ private fun Found(
         if (read.detections.size > 1) {
             CodeChooser(read.thumbnails, read.detections, read.contents, selected) { picked ->
                 if (picked != selected) haptics.step()
-                selected = picked
+                onSelect(picked)
             }
         }
-        CardOrReading(
+        CardCrossfade(
             card = card,
             onAction = onAction,
             onMessage = onMessage,
@@ -264,9 +256,8 @@ private fun Found(
 
 /** A probable mini program code, the only thing found in the image, offered to WeChat. */
 @Composable
-private fun MiniFound(crop: Bitmap, onAction: (CardAction) -> Unit, onMessage: (Int) -> Unit) {
-    val card = rememberResultCard(remember(crop) { CardSource.LocatedMini(crop, live = false) })
-    CardOrReading(
+private fun MiniFound(card: ResultCard, onAction: (CardAction) -> Unit, onMessage: (Int) -> Unit) {
+    CardCrossfade(
         card = card,
         onAction = onAction,
         onMessage = onMessage,
@@ -278,13 +269,13 @@ private fun MiniFound(crop: Bitmap, onAction: (CardAction) -> Unit, onMessage: (
 }
 
 /**
- * The reading state until [card] is built, then the card with [cardModifier], crossfading while the
- * sheet resizes to it. Keyed on the code, so a card built again as an app becomes ready updates in
- * place and keeps what was done on it, while another code crossfades in.
+ * [card] with [cardModifier], crossfading into the next one while the sheet resizes to it. Keyed on
+ * the code, so a card built again as an app becomes ready updates in place and keeps what was done
+ * on it, while another code crossfades in. The card shown stays until the next one is ready.
  */
 @Composable
-private fun CardOrReading(
-    card: ResultCard?,
+private fun CardCrossfade(
+    card: ResultCard,
     onAction: (CardAction) -> Unit,
     onMessage: (Int) -> Unit,
     cardModifier: Modifier,
@@ -293,15 +284,11 @@ private fun CardOrReading(
     val resize = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
     AnimatedContent(
         targetState = card,
-        contentKey = { it?.let { shown -> shown.raw to shown.format } },
+        contentKey = { it.raw to it.format },
         transitionSpec = { (fadeIn(fade) togetherWith fadeOut(fade)) using SizeTransform(clip = false) { _, _ -> resize } },
         label = "image-card",
     ) { shown ->
-        if (shown == null) {
-            Reading()
-        } else {
-            ResultCardContent(card = shown, onAction = onAction, onMessage = onMessage, modifier = cardModifier)
-        }
+        ResultCardContent(card = shown, onAction = onAction, onMessage = onMessage, modifier = cardModifier)
     }
 }
 

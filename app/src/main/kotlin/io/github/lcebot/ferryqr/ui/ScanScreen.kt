@@ -42,7 +42,6 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.text.TextAutoSize
-import androidx.compose.material3.ContainedLoadingIndicator
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledIconToggleButton
 import androidx.compose.material3.FilledTonalIconButton
@@ -67,6 +66,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -105,6 +105,7 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
     val activity = LocalActivity.current ?: return
     val context = LocalContext.current
     val phase by vm.phase.collectAsStateWithLifecycle()
+    val confirmation by vm.confirmation.collectAsStateWithLifecycle()
     val session by vm.cameraSession.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val torch = remember { Torch() }
@@ -283,14 +284,15 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
                                 torch = torch,
                                 onZoom = { zoom = it },
                                 onUnavailable = { vm.message(R.string.no_camera) },
-                                scanning = phase == Phase.Scanning,
+                                // A code being confirmed has its outcome, so tapping to focus ends with it.
+                                scanning = phase == Phase.Scanning && confirmation == null,
                                 contentPadding = padding,
                                 modifier = Modifier.fillMaxSize(),
                             )
                             ScanOverlay(
                                 sighting = { sightingState.value },
                                 lookingCloser = lookingCloser,
-                                confirming = phase.confirmation,
+                                confirming = confirmation,
                                 onConfirmed = vm::confirmed,
                                 onRelease = vm::releaseConfirmation,
                                 modifier = Modifier.fillMaxSize(),
@@ -306,15 +308,7 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
                     }
                 }
 
-                AnimatedVisibility(
-                    visible = phase == Phase.Decoding,
-                    enter = fadeIn(effects) + scaleIn(spatial),
-                    exit = fadeOut(effects) + scaleOut(spatial),
-                    modifier = Modifier.align(Alignment.Center),
-                ) {
-                    // Contained, since the camera image behind it may be as light as the indicator itself.
-                    ContainedLoadingIndicator(Modifier.size(64.dp))
-                }
+                PageLoadingIndicator(phase == Phase.Decoding, Modifier.align(Alignment.Center))
             }
         }
 
@@ -328,19 +322,18 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
             label = "pick",
         ) { picking ->
             if (picking != null) {
-                // The frozen frame is a full camera frame or an image of up to 3000 pixels a side, so
-                // it goes as soon as the overlay has faded out with it. While the scanner still holds
-                // it, as when the activity is made again, it stays for the overlay composed next.
+                // Disposed once the overlay has faded out, so the scanner lets the frozen frame go
+                // only when nothing draws it any longer.
                 DisposableEffect(picking) {
-                    onDispose { if (vm.phase.value != picking) picking.frame.recycle() }
+                    onDispose { vm.pickerLeft(picking) }
                 }
                 PickOverlay(
-                    picking.frame,
+                    picking.frame.bitmap,
                     picking.detections,
                     picking.alreadyShown,
                     active = phase == picking,
                     onPick = vm::pick,
-                    onClose = vm::resume,
+                    onClose = vm::closePicker,
                 )
             }
         }
@@ -350,7 +343,11 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
         // Keyed on what it shows, so the card of one code never stands in for a frame for the next.
         key(showing.source) {
             rememberResultCard(showing.source, initial = showing.card, builtFor = showing.builtFor)?.let { card ->
-                ResultSheet(card = card, onDismiss = vm::resume, onHandoff = activity::finish)
+                ResultSheet(
+                    card = card,
+                    // The scanner has done its part once another app took over.
+                    onClosed = { reason -> if (reason == CloseReason.HANDOFF) activity.finish() else vm.resume() },
+                )
             }
         }
     }
@@ -451,7 +448,7 @@ private fun TorchButton(checked: Boolean, onCheckedChange: (Boolean) -> Unit, mo
 @Composable
 private fun StatusPill(@StringRes text: Int, modifier: Modifier = Modifier) {
     val fade = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
-    val resize = MaterialTheme.motionScheme.fastSpatialSpec<IntSize>()
+    val resize = MaterialTheme.motionScheme.fastSpatialSpec<Size>()
     PillSurface(modifier) {
         // Centred in the pill as it takes the new hint's size, so neither hint moves inside it.
         AnimatedContent(

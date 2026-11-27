@@ -262,10 +262,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
             text = field.text.toString(),
             selected = chosen,
             original = null,
-            onPick = { picked ->
-                choose(picked.name)
-                picking = false
-            },
+            onPick = { picked -> choose(picked.name) },
             onDismiss = { picking = false },
         )
     }

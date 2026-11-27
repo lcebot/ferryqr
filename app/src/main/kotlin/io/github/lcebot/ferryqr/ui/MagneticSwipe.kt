@@ -17,8 +17,6 @@ import android.os.VibratorManager
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.AnimationVector1D
-import androidx.compose.animation.core.VectorConverter
-import androidx.compose.animation.core.VectorizedAnimationSpec
 import androidx.compose.foundation.gestures.DraggableState
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
@@ -35,6 +33,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -123,13 +122,26 @@ internal class Pull(val key: Any, val group: Any, index: Int, val rtl: Boolean =
 }
 
 /**
- * The one row of a list being swiped, if any. A row let go finishes in [scope], the list's, since a
- * row scrolled out of view leaves composition and would take its own coroutines with it, dropping
- * a delete or favorite already decided.
+ * The rows of a list being swiped. A row let go finishes in [scope], the list's, since a row
+ * scrolled out of view leaves composition and would take its own coroutines with it, dropping a
+ * delete or favorite already decided.
  */
 @Stable
 internal class MagneticList(val scope: CoroutineScope) {
-    var pull by mutableStateOf<Pull?>(null)
+    /**
+     * Every row being swiped, or let go and not yet settled, in the order their swipes started.
+     * Several fingers may each swipe a row at once, and the rows around them lean with all of them.
+     */
+    val pulls = mutableStateListOf<Pull>()
+
+    private var haptics: SwipeHaptics? = null
+
+    /**
+     * The vibrations of every swipe in the list, made for the first and shared by the rest, since
+     * finding the vibrator and asking what it can play goes to the system on the main thread.
+     */
+    fun haptics(context: Context, fallback: Haptics): SwipeHaptics =
+        haptics ?: SwipeHaptics(context, fallback).also { haptics = it }
 
     /**
      * The swipes of rows swiped away and deleted, by content, kept while undoing can bring them
@@ -194,91 +206,19 @@ private fun returnDelay(turn: Int): Long =
     (RETURN_STAGGER_MS * (1f - RETURN_STAGGER_DECAY.pow(turn)) / (1f - RETURN_STAGGER_DECAY)).roundToLong()
 
 /**
- * The longest time a [Follower] steps its animation by in one frame: two frames at 60 Hz, which
- * still covers a dropped frame. A follow is cancelled and started again for each new target, and
- * the time since its last step carries over so a retarget moves on in its first frame; while it
- * keeps up, that time is a frame's. Resumed after a pause, as when frames stop while the page is
- * hidden or after the value was held for another animation, it is far longer, and stepping by all
- * of it would land the value on its target at once rather than going on from where it is.
- */
-private const val MAX_FOLLOW_STEP_NANOS = 33_333_333L
-
-/**
- * A value set directly while nothing animates it, and retargeted while an animation carries it, as
- * a notification moves while a magnetic spring runs, the way SpringAnimation.animateToFinalPosition
- * moves the end of a running spring.
- *
- * The animation is stepped one frame at a time from wherever it has got to, with the velocity it
- * has, rather than started anew on each target: an animation started anew on every frame of a drag
- * would never leave its first frame, which only records when it began.
- */
-internal class Follower {
-    val value = Animatable(0f)
-    private var spec: VectorizedAnimationSpec<AnimationVector1D>? = null
-    private var velocity = 0f
-    private var lastFrame = 0L
-
-    /**
-     * While set, [follow] leaves the value alone, for another animation to move it: a step of a
-     * running spring would otherwise cancel that animation.
-     */
-    var held = false
-
-    /** The next targets are reached through [spec], from [velocity] when given or else the current one. */
-    fun animateWith(spec: AnimationSpec<Float>, velocity: Float? = null) {
-        this.spec = spec.vectorize(Float.VectorConverter)
-        if (velocity != null) this.velocity = velocity
-        lastFrame = 0L
-    }
-
-    /** Targets after this are set directly. */
-    fun stopAnimating() {
-        spec = null
-        velocity = 0f
-        lastFrame = 0L
-    }
-
-    /** Moves to [target]: at once while nothing animates the value, else frame by frame until it arrives. */
-    suspend fun follow(target: Float) {
-        while (!held) {
-            val running = spec
-            if (running == null) {
-                value.snapTo(target)
-                return
-            }
-            val now = withFrameNanos { it }
-            val elapsed = if (lastFrame == 0L) 0L else (now - lastFrame).coerceAtMost(MAX_FOLLOW_STEP_NANOS)
-            lastFrame = now
-            if (elapsed <= 0L) continue
-            val from = AnimationVector1D(value.value)
-            val to = AnimationVector1D(target)
-            val speed = AnimationVector1D(velocity)
-            if (running.getDurationNanos(from, to, speed) <= elapsed) {
-                stopAnimating()
-                value.snapTo(target)
-                return
-            }
-            val next = running.getValueFromNanos(elapsed, from, to, speed).value
-            val nextVelocity = running.getVelocityFromNanos(elapsed, from, to, speed).value
-            value.snapTo(next)
-            velocity = nextVelocity
-        }
-    }
-}
-
-/**
- * How an entry moves and rounds for the pull of another entry in its group, or of itself: [lean] is
- * how far it moves with the finger, [backdrop] how far what a swipe shows behind it moves, and each
- * corner's value from 0 to 1 how far it rounds toward the large corner.
+ * How an entry moves and rounds for the pulls of other entries in its group, or for its own: [lean]
+ * is how far it moves with the fingers, [backdrop] how far what a swipe shows behind it moves, and
+ * each corner's value from 0 to 1 how far it rounds toward the large corner.
  */
 @Stable
 internal class Magnet {
-    val lean = Follower()
-    val backdrop = Follower()
-    val topStart = Follower()
-    val topEnd = Follower()
-    val bottomStart = Follower()
-    val bottomEnd = Follower()
+    val lean = SpringFollower(Animatable(0f))
+    val backdrop = SpringFollower(Animatable(0f))
+    val topStart = SpringFollower(Animatable(0f))
+    val topEnd = SpringFollower(Animatable(0f))
+    val bottomStart = SpringFollower(Animatable(0f))
+    val bottomEnd = SpringFollower(Animatable(0f))
+    val corners = listOf(topStart, topEnd, bottomStart, bottomEnd)
 }
 
 /** How many steps of half a dp a corner takes between [INNER_CORNER] and [OUTER_CORNER]. */
@@ -290,7 +230,7 @@ private val ROUNDING_STEPS = (OUTER_CORNER - INNER_CORNER) / 0.5.dp
  * few dozen times over a whole pull rather than on every frame of the finger.
  */
 @Composable
-internal fun rememberRounding(corner: Follower): State<Float> = remember(corner) {
+internal fun rememberRounding(corner: SpringFollower<Float, AnimationVector1D>): State<Float> = remember(corner) {
     derivedStateOf { (corner.value.value.coerceIn(0f, 1f) * ROUNDING_STEPS).roundToInt() / ROUNDING_STEPS }
 }
 
@@ -329,29 +269,48 @@ internal data class Relation(
     val backdrop: Float = 0f,
 )
 
-private data class Mode(val pull: Pull?, val phase: PullPhase?, val dismissing: Boolean)
-
-private data class Targets(
-    val mode: Mode,
-    val share: Float,
-    val backdropShare: Float,
+/** Where an entry is moved and how far each of its corners rounds, for one pull or for all of them together. */
+private data class Pose(
     val lean: Float,
     val backdrop: Float,
     val topStart: Float,
     val topEnd: Float,
     val bottomStart: Float,
     val bottomEnd: Float,
-)
-
-private val Unrelated = Targets(Mode(null, null, false), 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f)
+) {
+    val leans: Boolean get() = lean != 0f || backdrop != 0f
+    val rounds: Boolean get() = topStart != 0f || topEnd != 0f || bottomStart != 0f || bottomEnd != 0f
+}
 
 /**
- * Leans the entry with the one [list] has pulled, and rounds its corners, as the notifications
+ * What [pull] does to an entry it bears on: the [pose] it gives it, the phase the pull is in, and
+ * the shares of the finger's travel the entry and what is shown behind it lean by.
+ */
+private data class Contribution(
+    val pull: Pull,
+    val phase: PullPhase,
+    val dismissing: Boolean,
+    val share: Float,
+    val backdropShare: Float,
+    val pose: Pose,
+)
+
+/**
+ * Leans the entry with the entries [list] has pulled, and rounds its corners, as the notifications
  * around a swiped one do. [relate] says how the entry stands to a pull, or null where it takes no
- * part. [detachAt] is [DETACH_AT] in pixels.
+ * part. [key] is the entry's own, since an entry pulled itself follows only its own finger and none
+ * of the pulls around it. [detachAt] is [DETACH_AT] in pixels, and [nearestShare] the share of the
+ * finger's travel the entries next to a pulled one lean by, which is as far as several pulls
+ * together lean an entry, so that pulls the same way do not carry it further than one pull does.
  */
 @Composable
-internal fun rememberMagnet(list: MagneticList, detachAt: Float, relate: (Pull) -> Relation?): Magnet {
+internal fun rememberMagnet(
+    list: MagneticList,
+    key: Any,
+    detachAt: Float,
+    nearestShare: Float,
+    relate: (Pull) -> Relation?,
+): Magnet {
     val magnet = remember { Magnet() }
     // Neighbours settle back with the theme's motion, quickly when rejoining, and the corners change
     // on the fast spatial motion the list item morphs its own shape on.
@@ -359,41 +318,110 @@ internal fun rememberMagnet(list: MagneticList, detachAt: Float, relate: (Pull) 
     val settle by rememberUpdatedState(MaterialTheme.motionScheme.defaultSpatialSpec<Float>())
     val quick by rememberUpdatedState(MaterialTheme.motionScheme.fastSpatialSpec<Float>())
     val relation by rememberUpdatedState(relate)
-    LaunchedEffect(list, magnet, detachAt) {
-        var mode = Unrelated.mode
-        snapshotFlow { list.pull?.let { pull -> relation(pull)?.let { targets(pull, it, detachAt) } } ?: Unrelated }
-            .collectLatest { goal ->
-                val next = goal.mode
-                if (next != mode) {
-                    val rejoined = next.phase == PullPhase.Pulling && mode.phase == PullPhase.Detached && next.pull === mode.pull
-                    val release = next.pull?.releaseVelocity ?: 0f
-                    for ((follower, share) in listOf(magnet.lean to goal.share, magnet.backdrop to goal.backdropShare)) {
-                        when {
-                            next.phase == PullPhase.Detached -> follower.animateWith(settle)
-                            next.phase == PullPhase.Released -> follower.animateWith(settle, release * share)
-                            rejoined -> follower.animateWith(quick, 0f)
-                            next.pull == null -> follower.animateWith(settle)
-                        }
-                    }
-                    if (next.phase != PullPhase.Pulling || rejoined) {
-                        magnet.topStart.animateWith(roundness)
-                        magnet.topEnd.animateWith(roundness)
-                        magnet.bottomStart.animateWith(roundness)
-                        magnet.bottomEnd.animateWith(roundness)
-                    }
-                    mode = next
-                }
-                coroutineScope {
-                    launch { magnet.lean.follow(goal.lean) }
-                    launch { magnet.backdrop.follow(goal.backdrop) }
-                    launch { magnet.topStart.follow(goal.topStart) }
-                    launch { magnet.topEnd.follow(goal.topEnd) }
-                    launch { magnet.bottomStart.follow(goal.bottomStart) }
-                    launch { magnet.bottomEnd.follow(goal.bottomEnd) }
-                }
+    val own by rememberUpdatedState(key)
+    LaunchedEffect(list, magnet, detachAt, nearestShare) {
+        var last: Map<Pull, Contribution> = emptyMap()
+        snapshotFlow {
+            val bearing = list.pulls.mapNotNull { pull -> relation(pull)?.let { contribution(pull, it, detachAt) } }
+            bearing.lastOrNull { it.pull.key == own }?.let { listOf(it) } ?: bearing
+        }.collectLatest { current ->
+            // Each pull that changed phase, or came to bear on the entry or stopped, sets the
+            // springs as it would alone; the one follower of each value then follows all of them
+            // together, so a pull starting, coming loose, rejoining or ending moves the entry on
+            // from where it is.
+            val next = current.associateBy { it.pull }
+            last.forEach { (pull, before) -> if (pull !in next) magnet.respring(before, null, current, settle, quick, roundness) }
+            current.forEach { magnet.respring(last[it.pull], it, current, settle, quick, roundness) }
+            last = next
+            val goal = combine(current, nearestShare * detachAt)
+            coroutineScope {
+                launch { magnet.lean.follow(goal.lean) }
+                launch { magnet.backdrop.follow(goal.backdrop) }
+                launch { magnet.topStart.follow(goal.topStart) }
+                launch { magnet.topEnd.follow(goal.topEnd) }
+                launch { magnet.bottomStart.follow(goal.bottomStart) }
+                launch { magnet.bottomEnd.follow(goal.bottomEnd) }
             }
+        }
     }
     return magnet
+}
+
+/**
+ * Sets the springs that carry the magnet on for a pull that has changed phase, or has come to bear
+ * on the entry or stopped: [before] and [after] are what the pull gave the entry before the change
+ * and after it, null where it gave nothing, and [bearing] is what every pull bearing on the entry
+ * after the change gives it. A loose entry's neighbours settle on [settle], and so do they once it
+ * is let go, from the speed it was let go at; rejoining, they catch up on [quick]; and the corners
+ * change on [roundness] whenever the pull's phase does. A pull that comes to bear on the entry part
+ * of the way through, or stops bearing on it while it still leans or rounds with it, moves it on a
+ * spring too rather than in one frame.
+ *
+ * The entry has one lean for all the pulls on it, so while another finger still pulls it, the
+ * entry keeps up with that finger: what would settle it catches up on [quick] instead, which keeps
+ * pace with a finger as a rejoining entry does, and a rejoin keeps the speed the other pulls give
+ * it rather than starting from rest.
+ */
+private fun Magnet.respring(
+    before: Contribution?,
+    after: Contribution?,
+    bearing: List<Contribution>,
+    settle: AnimationSpec<Float>,
+    quick: AnimationSpec<Float>,
+    roundness: AnimationSpec<Float>,
+) {
+    if (before != null && after != null && before.phase == after.phase && before.dismissing == after.dismissing) return
+    val phase = after?.phase
+    val rejoined = before?.phase == PullPhase.Detached && phase == PullPhase.Pulling
+    val release = after?.pull?.releaseVelocity ?: 0f
+    val changed = after?.pull ?: before?.pull
+    val others = bearing.filter { it.pull !== changed }
+    val followed = others.any { it.phase == PullPhase.Pulling }
+    val back = if (followed) quick else settle
+    val fromRest = if (others.isEmpty()) 0f else null
+    for ((follower, share) in listOf(lean to (after?.share ?: 0f), backdrop to (after?.backdropShare ?: 0f))) {
+        when (phase) {
+            PullPhase.Detached -> follower.animateWith(back)
+            // Its lean already moves with every pull on it, this one included, so with other pulls
+            // still on it the lean keeps the speed it has rather than taking only this finger's.
+            PullPhase.Released -> follower.animateWith(back, if (others.isEmpty()) release * share else null)
+            PullPhase.Pulling -> when {
+                rejoined -> follower.animateWith(quick, fromRest)
+                before == null && after?.pose?.leans == true -> follower.animateWith(back)
+            }
+            null -> if (before?.pose?.leans == true) follower.animateWith(back)
+        }
+    }
+    val rounds = when (phase) {
+        PullPhase.Pulling -> rejoined || (before == null && after?.pose?.rounds == true)
+        null -> before?.pose?.rounds == true
+        else -> true
+    }
+    if (rounds) corners.forEach { it.animateWith(roundness) }
+}
+
+/**
+ * The pose of an entry the pulls of [contributions] bear on together. Their leans add, so pulls the
+ * same way add up and opposite ones cancel, up to [reach] either way, and each corner rounds as far
+ * as the pull that rounds it most, since a corner rounded twice is no rounder.
+ */
+private fun combine(contributions: List<Contribution>, reach: Float): Pose {
+    var lean = 0f
+    var backdrop = 0f
+    var topStart = 0f
+    var topEnd = 0f
+    var bottomStart = 0f
+    var bottomEnd = 0f
+    for (contribution in contributions) {
+        val pose = contribution.pose
+        lean += pose.lean
+        backdrop += pose.backdrop
+        topStart = max(topStart, pose.topStart)
+        topEnd = max(topEnd, pose.topEnd)
+        bottomStart = max(bottomStart, pose.bottomStart)
+        bottomEnd = max(bottomEnd, pose.bottomEnd)
+    }
+    return Pose(lean.coerceIn(-reach, reach), backdrop.coerceIn(-reach, reach), topStart, topEnd, bottomStart, bottomEnd)
 }
 
 /**
@@ -403,7 +431,7 @@ internal fun rememberMagnet(list: MagneticList, detachAt: Float, relate: (Pull) 
 @Composable
 internal fun rememberRowMagnet(list: MagneticList, key: Any, group: Any, index: Int, detachAt: Float): Magnet {
     val place by rememberUpdatedState(Triple(key, group, index))
-    return rememberMagnet(list, detachAt) { pull -> rowRelation(pull, place) }
+    return rememberMagnet(list, key, detachAt, leanShare(1)) { pull -> rowRelation(pull, place) }
 }
 
 /** The share of the finger's travel a neighbour [distance] rows away leans by; the pulled row moves on its own. */
@@ -438,21 +466,25 @@ private fun rowRelation(pull: Pull, place: Triple<Any, Any, Int>): Relation? {
  */
 internal val NEIGHBOUR_ROUNDNESS = floatArrayOf(ROUNDNESS_MULTIPLIERS[2], ROUNDNESS_MULTIPLIERS[1], ROUNDNESS_MULTIPLIERS[0])
 
-private fun targets(pull: Pull, relation: Relation, detachAt: Float): Targets {
-    val mode = Mode(pull, pull.phase, pull.dismissing)
+private fun contribution(pull: Pull, relation: Relation, detachAt: Float): Contribution {
+    val phase = pull.phase
     val share = if ((pull.finger >= 0f) != pull.rtl) relation.towardEnd else relation.towardStart
-    fun corners(mask: Int, value: Float, travel: Float) = Targets(
-        mode,
+    fun corners(mask: Int, value: Float, travel: Float) = Contribution(
+        pull,
+        phase,
+        pull.dismissing,
         share,
         relation.backdrop,
-        share * travel,
-        relation.backdrop * travel,
-        if (mask and Corners.TOP_START != 0) value else 0f,
-        if (mask and Corners.TOP_END != 0) value else 0f,
-        if (mask and Corners.BOTTOM_START != 0) value else 0f,
-        if (mask and Corners.BOTTOM_END != 0) value else 0f,
+        Pose(
+            share * travel,
+            relation.backdrop * travel,
+            if (mask and Corners.TOP_START != 0) value else 0f,
+            if (mask and Corners.TOP_END != 0) value else 0f,
+            if (mask and Corners.BOTTOM_START != 0) value else 0f,
+            if (mask and Corners.BOTTOM_END != 0) value else 0f,
+        ),
     )
-    return when (pull.phase) {
+    return when (phase) {
         PullPhase.Pulling -> {
             val pulled = (abs(PULLED_SHARE * pull.finger) / detachAt).coerceAtMost(MAX_PRE_DETACH_ROUNDNESS)
             corners(relation.corners, relation.roundness * pulled, pull.finger)
@@ -474,7 +506,7 @@ private fun targets(pull: Pull, relation: Relation, detachAt: Float): Targets {
  */
 @Stable
 internal class EntrySwipe {
-    val shift = Follower()
+    val shift = SpringFollower(Animatable(0f))
     var pull by mutableStateOf<Pull?>(null)
         internal set
 
@@ -504,7 +536,7 @@ internal class EntrySwipe {
     internal var release: Job? = null
     internal val tracker = VelocityTracker1D(isDataDifferential = true)
     internal var state: DraggableState? = null
-    internal var onStart: () -> Unit = {}
+    internal var onStart: suspend () -> Unit = {}
     internal var onStop: (Float) -> Unit = {}
     internal var onReturn: () -> Unit = {}
 
@@ -536,14 +568,16 @@ internal fun rememberEntrySwipe(
     group: Any,
     index: Int,
     list: MagneticList,
+    magnet: Magnet,
     flyTo: (side: Float) -> Float,
     onDelete: (HistoryEntry) -> Unit,
     onFavorite: (HistoryEntry, Boolean) -> Unit,
     leavesOnFavorite: Boolean = false,
     kept: EntrySwipe? = null,
 ): EntrySwipe {
+    val context = LocalContext.current
     val haptics = rememberHaptics()
-    val swipeHaptics = rememberSwipeHaptics(haptics)
+    val swipeHaptics = remember(list) { list.haptics(context, haptics) }
     val swipe = remember { kept ?: EntrySwipe() }
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     val density = LocalDensity.current
@@ -571,7 +605,10 @@ internal fun rememberEntrySwipe(
         }
     }
     DisposableEffect(list) {
-        onDispose { if (list.pull?.key == entry.text) list.pull = null }
+        onDispose {
+            swipe.pull?.let { list.pulls.remove(it) }
+            magnet.lean.held = false
+        }
     }
     LaunchedEffect(swipe.direction, entry.favorite) {
         if (swipe.direction == SwipeToDismissBoxValue.Settled) swipe.becomesFavorite = !entry.favorite
@@ -609,6 +646,8 @@ internal fun rememberEntrySwipe(
 
     // Handed to the swipe once the composition they come from is kept, never while it is composed.
     SideEffect {
+        // A row deleted above one still held moves it up a place, and its neighbours with it.
+        swipe.pull?.index = index
         swipe.rtl = rtl
         swipe.onStart = {
             // An entry caught while it moves is swiped on from where it is.
@@ -618,11 +657,31 @@ internal fun rememberEntrySwipe(
             shift.held = false
             shift.value.updateBounds(null, null)
             swipe.tracker.resetTracking()
-            val from = shift.value.value
-            if (from != 0f) shift.animateWith(quick, shift.value.velocity) else shift.stopAnimating()
-            val swiped = Pull(entry.text, group, place, swipe.rtl).apply { finger = from }
+            // Taken up from where it shows, so it stays under the finger: what it leans with the
+            // pulls of other fingers becomes its own shift at once, and its lean is held at rest
+            // until it is let go, since a pulled entry follows only its own finger.
+            magnet.lean.held = true
+            val leaning = magnet.lean.value.value
+            val moving = shift.value.velocity
+            val from = shift.value.value + leaning
+            // The shift first, which may wait for a release still running to stop, then the lean
+            // straight after it, so no frame shows the one moved without the other.
+            if (leaning != 0f) shift.value.snapTo(from)
+            magnet.lean.snapTo(0f)
+            if (from != 0f) shift.animateWith(quick, moving) else shift.stopAnimating()
+            // An attached entry shows a share of the finger's travel and a loose one all of it, so
+            // the finger's travel that shows the entry where it is depends on which it is taken as:
+            // attached while it shows less than an attached entry can, loose beyond that.
+            val loose = abs(from) >= PULLED_SHARE * detachAt
+            val swiped = Pull(entry.text, group, place, swipe.rtl).apply {
+                finger = if (loose) from else from / PULLED_SHARE
+                if (loose) phase = PullPhase.Detached
+            }
+            // The pull of a release caught before it settled gives way to the new one at once, so
+            // the entry never pulls its neighbours twice.
+            swipe.pull?.let { list.pulls.remove(it) }
             swipe.pull = swiped
-            list.pull = swiped
+            list.pulls.add(swiped)
         }
 
         swipe.onReturn = {
@@ -669,10 +728,13 @@ internal fun rememberEntrySwipe(
                             val edge = distance(side)
                             if (edge > 0f) shift.value.updateBounds(-edge, edge)
                             shift.value.animateTo(side * edge * FLY_PAST, settle, side * speed)
+                            // Gone, the entry lets go of its neighbours as it acts, so they settle back
+                            // at once rather than once what the swipe showed behind it has faded, and
+                            // the rows the action moves are not taken for its neighbours meanwhile.
+                            list.pulls.remove(swiped)
                             if ((side > 0f) != swipe.rtl) {
                                 favorite(current, !current.favorite)
                                 if (!leaves) {
-                                    if (list.pull === swiped) list.pull = null
                                     shift.value.animateTo(0f, settle)
                                     swipe.acting = false
                                 } else {
@@ -686,8 +748,12 @@ internal fun rememberEntrySwipe(
                             shift.value.animateTo(0f, settle, velocity)
                         }
                     } finally {
-                        if (list.pull === swiped) list.pull = null
-                        if (swipe.pull === swiped) swipe.pull = null
+                        list.pulls.remove(swiped)
+                        if (swipe.pull === swiped) {
+                            swipe.pull = null
+                            // Let go, it leans with the other fingers again, from rest.
+                            magnet.lean.held = false
+                        }
                     }
                 }
             }
@@ -710,7 +776,8 @@ internal fun Modifier.entrySwipe(swipe: EntrySwipe, enabled: Boolean = true): Mo
 
 /**
  * The vibrations of a notification swiped: low ticks growing with the pull while it is attached,
- * felt at most every [PULL_INTERVAL_MS], and a click where it comes loose or rejoins. They are touch
+ * felt at most every [PULL_INTERVAL_MS] however many rows are pulled at once, since they share one
+ * vibrator, and a click where it comes loose or rejoins. They are touch
  * vibrations, so the system's touch feedback setting governs them. Without the primitives, the
  * click falls back to the gesture threshold feedback, and the pull to the lightest tick a view
  * gives, which cannot grow stronger and so comes more often instead.
@@ -782,10 +849,4 @@ internal class SwipeHaptics(context: Context, private val fallback: Haptics) {
         const val CLICK_SCALE = 0.7f
         const val FALLBACK_SLOWEST_MS = 240f
     }
-}
-
-@Composable
-internal fun rememberSwipeHaptics(haptics: Haptics): SwipeHaptics {
-    val context = LocalContext.current
-    return remember(context, haptics) { SwipeHaptics(context, haptics) }
 }

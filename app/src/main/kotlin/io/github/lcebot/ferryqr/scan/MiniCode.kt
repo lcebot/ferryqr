@@ -53,21 +53,13 @@ data class MiniCode(val center: PointF, val radius: Float, val eyes: List<PointF
         return r
     }
 
-    /** The code's own region of [frame], small enough to hand to WeChat; never [frame] itself. */
-    fun crop(frame: Bitmap): Bitmap? = cropForWeChat(frame, bounds(frame.width, frame.height))
+    /** The code's own region of [frame], small enough to hand to WeChat, as [cropForWeChat] cuts it. */
+    fun crop(frame: Bitmap): Bitmap? = frame.cropForWeChat(bounds(frame.width, frame.height))
 }
 
-/** Region [b] of [frame], scaled down to what WeChat's scanner needs; never [frame] itself. */
-internal fun cropForWeChat(frame: Bitmap, b: Rect): Bitmap? {
-    if (!b.intersect(0, 0, frame.width, frame.height) || b.isEmpty) return null
-    val scale = min(1f, MAX_CROP_SIDE.toFloat() / max(b.width(), b.height()))
-    val w = max(1, (b.width() * scale).roundToInt())
-    val h = max(1, (b.height() * scale).roundToInt())
-    val region = Bitmap.createBitmap(frame, b.left, b.top, b.width(), b.height())
-    val out = if (region.width == w && region.height == h) region else Bitmap.createScaledBitmap(region, w, h, true)
-    if (out !== region && region !== frame) region.recycle()
-    return if (out === frame) frame.copy(Bitmap.Config.ARGB_8888, false) else out
-}
+/** [region] of this frame as an [ownedCrop], scaled down to what WeChat's scanner needs. */
+internal fun Bitmap.cropForWeChat(region: Rect): Bitmap? =
+    ownedCrop(region) { cut -> min(1f, MAX_CROP_SIDE.toFloat() / max(cut.width(), cut.height())) }
 
 /**
  * The structural check that tells a mini program code from anything else the WeChat detector

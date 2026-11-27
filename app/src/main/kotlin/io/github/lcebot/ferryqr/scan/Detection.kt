@@ -58,7 +58,7 @@ fun MiniCode.asLocatedDetection(width: Int, height: Int): Detection {
 /** The region of [frame] a located mini program code covers, for handing to WeChat. */
 fun Detection.locatedCrop(frame: Bitmap): Bitmap? {
     val b = bounds
-    return cropForWeChat(frame, Rect(b.left.roundToInt(), b.top.roundToInt(), b.right.roundToInt(), b.bottom.roundToInt()))
+    return frame.cropForWeChat(Rect(b.left.roundToInt(), b.top.roundToInt(), b.right.roundToInt(), b.bottom.roundToInt()))
 }
 
 internal fun List<Detection>.mergedWith(other: List<Detection>): List<Detection> {

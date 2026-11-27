@@ -155,7 +155,10 @@ class HistoryStore private constructor(private val context: Context) {
     }
 
     /** Waits for the file to be read, so a shortcut opened at launch still finds its entry. */
-    suspend fun find(text: String): HistoryEntry? = entries.filterNotNull().first().find { it.text == text }
+    suspend fun find(text: String): HistoryEntry? = find { it.text == text }
+
+    /** The first entry [matching] takes, once the file is read. */
+    suspend fun find(matching: (HistoryEntry) -> Boolean): HistoryEntry? = entries.filterNotNull().first().find(matching)
 
     /**
      * The entry with [text], or null while the history has none, from once the file is read. Only
@@ -278,7 +281,11 @@ class HistoryStore private constructor(private val context: Context) {
     private fun ownLabel(content: ReadContent, label: String): String? =
         label.trim().takeIf { content.names(context, null).isOwnName(it) }
 
-    fun delete(entry: HistoryEntry) = update { entries -> entries.filter { it.text != entry.text } }
+    /** Deletes [deleted] in one change, so the page and the saved file see them go together. */
+    fun delete(deleted: Collection<HistoryEntry>) {
+        val texts = deleted.mapTo(HashSet()) { it.text }
+        update { entries -> entries.filterNot { it.text in texts } }
+    }
 
     /** Puts deleted entries back where their times place them, except content scanned again since. */
     fun restore(deleted: List<HistoryEntry>) = update { entries ->

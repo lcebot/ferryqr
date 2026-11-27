@@ -2,7 +2,6 @@ package io.github.lcebot.ferryqr.dispatch
 
 import android.content.Context
 import android.graphics.Bitmap
-import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.generate.CodeGenerator
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -56,16 +55,7 @@ object CardFactory {
     }
 
     private fun plain(context: Context, source: CardSource): ResultCard = when (source) {
-        is CardSource.LocatedMini -> ResultCard(
-            raw = "",
-            kind = R.string.kind_mini_program,
-            icon = R.drawable.ic_qr_code_scanner,
-            headline = context.getString(R.string.mini_headline),
-            body = null,
-            notes = emptyList(),
-            actions = emptyList(),
-            image = source.crop,
-        )
+        is CardSource.LocatedMini -> Cards.plainMiniProgram(context, source.crop)
         is CardSource.Read -> Cards.plainText(context, source.content.text, source.content.format)
     }
 }

@@ -121,11 +121,11 @@ internal fun ReorderAutoScroll(listState: LazyListState, reorder: FavoritesReord
         // The way the list has been scrolling, which it keeps up until the margin even once the
         // favorites no longer reach past the edge.
         var going = 0
-        var last = 0L
+        // Stepped as the springs are, so a pause, as while the page is hidden, does not scroll the
+        // list by all of it at once.
+        val frames = FrameSteps()
         while (true) {
-            val now = withFrameNanos { it }
-            val seconds = if (last == 0L) 0f else (now - last) / 1_000_000_000f
-            last = now
+            val seconds = frames.elapsed(withFrameNanos { it }) / 1_000_000_000f
             val info = listState.layoutInfo
             // Offset 0 is the top of the visible list, just below the top bar; the bottom is where
             // the navigation bar starts covering the list, which runs on behind it.

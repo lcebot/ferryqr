@@ -13,6 +13,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import io.github.lcebot.ferryqr.history.HistoryEntry
+import java.util.WeakHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -124,22 +125,23 @@ internal class TileBoard(
 
     override fun onScrolled(distance: Float) = scrolled(distance)
 
-    private var neighboursOf: Triple<Pull, TileArrangement, Int>? = null
-    private var neighbours: Map<String, Relation> = emptyMap()
+    /**
+     * The tiles around each pull, with the arrangement and the rows shown they were worked out
+     * among. Held only as long as the pull itself, which the list lets go of once it settles.
+     */
+    private val neighbours = WeakHashMap<Pull, Triple<TileArrangement, Int, Map<String, Relation>>>()
 
     /**
      * How [tile] stands to [pull] among [arrangement], or null where it takes no part. The tiles
-     * around a pull are worked out once for it, and looked up on every step of the finger.
+     * around each pull are worked out once for it, and looked up on every step of every finger.
      */
     fun relation(pull: Pull, tile: String, arrangement: TileArrangement): Relation? {
         if (pull.group != TILES_GROUP) return null
         if (pull.key == tile) return Relation(0f, 0f, 1f, Corners.ALL, Corners.ALL, backdrop = NEAR_TILE_SHARE)
-        val worked = neighboursOf
-        if (worked == null || worked.first !== pull || worked.second !== arrangement || worked.third != rowsShown) {
-            neighbours = tileNeighbours(pull.key as? String ?: return null, arrangement, rowsShown)
-            neighboursOf = Triple(pull, arrangement, rowsShown)
-        }
-        return neighbours[tile]
+        val worked = neighbours[pull]?.takeIf { (among, rows, _) -> among === arrangement && rows == rowsShown }
+            ?: Triple(arrangement, rowsShown, tileNeighbours(pull.key as? String ?: return null, arrangement, rowsShown))
+                .also { neighbours[pull] = it }
+        return worked.third[tile]
     }
 
     /** Picks up the tile [tile], held at [grab] from its start and top edges. */

@@ -7,8 +7,8 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
-import io.github.lcebot.ferryqr.EntryPresentation
 import io.github.lcebot.ferryqr.FavoriteLayout
+import io.github.lcebot.ferryqr.dispatch.ContentNames
 import io.github.lcebot.ferryqr.history.HistoryEntry
 
 /**
@@ -46,7 +46,7 @@ internal class FavoritesSection(
 }
 
 /**
- * The favorites section for [favorites], shown as [presentations] give them, in [layout], [folded]
+ * The favorites section for [favorites], shown by the [names] they go by, in [layout], [folded]
  * or not to [foldedRows], in a page [available] pixels wide inside its margins. [tilesSuggested]
  * says whether tiles were suggested already. It is built again only when one of these changes, or
  * the order [board] or [listReorder] moves the favorites into while one is moved, and it keeps
@@ -55,7 +55,7 @@ internal class FavoritesSection(
 @Composable
 internal fun rememberFavoritesSection(
     favorites: List<HistoryEntry>,
-    presentations: List<EntryPresentation>,
+    names: List<ContentNames>,
     layout: FavoriteLayout,
     folded: Boolean,
     foldedRows: Int,
@@ -69,7 +69,7 @@ internal fun rememberFavoritesSection(
     LaunchedEffect(favorites) { listReorder.sync(favorites) }
     // Tiles are as wide as their names, measured before they are laid out, so the rows they fill
     // are known for folding them and for suggesting them.
-    val widths = rememberTileWidths(presentations, with(density) { tileChrome(layoutDirection).roundToPx() })
+    val widths = rememberTileWidths(names, with(density) { tileChrome(layoutDirection).roundToPx() })
     val gap = with(density) { ListItemDefaults.SegmentedGap.roundToPx() }
     val column = with(density) { GRID_COLUMN.roundToPx() }
     // Read here rather than while building, so moving a favorite builds the section again.

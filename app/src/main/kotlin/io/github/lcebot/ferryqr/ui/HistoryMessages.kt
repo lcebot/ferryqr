@@ -34,10 +34,10 @@ internal class HistoryMessages(private val vm: HistoryViewModel) {
         note = Note(message)
     }
 
-    /** Deletes [entry], and the offer to undo it takes the place of a message still to show. */
-    fun delete(entry: HistoryEntry) {
+    /** Deletes [entries], and the offer to undo them takes the place of a message still to show. */
+    fun delete(entries: List<HistoryEntry>) {
         note = null
-        vm.delete(entry)
+        vm.delete(entries)
     }
 
     /**

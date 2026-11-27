@@ -138,10 +138,10 @@ class LiveAnalyzer(
     /** Where each muted code was read last, so the regions there are not read again. */
     private val mutedAt = HashMap<String, RectF>()
 
-    /** Starts over as if the analyzer had just been created. */
     /** Lets go of the native image the frames are read into; call it on the analysis thread, after the last frame. */
     fun release() = uprightBuffer.release()
 
+    /** Starts over as if the analyzer had just been created. */
     fun reset() {
         dismissed = null
         clearRequested = true
@@ -294,7 +294,7 @@ class LiveAnalyzer(
             return grayMat
         }
 
-        fun survey(look: Look): Survey = gray()?.let { wechat.survey(it, look) } ?: wechat.survey(get(), look)
+        fun survey(look: Look): Survey = gray()?.let { wechat.survey(it, look, uprightBuffer) } ?: wechat.survey(get(), look)
 
         /** [region] of the frame on its own, as [regionCrop] cuts it. */
         fun region(region: Rect, enlarged: Boolean): RegionCrop? {

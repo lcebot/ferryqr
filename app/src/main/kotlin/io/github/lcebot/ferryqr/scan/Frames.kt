@@ -24,6 +24,15 @@ private const val MIN_REGION_SIDE = 400
 private const val MIN_REGION_READ = 8
 
 /**
+ * A whole frame held while it shows frozen on screen: a camera frame, or an image of up to 3000
+ * pixels a side. Its owner releases it once, when whatever shows it has left the screen, its fade
+ * included, since a picture of several megabytes would otherwise wait for the collector.
+ */
+class FrozenFrame(val bitmap: Bitmap) {
+    fun release() = bitmap.recycle()
+}
+
+/**
  * Crops and rotates the frame the same way zxing-cpp does internally, so its positions map onto
  * the returned bitmap without further transformation.
  */
@@ -71,20 +80,39 @@ private fun clipped(region: Rect, width: Int, height: Int): Rect? {
 }
 
 /**
+ * [rect] of this bitmap as a bitmap of its own, which the caller recycles, enlarged or shrunk by
+ * what [scale] gives for the part of [rect] that lies in the bitmap; null when none of it does.
+ * Every crop goes through here, since the platform hands back the source itself for a cut that
+ * covers all of it, and the source stays with whoever owns it.
+ */
+fun Bitmap.ownedCrop(rect: Rect, scale: (cut: Rect) -> Float = { 1f }): Bitmap? {
+    val r = Rect(rect)
+    if (!r.intersect(0, 0, width, height) || r.isEmpty) return null
+    val factor = scale(r)
+    // Scaled in the same pass as the cut, so no cut at the region's own size is made only to be
+    // thrown away. Each side keeps at least a pixel, since a thin region shrunk would otherwise
+    // round to none, which the platform refuses.
+    val sizing = if (factor == 1f) {
+        null
+    } else {
+        val w = (r.width() * factor).roundToInt().coerceAtLeast(1)
+        val h = (r.height() * factor).roundToInt().coerceAtLeast(1)
+        Matrix().apply { setScale(w.toFloat() / r.width(), h.toFloat() / r.height()) }
+    }
+    val cut = Bitmap.createBitmap(this, r.left, r.top, r.width(), r.height(), sizing, true)
+    return if (cut === this) copy(Bitmap.Config.ARGB_8888, false) else cut
+}
+
+/**
  * [region] of this colour image, enlarged when small if [enlarged], as zxing-cpp's deep read needs;
  * the WeChat decoder takes it at its own size, since it enlarges small codes itself. Null when too
  * little of the region lies in the image.
  */
 fun Bitmap.regionCrop(region: Rect, enlarged: Boolean): RegionCrop? {
     val r = clipped(region, width, height) ?: return null
-    val cut = Bitmap.createBitmap(this, r.left, r.top, r.width(), r.height())
-    // A region covering the whole image comes back as the image itself, which stays the caller's.
-    val crop = if (cut === this) copy(Bitmap.Config.ARGB_8888, false) else cut
     val scale = if (enlarged) enlargement(r.width(), r.height()) else 1f
-    if (scale == 1f) return RegionCrop(crop, r.left, r.top, 1f)
-    val input = Bitmap.createScaledBitmap(crop, (r.width() * scale).toInt(), (r.height() * scale).toInt(), true)
-    if (input !== crop) crop.recycle()
-    return RegionCrop(input, r.left, r.top, scale)
+    val crop = ownedCrop(r) { scale } ?: return null
+    return RegionCrop(crop, r.left, r.top, scale)
 }
 
 /**
@@ -125,7 +153,8 @@ fun decodeStill(context: Context, uri: Uri): Bitmap? = try {
             )
         }
     }
-    if (bitmap.config == Bitmap.Config.ARGB_8888) bitmap else bitmap.copy(Bitmap.Config.ARGB_8888, false)
+    // Wide gamut and HDR photos decode at twice the bytes per pixel, so the original goes at once.
+    if (bitmap.config == Bitmap.Config.ARGB_8888) bitmap else bitmap.copy(Bitmap.Config.ARGB_8888, false).also { bitmap.recycle() }
 } catch (e: Exception) {
     null
 }

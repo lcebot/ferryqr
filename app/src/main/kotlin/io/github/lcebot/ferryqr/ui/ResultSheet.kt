@@ -1,5 +1,4 @@
-// rememberBottomSheetState is an experimental Material 3 API.
-@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
+@file:OptIn(ExperimentalMaterial3ExpressiveApi::class)
 
 package io.github.lcebot.ferryqr.ui
 
@@ -18,20 +17,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -55,23 +49,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * A result card in a sheet of its own, which shows what the card's actions report. [onHandoff]
- * follows an action another app took over. With [closing] set, the sheet slides away as when
- * dismissed, and then [onDismiss] follows.
+ * A result card in a sheet of its own, which shows what the card's actions report. [onClosed]
+ * follows once the sheet has closed, dismissed or after another app took over.
  */
 @Composable
-fun ResultSheet(card: ResultCard, onDismiss: () -> Unit, onHandoff: () -> Unit, closing: Boolean = false) {
-    val state = rememberBottomSheetState(
-        initialValue = SheetValue.Hidden,
-        enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded),
-    )
-    val dismiss by rememberUpdatedState(onDismiss)
-    LaunchedEffect(closing) {
-        if (!closing) return@LaunchedEffect
-        state.hide()
-        dismiss()
-    }
-    CardSheet(onDismissRequest = onDismiss, sheetState = state, onHandoff = onHandoff) { onAction, onMessage ->
+fun ResultSheet(card: ResultCard, onClosed: (CloseReason) -> Unit) {
+    CardSheet(onClosed = onClosed) { onAction, onMessage, _ ->
         ResultCardContent(
             card = card,
             onAction = onAction,
@@ -198,10 +181,7 @@ fun ResultCardContent(
             text = card.raw,
             selected = shown ?: drawnAs,
             original = original,
-            onPick = { type ->
-                shown = type.takeUnless { it == original }
-                picking = false
-            },
+            onPick = { type -> shown = type.takeUnless { it == original } },
             onDismiss = { picking = false },
         )
     }

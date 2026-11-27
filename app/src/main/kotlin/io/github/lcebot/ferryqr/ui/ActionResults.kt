@@ -1,14 +1,9 @@
-// SheetState is an experimental Material 3 API.
-@file:OptIn(ExperimentalMaterial3Api::class)
-
 package io.github.lcebot.ferryqr.ui
 
 import android.os.Build
 import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.SheetState
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
@@ -24,37 +19,40 @@ import io.github.lcebot.ferryqr.dispatch.ActionResult
 import io.github.lcebot.ferryqr.dispatch.CardAction
 import kotlinx.coroutines.launch
 
+/** Why a card's sheet closed: another app took over after one of its actions, or it was dismissed. */
+enum class CloseReason { HANDOFF, DISMISSED }
+
 /**
  * A [ModalSheet] holding a result card, with a snackbar host of its own along the bottom of the
  * sheet. The sheet is a window over the page, so a snackbar of the page would show under it. The
  * sheet keeps its content clear of the navigation bar, and the host with it, and the host shows one
  * message at a time, each in place of the last.
  *
- * [content] is given what runs one of the card's actions and what shows a message in the sheet.
- * Every sheet with a card follows an action the same way: a haptic for how it went, a message where
- * the system gives none, and [onHandoff] once another app took over.
+ * [content] is given what runs one of the card's actions, what shows a message in the sheet and
+ * what closes it. Every sheet with a card follows an action the same way: a haptic for how it went,
+ * and a message where the system gives none. Once another app took over, or when closed from its
+ * content, the sheet closes as a [SheetCloser] closes it, and [onClosed] follows with why it closed.
  */
 @Composable
 internal fun CardSheet(
-    onDismissRequest: () -> Unit,
-    sheetState: SheetState,
-    onHandoff: () -> Unit,
-    content: @Composable (onAction: (CardAction) -> Unit, onMessage: (Int) -> Unit) -> Unit,
+    onClosed: (CloseReason) -> Unit,
+    content: @Composable (onAction: (CardAction) -> Unit, onMessage: (Int) -> Unit, onClose: () -> Unit) -> Unit,
 ) {
     val activity = LocalActivity.current ?: return
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val closer = rememberSheetCloser(onClosed)
     val snackbar = remember { SnackbarHostState() }
     val onMessage: (Int) -> Unit = remember(snackbar, scope, context) {
         { message -> scope.launch { snackbar.showLatest(context.getString(message)) } }
     }
-    val onResult = rememberActionResultHandler(onHandoff, onMessage)
+    val onResult = rememberActionResultHandler({ closer.close(CloseReason.HANDOFF) }, onMessage)
     val onAction: (CardAction) -> Unit = remember(activity, onResult) {
         { action -> onResult(action.run(activity)) }
     }
-    ModalSheet(onDismissRequest = onDismissRequest, sheetState = sheetState) {
+    ModalSheet(closer, dismissal = CloseReason.DISMISSED) {
         Box(Modifier.fillMaxWidth()) {
-            content(onAction, onMessage)
+            content(onAction, onMessage) { closer.close(CloseReason.DISMISSED) }
             SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
         }
     }

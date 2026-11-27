@@ -151,17 +151,27 @@ object Cards {
             else -> R.string.mini_body_album
         }
         val installed = wechat.installed(context)
-        return ResultCard(
-            raw = "",
-            kind = R.string.kind_mini_program,
-            icon = R.drawable.ic_qr_code_scanner,
-            headline = context.getString(R.string.mini_headline),
+        return plainMiniProgram(context, crop).copy(
             body = context.getString(body),
             notes = if (installed) emptyList() else listOf(context.getString(R.string.mini_no_wechat)),
             actions = listOfNotNull(targetAction(context, wechat, origin, ready) { WeChat.openScanner(it, crop) }),
-            image = crop,
         )
     }
+
+    /**
+     * A mini program code located but not read, shown as [crop] under its headline and nothing more,
+     * which asks nothing of the system. [miniProgram] adds to it, and a card that fails falls back to it.
+     */
+    fun plainMiniProgram(context: Context, crop: Bitmap): ResultCard = ResultCard(
+        raw = "",
+        kind = R.string.kind_mini_program,
+        icon = R.drawable.ic_qr_code_scanner,
+        headline = context.getString(R.string.mini_headline),
+        body = null,
+        notes = emptyList(),
+        actions = emptyList(),
+        image = crop,
+    )
 
     /**
      * The mini program code drawn last, by the content it holds. A scan's way to WeChat and its

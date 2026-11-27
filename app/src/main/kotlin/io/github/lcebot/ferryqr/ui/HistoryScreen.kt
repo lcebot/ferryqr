@@ -21,12 +21,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -56,10 +54,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -79,7 +75,6 @@ import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
@@ -151,6 +146,7 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
     // The count and the clear button are small parts of the bar, while what shows below it is the
     // whole page.
     val barFade = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
+    val barResize = MaterialTheme.motionScheme.fastSpatialSpec<IntSize>()
     val pageFade = MaterialTheme.motionScheme.slowEffectsSpec<Float>()
     val magnetic = remember(scope) { MagneticList(scope) }
     val favoriting = rememberFavoriteRequester()
@@ -181,7 +177,13 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
 
     fun delete(entry: HistoryEntry) {
         haptics.confirm()
-        messages.delete(entry)
+        messages.delete(listOf(entry))
+    }
+
+    // A day's entries go together, as one undoable deletion, so nothing asks first.
+    fun clearDay(entries: List<HistoryEntry>) {
+        haptics.confirm()
+        messages.delete(entries)
     }
 
     // Made once for what they show, so rows that have not changed are not composed again.
@@ -219,7 +221,13 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
                     }
                 },
                 actions = {
-                    AnimatedVisibility(visible = recent.isNotEmpty(), enter = fadeIn(barFade), exit = fadeOut(barFade)) {
+                    // The button's slot opens and closes as it fades, so the title beside it gains and
+                    // loses room smoothly; unclipped, as the favorites' buttons are.
+                    AnimatedVisibility(
+                        visible = recent.isNotEmpty(),
+                        enter = fadeIn(barFade) + expandHorizontally(barResize, expandFrom = Alignment.End, clip = false),
+                        exit = fadeOut(barFade) + shrinkHorizontally(barResize, shrinkTowards = Alignment.End, clip = false),
+                    ) {
                         IconButton(onClick = { haptics.tap(); vm.show(HistoryDialog.Clear) }, shapes = IconButtonDefaults.shapes()) {
                             Icon(painterResource(R.drawable.ic_delete_sweep), stringResource(R.string.history_clear))
                         }
@@ -253,7 +261,7 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
                     }
                     val section = rememberFavoritesSection(
                         favorites = favorites,
-                        presentations = lists?.favoritePresentations.orEmpty(),
+                        names = lists?.favoriteNames.orEmpty(),
                         layout = layout,
                         folded = folded,
                         foldedRows = foldedRows,
@@ -299,7 +307,7 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
                                     FavoriteTiles(
                                         board = board,
                                         favorites = favoritesByKey,
-                                        presentationOf = { lists?.presentationOf(it) },
+                                        namesOf = { lists?.namesOf(it) },
                                         inputs = section.tiles,
                                         arrangement = section.arrangement,
                                         rowsShown = section.rowsShown,
@@ -323,7 +331,7 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
                                     val moveDown = stringResource(R.string.favorite_move_down)
                                     EntryRow(
                                         entry = entry,
-                                        listed = lists?.presentationOf(entry),
+                                        listed = lists?.namesOf(entry),
                                         group = FAVORITES_GROUP,
                                         index = index,
                                         count = rows.size,
@@ -359,10 +367,10 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
                             }
                         }
                         groups.forEach { (day, items) ->
-                            item(key = "header:$day") { DayHeader(day, items.first().time, animateRow()) }
+                            item(key = "header:$day") { DayHeader(day, items.first().time, onClear = { clearDay(items) }, animateRow()) }
                             itemsIndexed(items, key = { _, e -> rowKey(e.text) }) { index, entry ->
                                 val back = remember { magnetic.departed.containsKey(entry.text) }
-                                val listed = lists?.presentationOf(entry)
+                                val listed = lists?.namesOf(entry)
                                 EntryRow(entry, listed, day, index, items.size, magnetic, actions, animateRow(flyingBack = back))
                             }
                         }
@@ -381,24 +389,11 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
 
     HistoryDialogs(vm, dialog, message = messages::show)
 
-    // History stays open after a handoff, so returning to the app lands back on the list; the card
-    // slides away as it would when dismissed rather than vanishing as the other app opens.
-    var closing by remember(showing?.text) { mutableStateOf(false) }
-
+    // History stays open after a handoff, so returning to the app lands back on the list.
     showing?.let { entry ->
         key(entry.text) {
             val card = rememberResultCard(remember(entry) { CardSource.Read(entry.content, Origin.HISTORY, entry.time) })
-            card?.let {
-                ResultSheet(
-                    card = it,
-                    onDismiss = {
-                        closing = false
-                        vm.open(null)
-                    },
-                    onHandoff = { closing = true },
-                    closing = closing,
-                )
-            }
+            card?.let { ResultSheet(card = it, onClosed = { vm.open(null) }) }
         }
     }
 }
@@ -456,76 +451,56 @@ private fun FavoritesHeader(
     onReorder: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val title = MaterialTheme.typography.titleSmall
     val motion = MaterialTheme.motionScheme
     val effects = motion.fastEffectsSpec<Float>()
     val spatial = motion.fastSpatialSpec<Float>()
     val resize = motion.fastSpatialSpec<IntSize>()
     val enter = fadeIn(effects) + scaleIn(spatial) + expandHorizontally(resize, expandFrom = Alignment.End, clip = false)
     val exit = fadeOut(effects) + scaleOut(spatial) + shrinkHorizontally(resize, shrinkTowards = Alignment.End, clip = false)
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(start = LIST_TEXT_INSET, top = SECTION_TOP, bottom = SECTION_GAP),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            stringResource(R.string.favorites_title),
-            style = title,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.weight(1f),
-        )
-        val line = with(LocalDensity.current) { title.lineHeight.roundToPx() }
-        Row(
-            modifier = Modifier.layout { measurable, constraints ->
-                val buttons = measurable.measure(constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity))
-                layout(buttons.width, line) { buttons.place(0, (line - buttons.height) / 2) }
-            },
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            AnimatedVisibility(visible = foldable, enter = enter, exit = exit) {
-                val turn by animateFloatAsState(
-                    targetValue = if (folded) 0f else 180f,
-                    animationSpec = spatial,
-                    label = "favorites-chevron",
-                )
-                TextButton(onClick = onToggle, shapes = ButtonDefaults.shapes()) {
-                    AnimatedContent(
-                        targetState = folded,
-                        transitionSpec = { (fadeIn(effects) togetherWith fadeOut(effects)) using SizeTransform(clip = false) { _, _ -> resize } },
-                        label = "favorites-toggle",
-                    ) { isFolded ->
-                        Text(
-                            if (isFolded) pluralStringResource(R.plurals.favorites_show_more, hidden, hidden)
-                            else stringResource(R.string.favorites_show_less),
-                            style = LocalTextStyle.current.withTabularFigures(),
-                        )
-                    }
-                    Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-                    Icon(
-                        painterResource(R.drawable.ic_expand),
-                        contentDescription = null,
-                        modifier = Modifier.size(ButtonDefaults.IconSize).rotate(turn),
+    SectionHeader(stringResource(R.string.favorites_title), modifier) {
+        AnimatedVisibility(visible = foldable, enter = enter, exit = exit) {
+            val turn by animateFloatAsState(
+                targetValue = if (folded) 0f else 180f,
+                animationSpec = spatial,
+                label = "favorites-chevron",
+            )
+            TextButton(onClick = onToggle, shapes = ButtonDefaults.shapes()) {
+                AnimatedContent(
+                    targetState = folded,
+                    transitionSpec = { (fadeIn(effects) togetherWith fadeOut(effects)) using SizeTransform(clip = false) { _, _ -> resize } },
+                    label = "favorites-toggle",
+                ) { isFolded ->
+                    Text(
+                        if (isFolded) pluralStringResource(R.plurals.favorites_show_more, hidden, hidden)
+                        else stringResource(R.string.favorites_show_less),
+                        style = LocalTextStyle.current.withTabularFigures(),
                     )
                 }
+                Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+                Icon(
+                    painterResource(R.drawable.ic_expand),
+                    contentDescription = null,
+                    modifier = Modifier.size(ButtonDefaults.IconSize).rotate(turn),
+                )
             }
-            AnimatedVisibility(visible = reorderable || reordering, enter = enter, exit = exit) {
-                TextButton(onClick = onReorder, shapes = ButtonDefaults.shapes()) {
-                    AnimatedContent(
-                        targetState = reordering,
-                        transitionSpec = { (fadeIn(effects) togetherWith fadeOut(effects)) using SizeTransform(clip = false) { _, _ -> resize } },
-                        label = "favorites-reorder",
-                    ) { isReordering ->
-                        Text(stringResource(if (isReordering) R.string.favorites_reorder_done else R.string.favorites_reorder))
-                    }
+        }
+        AnimatedVisibility(visible = reorderable || reordering, enter = enter, exit = exit) {
+            TextButton(onClick = onReorder, shapes = ButtonDefaults.shapes()) {
+                AnimatedContent(
+                    targetState = reordering,
+                    transitionSpec = { (fadeIn(effects) togetherWith fadeOut(effects)) using SizeTransform(clip = false) { _, _ -> resize } },
+                    label = "favorites-reorder",
+                ) { isReordering ->
+                    Text(stringResource(if (isReordering) R.string.favorites_reorder_done else R.string.favorites_reorder))
                 }
             }
         }
     }
 }
 
+/** A day's header, with a button that deletes the day's entries at once, as one undoable deletion. */
 @Composable
-private fun DayHeader(day: LocalDate, sample: Long, modifier: Modifier = Modifier) {
+private fun DayHeader(day: LocalDate, sample: Long, onClear: () -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val today = LocalDate.now()
     val label = when (day) {
@@ -537,7 +512,11 @@ private fun DayHeader(day: LocalDate, sample: Long, modifier: Modifier = Modifie
             DateUtils.formatDateTime(context, sample, flags)
         }
     }
-    SectionHeader(label, modifier)
+    SectionHeader(label, modifier) {
+        TextButton(onClick = onClear, shapes = ButtonDefaults.shapes()) {
+            Text(stringResource(R.string.history_clear_day))
+        }
+    }
 }
 
 @Composable

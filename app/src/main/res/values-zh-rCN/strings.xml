@@ -241,6 +241,7 @@
         <item quantity="other">%1$d 条记录</item>
     </plurals>
     <string name="history_today">今天</string>
+    <string name="history_clear_day">清除</string>
     <string name="history_yesterday">昨天</string>
     <string name="history_clear">清空历史</string>
     <string name="history_clear_title">清空历史？</string>

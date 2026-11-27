@@ -5,7 +5,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.rememberTextMeasurer
-import io.github.lcebot.ferryqr.EntryPresentation
+import io.github.lcebot.ferryqr.dispatch.ContentNames
 import kotlin.math.max
 
 /**
@@ -14,13 +14,13 @@ import kotlin.math.max
  * shows, as [favorites] give it, so a favorite moved, renamed or added measures only itself again.
  */
 @Composable
-internal fun rememberTileWidths(favorites: List<EntryPresentation>, chrome: Int): Map<String, Int> {
+internal fun rememberTileWidths(favorites: List<ContentNames>, chrome: Int): Map<String, Int> {
     val context = LocalContext.current
     val typography = MaterialTheme.typography
     val measurer = rememberTextMeasurer()
-    // The history lists keep a presentation for as long as its entry, name and language stay as
-    // they are, so one kept is one still measured right.
-    val measured = remember(typography, measurer, chrome) { HashMap<EntryPresentation, Int>() }
+    // The process keeps an entry's names for as long as its content, name and language stay as they
+    // are, so names kept are names still measured right.
+    val measured = remember(typography, measurer, chrome) { HashMap<ContentNames, Int>() }
     return remember(favorites, measured) {
         val widths = favorites.associate { shown ->
             shown.content.text to measured.getOrPut(shown) {
