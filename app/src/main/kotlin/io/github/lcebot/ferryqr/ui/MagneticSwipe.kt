@@ -95,10 +95,10 @@ private val TRANSLATION_MULTIPLIERS = floatArrayOf(0.06f, 0.18f, PULLED_SHARE, 0
 
 /**
  * The share what a swipe shows behind the pulled row follows. It is the nearest to the pull, so it
- * follows a little more than the rows one away, as they follow more than the rows two away, while
+ * follows clearly more than the rows one away, as they follow more than the rows two away, while
  * staying well behind the row itself, which uncovers it.
  */
-private const val BACKDROP_SHARE = 0.24f
+private const val BACKDROP_SHARE = 0.3f
 
 /**
  * How strongly each row, from three above the pulled one to three below, rounds as the pull

@@ -262,7 +262,7 @@ internal fun EntryRow(
                 )
             },
     ) {
-        // What the swipe shows behind the row leans with the pull, a little more than the rows next to it.
+        // What the swipe shows behind the row leans with the pull, clearly more than the rows next to it.
         SwipeBackground(
             swipe.direction,
             swipe.armed,
