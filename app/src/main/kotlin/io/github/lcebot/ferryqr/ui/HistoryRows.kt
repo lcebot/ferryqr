@@ -20,7 +20,6 @@ import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -39,7 +38,6 @@ import androidx.compose.material3.MenuAnchorPosition
 import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -66,16 +64,15 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.offset
 import io.github.lcebot.ferryqr.EntryPresentation
 import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.history.FavoriteShortcuts
@@ -310,19 +307,27 @@ private fun EntryItem(
     val context = LocalContext.current
     val shown = rememberPresentation(entry, listed)
     val time = remember(entry.time) { DateFormat.getTimeFormat(context).format(Date(entry.time)) }
-    // A favorite is kept for what it is rather than when it was scanned.
-    val trailing: (@Composable () -> Unit)? = if (entry.favorite) null else {
-        { Text(time, style = MaterialTheme.typography.labelMedium) }
-    }
     val handle = reorder?.let { rememberHandleShow(it.active) }
-    // The text makes room for the handle as the handle comes and goes, so a title that wraps anew
-    // does so beside the moving handle rather than in one frame. Measured here rather than padded
-    // in composition, so the room changing on every frame lays the text out again without
-    // composing the row again.
+    // A favorite is kept for what it is rather than when it was scanned, so its trailing slot holds
+    // only its drag handle. A reorderable row keeps the slot whether the handle shows or not: the
+    // list item puts its gap before the slot whenever there is one, and a slot coming and going
+    // would open and close that gap in one frame.
+    val trailing: (@Composable () -> Unit)? = when {
+        reorder != null && handle != null -> { { DragHandle(entry.text, reorder, handle) } }
+        entry.favorite -> null
+        else -> { { Text(time, style = MaterialTheme.typography.labelMedium) } }
+    }
+    // While the handle is away, the text reaches over the gap the slot keeps, so the row reads as
+    // one without a trailing slot; as the handle comes, the text gives the gap back as fast as the
+    // handle grows, so a title that wraps anew does so beside the moving handle rather than in one
+    // frame. Measured here rather than padded in composition, so the room changing on every frame
+    // lays the text out again without composing the row again.
     val room = Modifier.layout { measurable, constraints ->
-        val clear = handle?.room?.roundToPx() ?: 0
-        val placeable = measurable.measure(constraints.offset(horizontal = -clear))
-        layout(constraints.constrainWidth(placeable.width + clear), placeable.height) { placeable.placeRelative(0, 0) }
+        val shown = handle?.let { (it.width / HANDLE_SIZE).coerceIn(0f, 1f) } ?: 1f
+        val reach = if (handle == null || !constraints.hasBoundedWidth) 0 else (TRAILING_GAP * (1f - shown)).roundToPx()
+        val placeable = measurable.measure(constraints.copy(maxWidth = constraints.maxWidth + reach))
+        // Wider than its place by the reach, it runs on over the slot's gap, toward the end in either direction.
+        layout(constraints.constrainWidth(placeable.width), placeable.height) { placeable.placeRelative(0, 0) }
     }
     Box {
         ListItem(
@@ -344,31 +349,25 @@ private fun EntryItem(
         ) {
             Box(room) { EntryTitle(shown.title) }
         }
-        if (reorder != null && handle != null && handle.present) {
-            DragHandle(entry.text, reorder, handle, Modifier.align(Alignment.CenterEnd))
-        }
     }
 }
 
 /** The drag handle's glyph. */
 private val HANDLE_SIZE = 24.dp
 
-/**
- * The space a row's text keeps clear for its handle: the glyph and, before it, a gap as wide as the
- * 12dp a list item keeps between its leading content and its text.
- */
-private val HANDLE_ROOM = HANDLE_SIZE + 12.dp
+/** The gap the list item keeps before its trailing slot, its spacing between parts, 12dp. */
+private val TRAILING_GAP = 12.dp
 
 /** The touch area Material gives a control smaller than it. */
 private val HANDLE_TOUCH = 48.dp
 
 /**
- * How far a favorite row's handle has come in: the [room] its row's text keeps clear for it, on the
+ * How far a favorite row's handle has come in: the [width] it takes in the trailing slot, on the
  * fast spatial spring, its [alpha], on the fast effects one, and whether it is [present] at all,
  * shown or on its way in or out. Both run on one transition, so they start and end together.
  */
-private class HandleShow(roomState: State<Dp>, alphaState: State<Float>, val present: Boolean) {
-    val room by roomState
+private class HandleShow(widthState: State<Dp>, alphaState: State<Float>, val present: Boolean) {
+    val width by widthState
     val alpha by alphaState
 }
 
@@ -377,50 +376,59 @@ private class HandleShow(roomState: State<Dp>, alphaState: State<Float>, val pre
 private fun rememberHandleShow(active: Boolean): HandleShow {
     val motion = MaterialTheme.motionScheme
     val transition = updateTransition(active, label = "reorder-handle")
-    val room = transition.animateDp({ motion.fastSpatialSpec() }, label = "handle-room") { if (it) HANDLE_ROOM else 0.dp }
+    val width = transition.animateDp({ motion.fastSpatialSpec() }, label = "handle-width") { if (it) HANDLE_SIZE else 0.dp }
     val alpha = transition.animateFloat({ motion.fastEffectsSpec() }, label = "handle-alpha") { if (it) 1f else 0f }
-    return HandleShow(room, alpha, transition.currentState || transition.targetState)
+    return HandleShow(width, alpha, transition.currentState || transition.targetState)
 }
 
 /**
- * The drag handle, laid over the end of the row rather than in its trailing slot, where the list
- * item would open the space before it in one frame. It slides in from the end by as much as the
- * text has still to make room, so the two meet as they move, and it fades as it does. The drag is
- * detected across the whole touch area, so a touch anywhere in it picks the row up, not only one on
- * the glyph.
+ * The drag handle, in the row's trailing slot, so it lifts with the row and takes the list item's
+ * dragged colours as the row is picked up. The slot is as wide as the handle has come in, and the
+ * glyph keeps to the slot's inner edge, so it slides in from the end as the text gives way and
+ * fades as it does. Its touch area reaches past the slot into the gap and the row's end padding,
+ * as wide as Material's minimum, so a touch anywhere in it picks the row up, not only one on the
+ * glyph.
  */
 @Composable
-private fun DragHandle(key: String, reorder: RowReorder, handle: HandleShow, modifier: Modifier = Modifier) {
+private fun DragHandle(key: String, reorder: RowReorder, handle: HandleShow) {
     val drag by rememberUpdatedState(reorder)
-    val layoutDirection = LocalLayoutDirection.current
-    val toEnd = if (layoutDirection == LayoutDirection.Rtl) -1f else 1f
-    // The glyph keeps the list item's end padding, its touch area reaching into that padding.
-    val end = (ListItemDefaults.ContentPadding.calculateEndPadding(layoutDirection) - (HANDLE_TOUCH - HANDLE_SIZE) / 2)
-        .coerceAtLeast(0.dp)
-    Icon(
-        painterResource(R.drawable.ic_drag_indicator),
-        contentDescription = stringResource(R.string.favorite_drag),
-        modifier = modifier
-            .padding(end = end)
-            .graphicsLayer {
-                alpha = handle.alpha
-                translationX = (HANDLE_ROOM - handle.room).toPx() * toEnd
+    Box(
+        Modifier
+            .layout { measurable, _ ->
+                val glyph = HANDLE_SIZE.roundToPx()
+                val touch = HANDLE_TOUCH.roundToPx()
+                val placeable = measurable.measure(Constraints.fixed(touch, touch))
+                val margin = (touch - glyph) / 2
+                layout(handle.width.roundToPx().coerceAtLeast(0), glyph) { placeable.placeRelative(-margin, -margin) }
             }
-            .pointerInput(key, reorder.active) {
-                if (!reorder.active) return@pointerInput
-                detectDragGestures(
-                    onDragStart = { drag.onDragStart() },
-                    onDragEnd = { drag.onDragEnd() },
-                    onDragCancel = { drag.onDragEnd() },
-                    onDrag = { change, amount ->
-                        change.consume()
-                        drag.onDrag(amount.y)
+            .graphicsLayer { alpha = handle.alpha },
+    ) {
+        if (handle.present) {
+            Box(
+                Modifier
+                    .size(HANDLE_TOUCH)
+                    .pointerInput(key, reorder.active) {
+                        if (!reorder.active) return@pointerInput
+                        detectDragGestures(
+                            onDragStart = { drag.onDragStart() },
+                            onDragEnd = { drag.onDragEnd() },
+                            onDragCancel = { drag.onDragEnd() },
+                            onDrag = { change, amount ->
+                                change.consume()
+                                drag.onDrag(amount.y)
+                            },
+                        )
                     },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    painterResource(R.drawable.ic_drag_indicator),
+                    contentDescription = stringResource(R.string.favorite_drag),
+                    modifier = Modifier.size(HANDLE_SIZE),
                 )
             }
-            .minimumInteractiveComponentSize()
-            .size(HANDLE_SIZE),
-    )
+        }
+    }
 }
 
 /**
