@@ -292,6 +292,7 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
                                 lookingCloser = lookingCloser,
                                 confirming = phase.confirmation,
                                 onConfirmed = vm::confirmed,
+                                onRelease = vm::releaseConfirmation,
                                 modifier = Modifier.fillMaxSize(),
                             )
                         } else {

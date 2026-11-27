@@ -93,10 +93,19 @@ private const val HIDE_DELAY_MS = 250L
 private const val STALE_FRAME_NANOS = 100_000_000L
 
 /**
+ * How long the success badge stays settled on its code once the code has been handed on, a beat
+ * after the badge settles, before it leaves with its brackets. It is long enough for the badge to
+ * be seen at rest, and short, since its code has already gone on.
+ */
+private const val CONFIRMATION_HOLD_MS = 360L
+
+/**
  * Feedback drawn where the code actually is, since codes are read anywhere in the frame: corner
  * brackets follow a located code, a loading indicator sits on it while the WeChat detector works,
  * and a short confirmation plays on it after a successful read. The confirmation, [confirming],
- * stays on the code until the scanner moves on, and then leaves with its brackets.
+ * hands its code on through [onConfirmed], holds a moment and then asks through [onRelease] to
+ * leave, which it does with its brackets whatever the code goes on to. It leaves at once when the
+ * scanner moves on before then.
  */
 @Composable
 fun ScanOverlay(
@@ -104,6 +113,7 @@ fun ScanOverlay(
     lookingCloser: Boolean,
     confirming: Phase.Confirming?,
     onConfirmed: (Detection) -> Unit,
+    onRelease: (Detection) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // Camera pixels map onto the view from its left edge whatever the layout direction, so what is
@@ -226,9 +236,10 @@ fun ScanOverlay(
             }
         }
 
-        // Brackets and badge shrink away together about the code once the scanner moves on. They
-        // come in at once while the brackets were already on the code, since they only change colour
-        // there; a code read before its brackets showed has them fade in.
+        // Brackets and badge shrink away together about the code once the confirmation is released,
+        // or once the scanner moves on before that. They come in at once while the brackets were
+        // already on the code, since they only change colour there; a code read before its brackets
+        // showed has them fade in.
         val origin = confirmedRect?.center
             ?.takeIf { viewWidth > 0f && viewHeight > 0f }
             ?.let { TransformOrigin(it.x / viewWidth, it.y / viewHeight) }
@@ -246,6 +257,7 @@ fun ScanOverlay(
                         fromMarker = shown.wasShown,
                         handedOn = shown.handedOn,
                         onDone = { onConfirmed(shown.detection) },
+                        onRelease = { onRelease(shown.detection) },
                     )
                 }
             }
@@ -256,15 +268,29 @@ fun ScanOverlay(
 /**
  * The brackets on a confirmed code, which take the confirmation's colour from the white they had
  * while the code was sighted, and the success badge on them. Once the code has been [handedOn],
- * both show settled.
+ * both show settled, and [onRelease] follows after [CONFIRMATION_HOLD_MS].
  */
 @Composable
-private fun Confirmation(rect: () -> Rect, fromMarker: Boolean, handedOn: Boolean, onDone: () -> Unit) {
+private fun Confirmation(
+    rect: () -> Rect,
+    fromMarker: Boolean,
+    handedOn: Boolean,
+    onDone: () -> Unit,
+    onRelease: () -> Unit,
+) {
     // A fixed colour keeps one light tone in both themes, which the camera image behind needs; the
     // dim one sets the brackets apart from the badge they hold.
     val toned = MaterialTheme.colorScheme.primaryFixedDim
     var arrived by remember { mutableStateOf(handedOn) }
     LaunchedEffect(Unit) { arrived = true }
+    // Timed here rather than by the phase, so the badge has been seen at rest before it goes, and
+    // it goes the same way whether the code then opens an app or shows its card.
+    val release by rememberUpdatedState(onRelease)
+    LaunchedEffect(handedOn) {
+        if (!handedOn) return@LaunchedEffect
+        delay(CONFIRMATION_HOLD_MS)
+        release()
+    }
     val color by animateColorAsState(
         targetValue = if (arrived) toned else Color.White,
         animationSpec = MaterialTheme.motionScheme.fastEffectsSpec(),

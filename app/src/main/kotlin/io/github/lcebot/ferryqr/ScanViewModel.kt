@@ -39,8 +39,8 @@ import kotlinx.coroutines.withContext
 
 sealed interface Phase {
     /**
-     * The confirmation of a live scan on screen: playing while [Confirming], then kept on the code
-     * while it is routed and its card shows, until the scanner moves on.
+     * The confirmation of a live scan on screen: playing while [Confirming], then held on the code a
+     * moment as it is routed and its card or its app opens, until the screen releases it.
      */
     val confirmation: Confirming? get() = null
 
@@ -192,7 +192,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
      * Takes a code that was read where it goes: its content is read once and kept in history at
      * once, and the same reading gives, off the main thread, its way to its app and its card, which
      * both ask the package manager. Both are then handed to the screen to try. [confirmation] is the
-     * live scan's, which stays on the code meanwhile.
+     * live scan's, which stays on the code until the screen releases it.
      */
     private fun route(detection: Detection, origin: Origin, confirmation: Phase.Confirming? = null) {
         val id = ++lastRoute
@@ -211,6 +211,20 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
             }
             _routes.send(effect)
         }
+    }
+
+    /**
+     * The confirmation of [detection] has been held long enough and leaves the screen, whatever its
+     * code has gone on to. It is left out of the phase from here on, so nothing shows it again, as
+     * when the activity is made again while the card shows.
+     */
+    fun releaseConfirmation(detection: Detection) {
+        val released = when (val shown = _phase.value) {
+            is Phase.Routing -> shown.takeIf { it.confirmation?.detection == detection }?.copy(confirmation = null)
+            is Phase.Showing -> shown.takeIf { it.confirmation?.detection == detection }?.copy(confirmation = null)
+            else -> null
+        }
+        if (released != null) _phase.value = released
     }
 
     /**

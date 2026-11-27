@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.TotalCaptureResult
+import android.os.Build
 import android.util.Size
 import androidx.camera.camera2.interop.camera2Interop
 import androidx.camera.compose.CameraXViewfinder
@@ -33,7 +34,6 @@ import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -61,15 +61,18 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Matrix
+import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntOffset
@@ -99,10 +102,28 @@ import kotlinx.coroutines.withTimeoutOrNull
 private val TARGET_SIZE = Size(1920, 1080)
 
 /**
- * The veil's opacity over the frozen picture while a reset binds the camera again. It is
- * Material's opacity for disabled content, since nothing under the veil can be scanned meanwhile.
+ * The dimming over the frozen picture while a reset binds the camera again, at the opacity Material
+ * gives a scrim. It takes the scheme's scrim role, which is black in both themes and so darkens the
+ * camera's picture the same way whatever the theme.
  */
-private const val DISABLED_CONTENT_ALPHA = 0.38f
+private const val SCRIM_ALPHA = 0.32f
+
+/**
+ * How far the frozen picture blurs while a reset binds the camera again. At this radius the picture
+ * reads as clearly out of focus, so it is not taken for the live one, while its larger shapes stay
+ * where the eye left them, and the live picture takes their place without a jump.
+ */
+private val STILL_BLUR = 20.dp
+
+/** Whether a layer can blur what it draws, which takes a RenderEffect and so API 31. */
+private val LAYERS_BLUR = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+
+/**
+ * Where layers cannot blur, the frozen picture fades into a copy of itself a sixteenth of each side,
+ * which filtering spreads back over the picture as a soft blur. Four halvings make that copy, since
+ * each one averages the pixels it merges, where a single step this far down would skip most of them.
+ */
+private const val SOFT_STILL_HALVINGS = 4
 
 /**
  * How long a reset waits for a frame to freeze on. The analysis thread hands it over once it is
@@ -180,14 +201,14 @@ private class Captures {
  */
 private class StillTaker(private val analyzer: ImageAnalysis.Analyzer) : ImageAnalysis.Analyzer {
     @Volatile
-    private var wanted: CompletableDeferred<Bitmap?>? = null
+    private var wanted: CompletableDeferred<Shot?>? = null
 
     /**
      * The next frame in the camera's own orientation, or null when the camera sends none in time
      * or the frame cannot be converted.
      */
-    suspend fun take(): Bitmap? {
-        val still = CompletableDeferred<Bitmap?>()
+    suspend fun take(): Shot? {
+        val still = CompletableDeferred<Shot?>()
         wanted = still
         try {
             return withTimeoutOrNull(STILL_WAIT_MS) { still.await() }
@@ -201,12 +222,12 @@ private class StillTaker(private val analyzer: ImageAnalysis.Analyzer) : ImageAn
     override fun analyze(image: ImageProxy) {
         wanted?.let { still ->
             wanted = null
-            val bitmap = try {
-                image.toBitmap()
+            val shot = try {
+                Shot(image.toBitmap())
             } catch (e: RuntimeException) {
                 null
             }
-            if (!still.complete(bitmap)) bitmap?.recycle()
+            if (!still.complete(shot)) shot?.recycle()
         }
         analyzer.analyze(image)
     }
@@ -219,12 +240,44 @@ private class StillTaker(private val analyzer: ImageAnalysis.Analyzer) : ImageAn
 }
 
 /**
- * A still of the camera's picture in the camera's own orientation. The image is stretched over the
- * surface's [resolution], which [toViewfinder] places in the viewfinder as the picture was placed
- * when the still was taken, so the still lies exactly over the picture it replaces.
+ * A frame taken for a still. Where layers cannot blur, [soft] is the small copy that stands in for
+ * the blur, made with the frame on the analysis thread so the reset's first frames on the main
+ * thread are not held up by it.
  */
-private class Still(val bitmap: Bitmap, val resolution: IntSize, val toViewfinder: Matrix) {
-    val image = bitmap.asImageBitmap()
+private class Shot(val frame: Bitmap) {
+    val soft: Bitmap? = if (LAYERS_BLUR) null else frame.softened()
+
+    fun recycle() {
+        frame.recycle()
+        soft?.recycle()
+    }
+}
+
+/** A copy [SOFT_STILL_HALVINGS] times half the size, each step filtered. */
+private fun Bitmap.softened(): Bitmap {
+    var copy = this
+    repeat(SOFT_STILL_HALVINGS) {
+        val next = Bitmap.createScaledBitmap(
+            copy,
+            (copy.width / 2).coerceAtLeast(1),
+            (copy.height / 2).coerceAtLeast(1),
+            true,
+        )
+        if (copy !== this && next !== copy) copy.recycle()
+        copy = next
+    }
+    return copy
+}
+
+/**
+ * A still of the camera's picture in the camera's own orientation. The image, and its [soft] copy
+ * where there is one, are stretched over the surface's [resolution], which [toViewfinder] places in
+ * the viewfinder as the picture was placed when the still was taken, so the still lies exactly over
+ * the picture it replaces.
+ */
+private class Still(val shot: Shot, val resolution: IntSize, val toViewfinder: Matrix) {
+    val image = shot.frame.asImageBitmap()
+    val soft = shot.soft?.asImageBitmap()
 }
 
 /**
@@ -277,15 +330,18 @@ fun CameraPreview(
     // It starts opaque, as the viewfinder starts black.
     val cover = remember { Animatable(1f) }
     // While a reset binds the camera again, the viewfinder holds a still of the picture it showed,
-    // under a white veil that tells the picture is not live.
+    // which blurs under a dimming scrim that tells the picture is not live. The blur grows from
+    // none, so the still first matches the live picture it covers exactly.
     var still by remember { mutableStateOf<Still?>(null) }
     val frozen = remember { Animatable(0f) }
-    val veil = remember { Animatable(0f) }
+    val blur = remember { Animatable(0f) }
+    val dim = remember { Animatable(0f) }
+    val scrim = MaterialTheme.colorScheme.scrim
     var restarting by remember { mutableStateOf(false) }
     // Whether the camera bound last cannot run, which the page has been told.
     var failed by remember { mutableStateOf(false) }
-    // The cover, the still and the veil span the whole viewfinder, which the scheme's slow springs
-    // move; the indicator is a small part, which its fast ones move.
+    // The cover, the still, its blur and the dimming span the whole viewfinder, which the scheme's
+    // slow springs move; the indicator is a small part, which its fast ones move.
     val slowEffects = MaterialTheme.motionScheme.slowEffectsSpec<Float>()
     val fastEffects = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
     val fastSpatial = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
@@ -326,7 +382,7 @@ fun CameraPreview(
         fun dropStill() {
             val shown = still ?: return
             still = null
-            shown.bitmap.recycle()
+            shown.shot.recycle()
         }
         // Whether the bound camera's picture is in view, so a reset has a picture to freeze.
         var live = false
@@ -334,22 +390,22 @@ fun CameraPreview(
         var holding = false
 
         suspend fun freeze(): Unit = coroutineScope {
-            // The reset answers at once: the veil and the indicator come while the still is taken, as
-            // the next frame may wait behind a closer look, and the still shows the picture they are
-            // already over.
+            // The reset answers at once: the dimming and the indicator come while the still is
+            // taken, as the next frame may wait behind a closer look, and the still shows the
+            // picture they are already over.
             restarting = true
-            launch { veil.animateTo(1f, slowEffects) }
+            launch { dim.animateTo(1f, slowEffects) }
             // The still of a reset whose camera has not shown its picture yet stays, so the frozen
             // picture never jumps to a later one.
             if (!holding) {
                 val shown = request
                 val taken = if (live && !failed && shown != null) {
-                    stills.take()?.let { bitmap ->
+                    stills.take()?.let { shot ->
                         val toViewfinder = Matrix().apply {
                             setFrom(transformer.transformMatrix)
                             invert()
                         }
-                        Still(bitmap, IntSize(shown.resolution.width, shown.resolution.height), toViewfinder)
+                        Still(shot, IntSize(shown.resolution.width, shown.resolution.height), toViewfinder)
                     }
                 } else {
                     null
@@ -358,21 +414,23 @@ fun CameraPreview(
                     dropStill()
                     still = taken
                     frozen.snapTo(1f)
+                    blur.snapTo(0f)
                     holding = true
+                    // The blur deepens while the camera is bound again rather than holding that back.
+                    this@LaunchedEffect.launch { blur.animateTo(1f, slowEffects) }
                 }
             }
             live = false
             // The camera on its way out does not count, so its controls and observers go at once,
-            // and a failure of its own neither keeps the indicator away nor tells the page again.
+            // and a failure of its own neither tells the page again nor stands for the camera bound next.
             camera = null
             failed = false
-            restarting = true
-            // The camera is let go once the veil is in, by when the still has long been drawn over
-            // the picture it replaces.
+            // The camera is let go once the dimming is in, by when the still has long been drawn
+            // over the picture it replaces.
             coroutineScope {
-                launch { veil.animateTo(1f, slowEffects) }
-                // Without a picture to freeze the veil lies over black, and a still an earlier reset
-                // left on its way out fades into the black.
+                launch { dim.animateTo(1f, slowEffects) }
+                // Without a picture to freeze the dimming lies over black, and a still an earlier
+                // reset left on its way out fades into the black.
                 if (!holding) {
                     launch { cover.animateTo(1f, slowEffects) }
                     launch { frozen.animateTo(0f, slowEffects) }
@@ -381,15 +439,30 @@ fun CameraPreview(
             if (!holding) dropStill()
         }
 
-        // On the picture's first frame the cover, the still and the veil leave together, and the
-        // indicator with them.
+        // On the picture's first frame the cover, the blurred still and the dimming leave together,
+        // and the indicator with them.
         suspend fun reveal() {
             live = true
             holding = false
             restarting = false
             coroutineScope {
                 launch { cover.animateTo(0f, slowEffects) }
-                launch { veil.animateTo(0f, slowEffects) }
+                launch { dim.animateTo(0f, slowEffects) }
+                frozen.animateTo(0f, slowEffects)
+            }
+            dropStill()
+        }
+
+        // A camera that cannot run takes the blurred still and the dimming away with the indicator,
+        // as its first frame would, but onto black, on which the page tells of the failure.
+        suspend fun dismiss() {
+            live = false
+            holding = false
+            restarting = false
+            // Without a still the cover is already up, and under one it goes up unseen.
+            cover.snapTo(1f)
+            coroutineScope {
+                launch { dim.animateTo(0f, slowEffects) }
                 frozen.animateTo(0f, slowEffects)
             }
             dropStill()
@@ -419,31 +492,41 @@ fun CameraPreview(
                     analysis.clearAnalyzer()
                     failed = true
                     onUnavailable()
+                    dismiss()
                     return@collectLatest
                 }
                 bound = config
                 analyzing = analysis
                 camera = started
                 autoZoom.camera = started
-                // CameraX closes the camera as the scanner stops, as when a page opens over it, and
-                // the camera opens black as the scanner starts again. The cover goes up meanwhile
-                // and leaves on the first frame after, as at the first launch.
-                var stopped = false
-                owner.lifecycle.currentStateFlow
-                    .map { it.isAtLeast(Lifecycle.State.STARTED) }
-                    .distinctUntilChanged()
-                    .collectLatest { running ->
-                        if (running) {
-                            // Captures from before the camera closed say nothing of the picture it opens with.
-                            if (stopped) captures.forget()
-                            captures.await()
-                            reveal()
-                        } else {
-                            stopped = true
-                            live = false
-                            cover.snapTo(1f)
-                        }
+                coroutineScope {
+                    // A camera that binds can still fail to open, which its state reports. Until its
+                    // picture shows, that ends the reset as a failed binding does.
+                    val opening = launch {
+                        snapshotFlow { failed }.first { it }
+                        dismiss()
                     }
+                    // CameraX closes the camera as the scanner stops, as when a page opens over it,
+                    // and the camera opens black as the scanner starts again. The cover goes up
+                    // meanwhile and leaves on the first frame after, as at the first launch.
+                    var stopped = false
+                    owner.lifecycle.currentStateFlow
+                        .map { it.isAtLeast(Lifecycle.State.STARTED) }
+                        .distinctUntilChanged()
+                        .collectLatest { running ->
+                            if (running) {
+                                // Captures from before the camera closed say nothing of the picture it opens with.
+                                if (stopped) captures.forget()
+                                captures.await()
+                                opening.cancel()
+                                reveal()
+                            } else {
+                                stopped = true
+                                live = false
+                                cover.snapTo(1f)
+                            }
+                        }
+                }
             }
         } finally {
             release()
@@ -531,27 +614,45 @@ fun CameraPreview(
         Spacer(
             Modifier
                 .fillMaxSize()
-                // The still overflows the viewfinder as the cropped picture does, and is cut the same way.
-                .clipToBounds()
-                .drawBehind {
+                .drawWithContent {
                     drawRect(Color.Black, alpha = cover.value)
+                    drawContent()
+                    drawRect(scrim, alpha = SCRIM_ALPHA * dim.value)
+                }
+                // The still has a layer of its own, so the blur takes only the picture, and the
+                // still fades as one with the copy that softens it where layers cannot blur. The
+                // still overflows the viewfinder as the cropped picture does, and is cut the same way.
+                .graphicsLayer {
+                    alpha = frozen.value
+                    clip = true
+                    // The blur Modifier.blur applies, set here so the growing radius only redraws
+                    // the layer rather than composing the viewfinder again each frame. Clamped at
+                    // the edges, the picture keeps its own colours there rather than fading into
+                    // what lies around the layer.
+                    val radius = STILL_BLUR.toPx() * blur.value
+                    renderEffect = if (LAYERS_BLUR && still != null && radius > 0f) {
+                        BlurEffect(radius, radius, TileMode.Clamp)
+                    } else {
+                        null
+                    }
+                }
+                .drawBehind {
                     still?.let { shown ->
                         withTransform({ transform(shown.toViewfinder) }) {
-                            drawImage(shown.image, dstSize = shown.resolution, alpha = frozen.value)
+                            drawImage(shown.image, dstSize = shown.resolution)
+                            shown.soft?.let { drawImage(it, dstSize = shown.resolution, alpha = blur.value) }
                         }
                     }
-                    // White whatever the theme, since it lies on the camera's picture.
-                    drawRect(Color.White, alpha = DISABLED_CONTENT_ALPHA * veil.value)
                 },
         )
         FocusBox(tap, autoZoom.tapFocus)
         Box(Modifier.fillMaxSize().padding(contentPadding), contentAlignment = Alignment.Center) {
             AnimatedVisibility(
-                visible = restarting && !failed,
+                visible = restarting,
                 enter = fadeIn(fastEffects) + scaleIn(fastSpatial),
-                // Leaving with the frozen picture it fades on the picture's spec, and leaving alone,
-                // as when the camera fails, it goes the way it came.
-                exit = if (failed) fadeOut(fastEffects) + scaleOut(fastSpatial) else fadeOut(slowEffects),
+                // It leaves with the frozen picture and the dimming, whether the picture comes back
+                // or the camera fails, and so fades on their spec.
+                exit = fadeOut(slowEffects),
             ) {
                 // Contained, since the picture behind it may be as light as the indicator itself.
                 ContainedLoadingIndicator(Modifier.size(64.dp))
