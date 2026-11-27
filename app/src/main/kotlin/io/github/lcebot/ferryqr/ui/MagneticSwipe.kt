@@ -94,6 +94,13 @@ internal const val PULLED_SHARE = 0.5f
 private val TRANSLATION_MULTIPLIERS = floatArrayOf(0.06f, 0.18f, PULLED_SHARE, 0.18f, 0.06f)
 
 /**
+ * The share what a swipe shows behind the pulled row follows. It is the nearest to the pull, so it
+ * follows a little more than the rows one away, as they follow more than the rows two away, while
+ * staying well behind the row itself, which uncovers it.
+ */
+private const val BACKDROP_SHARE = 0.24f
+
+/**
  * How strongly each row, from three above the pulled one to three below, rounds as the pull
  * grows. The rows three away are only rounded, on the side facing it, and do not move.
  */
@@ -127,6 +134,14 @@ internal class MagneticList(val scope: CoroutineScope) {
      * Several fingers may each swipe a row at once, and the rows around them lean with all of them.
      */
     val pulls = mutableStateListOf<Pull>()
+
+    /**
+     * Whether a finger holds any swipe. Meanwhile the entries take no tap or long press, so an entry
+     * opened or picked up mid-swipe does not leave the swipe going on, and acting, under it; other
+     * fingers may still swipe. Read as a tap lands rather than as it begins, so a press that started
+     * before the swipe is refused too.
+     */
+    val held: Boolean get() = pulls.any { it.phase != PullPhase.Released }
 
     private var haptics: SwipeHaptics? = null
 
@@ -397,7 +412,8 @@ private fun Magnet.respring(
 /**
  * The pose of an entry the pulls of [contributions] bear on together. Their leans add, so pulls the
  * same way add up and opposite ones cancel, up to [reach] either way, and each corner rounds as far
- * as the pull that rounds it most, since a corner rounded twice is no rounder.
+ * as the pull that rounds it most, since a corner rounded twice is no rounder. What a swipe shows
+ * behind the entry moves only with the entry's own pull, never with several, so it takes no limit.
  */
 private fun combine(contributions: List<Contribution>, reach: Float): Pose {
     var lean = 0f
@@ -415,7 +431,7 @@ private fun combine(contributions: List<Contribution>, reach: Float): Pose {
         bottomStart = max(bottomStart, pose.bottomStart)
         bottomEnd = max(bottomEnd, pose.bottomEnd)
     }
-    return Pose(lean.coerceIn(-reach, reach), backdrop.coerceIn(-reach, reach), topStart, topEnd, bottomStart, bottomEnd)
+    return Pose(lean.coerceIn(-reach, reach), backdrop, topStart, topEnd, bottomStart, bottomEnd)
 }
 
 /**
@@ -452,7 +468,7 @@ private fun rowRelation(pull: Pull, place: Triple<Any, Any, Int>): Relation? {
     }
     val share = leanShare(distance)
     // What the swipe shows behind the pulled row leans as the rows next to it do, as behind a tile.
-    val backdrop = if (distance == 0) leanShare(1) else 0f
+    val backdrop = if (distance == 0) BACKDROP_SHARE else 0f
     return Relation(share, share, ROUNDNESS_MULTIPLIERS[distance + 3], corners, loose, backdrop)
 }
 

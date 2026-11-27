@@ -262,7 +262,7 @@ internal fun EntryRow(
                 )
             },
     ) {
-        // What the swipe shows behind the row leans with the rows next to it, as behind a tile.
+        // What the swipe shows behind the row leans with the pull, a little more than the rows next to it.
         SwipeBackground(
             swipe.direction,
             swipe.armed,
@@ -278,8 +278,8 @@ internal fun EntryRow(
                 entry,
                 listed,
                 shape,
-                onClick = { if (!reordering) actions.onOpen(entry) },
-                onLongClick = if (reordering) null else ({ menu = true }),
+                onClick = { if (!reordering && !list.held) actions.onOpen(entry) },
+                onLongClick = if (reordering) null else ({ if (!list.held) menu = true }),
                 interactionSource = rememberLiftedInteraction(reorder?.lifted == true),
                 reorder = reorder,
             )

@@ -317,7 +317,7 @@ internal fun FavoriteTiles(
                             .pointerInput(tile, rtl) {
                                 detectDragGesturesAfterLongPress(
                                     onDragStart = { offset ->
-                                        if (active) {
+                                        if (active && !list.held) {
                                             longPressed[0] = true
                                             haptics.longPress()
                                             lift()
@@ -359,7 +359,7 @@ internal fun FavoriteTiles(
                             lifted = dragged && board.lifted,
                             raised = swipe.pull != null || swipe.acting,
                             onClick = {
-                                if (!longPressed[0] && active) actions.onOpen(entry)
+                                if (!longPressed[0] && active && !list.held) actions.onOpen(entry)
                             },
                             // Without a finger to drag with, the order changes a tile at a time.
                             modifier = Modifier
