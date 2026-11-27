@@ -26,9 +26,9 @@ import io.github.lcebot.ferryqr.content.Classifier
 import io.github.lcebot.ferryqr.content.Contact
 import io.github.lcebot.ferryqr.content.WifiPayload
 import io.github.lcebot.ferryqr.content.WifiSecurity
+import kotlin.math.min
 
 internal object Launch {
-
 
     fun start(activity: Activity, intent: Intent): Boolean = try {
         activity.startActivity(intent)
@@ -287,7 +287,9 @@ internal object Launch {
 
     /** A [sensitive] text gets no label, since clipboard managers may show the label in full. */
     fun copy(context: Context, text: String, sensitive: Boolean = false) {
-        val clip = ClipData.newPlainText(if (sensitive) "" else text.take(40), text)
+        // Cut at whole code points, so a label never ends in half of a surrogate pair.
+        val label = if (sensitive) "" else text.substring(0, text.offsetByCodePoints(0, min(CLIP_LABEL, text.codePointCount(0, text.length))))
+        val clip = ClipData.newPlainText(label, text)
         if (sensitive && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             clip.description.extras = PersistableBundle().apply {
                 putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
@@ -295,6 +297,9 @@ internal object Launch {
         }
         context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(clip)
     }
+
+    /** How much of a copied text its clipboard label holds, in code points. */
+    private const val CLIP_LABEL = 40
 
     fun isInstalled(context: Context, packageName: String): Boolean = try {
         context.packageManager.getPackageInfo(packageName, 0)

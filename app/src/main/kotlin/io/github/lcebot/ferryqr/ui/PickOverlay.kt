@@ -5,6 +5,7 @@ package io.github.lcebot.ferryqr.ui
 import android.graphics.Bitmap
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.scaleIn
 import androidx.compose.foundation.Image
@@ -26,10 +27,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,8 +49,13 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
-private val MARKER_SIZE = 56.dp
+/**
+ * Medium icon buttons, the size of the scanner's found markers, so a found code keeps its marker as
+ * the frame freezes.
+ */
+private val MARKER_SIZE = IconButtonDefaults.mediumContainerSize()
 private const val STAGGER_MS = 70L
 
 /**
@@ -67,14 +71,28 @@ fun PickOverlay(
     onPick: (Detection) -> Unit,
     onClose: () -> Unit,
 ) {
-    var backProgress by remember { mutableFloatStateOf(0f) }
+    // How far a back gesture has shrunk the overlay, and apart from it how far it has dimmed it, so
+    // a cancelled gesture springs back to full size while the dimming lifts without bouncing. Both
+    // move on the slow springs, since the overlay covers the whole window.
+    val shrink = remember { Animatable(0f) }
+    val dim = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    val spatial = MaterialTheme.motionScheme.slowSpatialSpec<Float>()
+    val effects = MaterialTheme.motionScheme.slowEffectsSpec<Float>()
     // Fading out after a pick, it no longer answers the back gesture, which would cancel the pick.
     PredictiveBackHandler(enabled = active) { progress ->
         try {
-            progress.collect { backProgress = it.progress }
+            progress.collect {
+                shrink.snapTo(it.progress)
+                dim.snapTo(it.progress)
+            }
             onClose()
         } catch (e: CancellationException) {
-            backProgress = 0f
+            scope.launch {
+                launch { dim.animateTo(0f, effects) }
+                shrink.animateTo(0f, spatial)
+            }
+            throw e
         }
     }
     val haptics = rememberHaptics()
@@ -85,9 +103,9 @@ fun PickOverlay(
         Modifier
             .fillMaxSize()
             .graphicsLayer {
-                alpha = 1f - backProgress * 0.6f
-                scaleX = 1f - backProgress * 0.08f
-                scaleY = 1f - backProgress * 0.08f
+                alpha = 1f - dim.value * 0.6f
+                scaleX = 1f - shrink.value * 0.08f
+                scaleY = 1f - shrink.value * 0.08f
             }
             .background(Color.Black),
         contentAlignment = AbsoluteAlignment.TopLeft,
@@ -98,7 +116,7 @@ fun PickOverlay(
         val scale = max(viewWidth / frame.width, viewHeight / frame.height)
         val dx = (viewWidth - frame.width * scale) / 2f
         val dy = (viewHeight - frame.height * scale) / 2f
-        val half = with(LocalDensity.current) { MARKER_SIZE.toPx() } / 2f
+        val half = with(LocalDensity.current) { MARKER_SIZE.width.toPx() } / 2f
         val popSpec = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
 
         Image(image, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
@@ -123,14 +141,21 @@ fun PickOverlay(
                 enter = scaleIn(popSpec),
                 modifier = Modifier.absoluteOffset { IntOffset((x - half).roundToInt(), (y - half).roundToInt()) },
             ) {
+                // A fixed colour keeps one light tone in both themes, which the frozen camera image
+                // behind needs.
                 FilledIconButton(
                     onClick = { haptics.tap(); onPick(detection) },
-                    shapes = IconButtonDefaults.shapes(),
+                    shapes = IconButtonDefaults.shapes(pressedShape = IconButtonDefaults.mediumPressedShape),
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.primaryFixed,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryFixed,
+                    ),
                     modifier = Modifier.size(MARKER_SIZE),
                 ) {
                     Icon(
                         painterResource(R.drawable.ic_arrow_forward),
                         contentDescription = if (detection.isLocatedMiniCode) stringResource(R.string.mini_headline) else detection.text,
+                        modifier = Modifier.size(IconButtonDefaults.mediumIconSize),
                     )
                 }
             }
@@ -148,14 +173,18 @@ fun PickOverlay(
         )
         FilledTonalIconButton(
             onClick = { haptics.tap(); onClose() },
-            shapes = IconButtonDefaults.shapes(),
+            shapes = IconButtonDefaults.shapes(pressedShape = IconButtonDefaults.mediumPressedShape),
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
                 .padding(bottom = 32.dp)
                 .size(MARKER_SIZE),
         ) {
-            Icon(painterResource(R.drawable.ic_close), contentDescription = stringResource(R.string.pick_close))
+            Icon(
+                painterResource(R.drawable.ic_close),
+                contentDescription = stringResource(R.string.pick_close),
+                modifier = Modifier.size(IconButtonDefaults.mediumIconSize),
+            )
         }
     }
 }

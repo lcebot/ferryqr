@@ -180,51 +180,47 @@ object Cards {
     private val IP_LITERAL = Regex("^(\\d{1,3}\\.){3}\\d{1,3}$|^\\[.*]$")
 
     /**
-     * A short name for content in shortcuts and as a favorite's name: the name the content carries,
-     * else a link's host or the text itself; null when only its kind describes it.
-     */
-    fun titleOf(context: Context, payload: Payload): String? = Titles.of(context, payload) ?: when (payload) {
-        is WebPayload -> payload.host
-        is TextPayload, is SchemePayload -> payload.raw
-        else -> null
-    }
-
-    /**
-     * The content as a list shows it: the name it carries, else the content itself. The content
-     * itself stays as it was scanned, and is what is copied and drawn again.
-     */
-    fun shownText(context: Context, payload: Payload): String = Titles.of(context, payload) ?: payload.raw
-
-    /**
-     * [ready] holds the packages of the apps that take content through the module. [scannedAt] is
-     * when the code was read, which dates what a code leaves undated.
+     * The card for [content], led by the content's own name as [ContentNames.headline] gives it, so
+     * the card calls the content what its row and tile do. [ready] holds the packages of the apps
+     * that take content through the module. [scannedAt] is when the code was read, which dates what
+     * a code leaves undated.
      */
     fun build(
         context: Context,
-        payload: Payload,
-        format: String,
+        content: ReadContent,
         origin: Origin,
         ready: Set<String>,
         scannedAt: Long = System.currentTimeMillis(),
-    ): ResultCard = card(context, payload, format, origin, ready, scannedAt).copy(format = format)
+    ): ResultCard {
+        val headline = content.names(context, null).headline
+        return card(context, content.payload, headline, content.format, origin, ready, scannedAt).copy(format = content.format)
+    }
+
+    /**
+     * The card for [raw] read in [format] taken as plain text, whatever it holds. It names nothing,
+     * so it is what is left when making anything more of the content fails.
+     */
+    fun plainText(context: Context, raw: String, format: String): ResultCard =
+        text(context, TextPayload(raw), raw, format).copy(format = format)
 
     private fun card(
         context: Context,
         payload: Payload,
+        headline: String,
         format: String,
         origin: Origin,
         ready: Set<String>,
         scannedAt: Long,
     ): ResultCard = when (payload) {
-        is WebPayload -> web(context, payload, origin, ready)
-        is SchemePayload -> scheme(context, payload, origin, ready)
-        is FidoPayload -> passkey(context, payload, origin, scannedAt)
+        is WebPayload -> web(context, payload, headline, origin, ready)
+        is SchemePayload -> scheme(context, payload, headline, origin, ready)
+        is FidoPayload -> passkey(context, payload, headline, origin, scannedAt)
         is BoardingPassPayload -> boardingPass(context, payload, scannedAt)
         is OtpPayload -> otp(context, payload, origin, ready)
         // Only a code from the camera has already been offered to the system by the time its card
         // shows, so only then does the card say it was not taken; from elsewhere it offers to try.
         is EsimPayload -> ResultCard(
-            payload.raw, R.string.kind_esim, R.drawable.ic_sim_card, payload.raw, null,
+            payload.raw, R.string.kind_esim, R.drawable.ic_sim_card, headline, payload.raw.takeIf { headline != payload.raw },
             listOfNotNull(context.getString(R.string.esim_unhandled).takeIf { origin == Origin.CAMERA }),
             listOf(
                 CardAction(R.string.add_esim, R.drawable.ic_sim_card) {
@@ -237,7 +233,7 @@ object Cards {
             ),
         )
         is DppPayload -> ResultCard(
-            payload.raw, R.string.kind_dpp, R.drawable.ic_wifi, payload.raw, null,
+            payload.raw, R.string.kind_dpp, R.drawable.ic_wifi, headline, null,
             listOfNotNull(context.getString(R.string.dpp_unsupported).takeIf { origin == Origin.CAMERA }),
             listOf(
                 CardAction(R.string.connect, R.drawable.ic_wifi) {
@@ -246,10 +242,10 @@ object Cards {
                 copy(payload.raw),
             ),
         )
-        is WifiPayload -> wifi(context, payload)
-        is ContactPayload -> contact(payload)
-        is EventPayload -> event(context, payload)
-        is TextPayload -> text(context, payload, format)
+        is WifiPayload -> wifi(context, payload, headline)
+        is ContactPayload -> contact(payload, headline)
+        is EventPayload -> event(context, payload, headline)
+        is TextPayload -> text(context, payload, headline, format)
         is MiniProgramPayload -> miniProgramCode(context, payload, origin, ready)
     }
 
@@ -335,7 +331,7 @@ object Cards {
      * most likely ended, which the card says, and copying it then comes first. Only a code from the
      * camera has already been offered to the passkey managers by the time its card shows.
      */
-    private fun passkey(context: Context, payload: FidoPayload, origin: Origin, scannedAt: Long): ResultCard {
+    private fun passkey(context: Context, payload: FidoPayload, headline: String, origin: Origin, scannedAt: Long): ResultCard {
         val now = System.currentTimeMillis()
         val created = PasskeyQr.createdAt(payload.raw)?.times(1000)?.takeIf { it <= now } ?: scannedAt
         val expired = now - created > PASSKEY_EXPIRY_MS
@@ -350,8 +346,7 @@ object Cards {
             ).takeIf { expired },
         )
         val actions = if (expired) listOf(copy(payload.raw), use) else listOf(use, copy(payload.raw))
-        val title = Titles.of(context, payload) ?: payload.raw
-        return ResultCard(payload.raw, R.string.kind_fido, R.drawable.ic_key, title, payload.raw, notes, actions)
+        return ResultCard(payload.raw, R.string.kind_fido, R.drawable.ic_key, headline, payload.raw, notes, actions)
     }
 
     /**
@@ -473,10 +468,9 @@ object Cards {
      * FerryQR has its own way in, and the app that registers the scheme. The general apps are not
      * offered, since they open web links rather than other apps' schemes.
      */
-    private fun scheme(context: Context, payload: SchemePayload, origin: Origin, ready: Set<String>): ResultCard {
+    private fun scheme(context: Context, payload: SchemePayload, headline: String, origin: Origin, ready: Set<String>): ResultCard {
         val owner = ActiveFerries.claimant(payload)
         val ranked = Ferries.rank(context, payload, ready)
-        val title = Titles.of(context, payload)
         val notes = listOfNotNull(
             context.getString(R.string.scheme_unhandled).takeUnless { Launch.opens(context, payload.uri, payload.scheme) },
             owner?.takeIf { it in ranked }?.let { targetNote(context, it, origin, ready) },
@@ -484,7 +478,7 @@ object Cards {
         )
         val actions = ferryActions(context, ranked, origin, ready, payload.raw) + copy(payload.raw) + share(payload.raw)
         return ResultCard(
-            payload.raw, R.string.kind_app_link, R.drawable.ic_apps, title ?: payload.raw, payload.raw.takeIf { title != null },
+            payload.raw, R.string.kind_app_link, R.drawable.ic_apps, headline, payload.raw.takeIf { headline != payload.raw },
             notes, actions,
         )
     }
@@ -493,7 +487,7 @@ object Cards {
      * A web link. The apps it goes to before any browser lead, as [Ferries.rank] orders them,
      * followed by the browser and then the general apps that open any link.
      */
-    private fun web(context: Context, payload: WebPayload, origin: Origin, ready: Set<String>): ResultCard {
+    private fun web(context: Context, payload: WebPayload, headline: String, origin: Origin, ready: Set<String>): ResultCard {
         val host = payload.host
         // A link printed without its scheme belongs to its app by its URL, and is handed over as printed.
         val owner = ActiveFerries.claimant(payload)
@@ -513,11 +507,10 @@ object Cards {
         }
         val actions = ferryActions(context, ranked, origin, ready, payload.raw) + browser +
             ferryActions(context, general, origin, ready, payload.raw) + copy(payload.raw) + share(payload.raw)
-        val headline = Titles.link(context, payload.url) ?: host
         return ResultCard(payload.raw, R.string.kind_link, R.drawable.ic_link, headline, payload.url, notes, actions)
     }
 
-    private fun wifi(context: Context, payload: WifiPayload): ResultCard {
+    private fun wifi(context: Context, payload: WifiPayload, headline: String): ResultCard {
         val security = context.getString(
             when (payload.security) {
                 WifiSecurity.OPEN -> R.string.wifi_security_open
@@ -530,7 +523,8 @@ object Cards {
         val body = listOfNotNull(
             security,
             payload.password?.let { context.getString(R.string.wifi_password, it) },
-            if (payload.hidden) context.getString(R.string.wifi_hidden) else null,
+            // A network without a name is already called hidden by its headline.
+            context.getString(R.string.wifi_hidden).takeIf { payload.hidden && it != headline },
         ).joinToString("\n")
         val suggestion = Launch.wifiSuggestion(payload)
         val actions = buildList {
@@ -555,16 +549,20 @@ object Cards {
                 listOf(context.getString(R.string.wifi_connect_unsupported))
             else -> listOf(context.getString(R.string.wifi_password_invalid))
         }
-        return ResultCard(payload.raw, R.string.kind_wifi, R.drawable.ic_wifi, payload.ssid, body, notes, actions)
+        return ResultCard(payload.raw, R.string.kind_wifi, R.drawable.ic_wifi, headline, body, notes, actions)
     }
 
-    private fun contact(payload: ContactPayload): ResultCard {
+    /**
+     * A contact, led by its name. One without a name, organisation, phone or email is led by the
+     * first detail it has, which says more of it than the text of its code.
+     */
+    private fun contact(payload: ContactPayload, headline: String): ResultCard {
         val c = payload.contact
         val details = (c.phones + c.emails + listOfNotNull(c.organization, c.title, c.address, c.url, c.note))
-        val headline = c.name ?: details.firstOrNull() ?: payload.raw
+        val shown = if (headline != payload.raw) headline else details.firstOrNull() ?: headline
         return ResultCard(
-            payload.raw, R.string.kind_contact, R.drawable.ic_person_add, headline,
-            details.filter { it != headline }.joinToString("\n").ifEmpty { null },
+            payload.raw, R.string.kind_contact, R.drawable.ic_person_add, shown,
+            details.filter { it != shown }.joinToString("\n").ifEmpty { null },
             emptyList(),
             listOf(
                 CardAction(R.string.add_contact, R.drawable.ic_person_add) {
@@ -575,8 +573,13 @@ object Cards {
         )
     }
 
-    private fun event(context: Context, payload: EventPayload): ResultCard {
+    /**
+     * An event, led by its title. One without a title is led by its time, which says more of it
+     * than the text of its code.
+     */
+    private fun event(context: Context, payload: EventPayload, headline: String): ResultCard {
         val e = payload.event
+        val titled = headline != payload.raw
         val time = e.begin?.let { begin ->
             val flags = if (e.allDay) DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_WEEKDAY
             else DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_TIME or DateUtils.FORMAT_SHOW_WEEKDAY
@@ -584,8 +587,8 @@ object Cards {
         }
         return ResultCard(
             payload.raw, R.string.kind_event, R.drawable.ic_event,
-            e.title ?: time ?: payload.raw,
-            listOfNotNull(time.takeIf { e.title != null }, e.location, e.description).joinToString("\n").ifEmpty { null },
+            if (titled) headline else time ?: headline,
+            listOfNotNull(time.takeIf { titled }, e.location, e.description).joinToString("\n").ifEmpty { null },
             emptyList(),
             listOf(
                 CardAction(R.string.add_event, R.drawable.ic_event) {
@@ -596,11 +599,11 @@ object Cards {
         )
     }
 
-    private fun text(context: Context, payload: TextPayload, format: String): ResultCard {
+    private fun text(context: Context, payload: TextPayload, headline: String, format: String): ResultCard {
         val formatNote = if (format.contains("QR")) null
         else context.getString(R.string.format_label, format.replace('_', '-'))
         return ResultCard(
-            payload.raw, R.string.kind_text, R.drawable.ic_notes, payload.raw, formatNote,
+            payload.raw, R.string.kind_text, R.drawable.ic_notes, headline, formatNote,
             emptyList(),
             listOf(
                 copy(payload.raw),

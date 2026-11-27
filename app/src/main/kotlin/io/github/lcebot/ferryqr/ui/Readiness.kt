@@ -46,19 +46,27 @@ internal fun readyApps(): Set<String> {
 
 /**
  * The result card for [source], as [cardFlow] builds it; the card shown stays until the next one is
- * ready, and it is null before the first is, or without a source. The framework is asked again as
- * the card appears, as [readyApps] does.
+ * ready, and it is null before the first is, or without a source. [initial], a card already built
+ * for [source], shows from the first frame, and [builtFor] is the readiness it was built for, so it
+ * is built again only once that changes. The framework is asked again as the card appears, as
+ * [readyApps] does.
  */
 @Composable
-internal fun rememberResultCard(source: CardSource?): ResultCard? {
+internal fun rememberResultCard(
+    source: CardSource?,
+    initial: ResultCard? = null,
+    builtFor: Set<String>? = null,
+): ResultCard? {
     val context = LocalContext.current
     LaunchedEffect(Unit) { OpenInModule.refresh() }
-    val card by produceState<ResultCard?>(null, source) {
+    val card by produceState<ResultCard?>(initial, source, initial, builtFor) {
+        if (initial != null) value = initial
         if (source == null) {
             value = null
             return@produceState
         }
-        cardFlow(context, source).collect { value = it }
+        // The readiness only holds back building the initial card again; with none, the first must come.
+        cardFlow(context, source, builtFor.takeIf { initial != null }).collect { value = it }
     }
     return card
 }

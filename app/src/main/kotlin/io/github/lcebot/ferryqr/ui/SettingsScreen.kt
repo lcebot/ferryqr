@@ -63,10 +63,8 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -85,7 +83,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.lcebot.ferryqr.AppSettings
 import io.github.lcebot.ferryqr.LongCodeEnlarge
@@ -216,15 +213,10 @@ private fun SettingsList(padding: PaddingValues, content: LazyListScope.() -> Un
 @Composable
 private fun FerryEntry(onOpen: () -> Unit) {
     val haptics = rememberHaptics()
-    var opening by remember { mutableStateOf(false) }
-    LifecycleResumeEffect(Unit) {
-        opening = false
-        onPauseOrDispose {}
-    }
+    val once = rememberOpenOnce()
     SegmentedListItem(
         onClick = {
-            if (!opening) {
-                opening = true
+            once {
                 haptics.tap()
                 onOpen()
             }
@@ -494,7 +486,9 @@ private fun DisplaySettings() {
 /**
  * The description of the option chosen in the row above it. Another option's description fades in
  * over it while the row resizes to the new text on the section's own spring, so the rows below
- * move to their places rather than jump.
+ * move to their places rather than jump. The resize does not clip, since the spring settles a
+ * little below a shorter description before it comes to rest, which would cut off its last line;
+ * the row's padding below has room for it.
  */
 @Composable
 private fun ChoiceDescription(@StringRes description: Int) {
@@ -502,7 +496,7 @@ private fun ChoiceDescription(@StringRes description: Int) {
     val spatial = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
     AnimatedContent(
         targetState = description,
-        transitionSpec = { (fadeIn(effects) togetherWith fadeOut(effects)) using SizeTransform { _, _ -> spatial } },
+        transitionSpec = { (fadeIn(effects) togetherWith fadeOut(effects)) using SizeTransform(clip = false) { _, _ -> spatial } },
         modifier = Modifier.fillMaxWidth(),
         label = "choice-description",
     ) { shown ->

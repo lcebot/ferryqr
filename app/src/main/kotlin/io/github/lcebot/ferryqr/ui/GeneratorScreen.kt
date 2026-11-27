@@ -204,20 +204,26 @@ fun GeneratorScreen(onBack: () -> Unit) {
     val unfit by remember { derivedStateOf { made?.generated as? Generated.Unfit } }
     // Every installed app FerryQR reaches its own way, each in a place of its own in the toolbar so
     // it can fade in and out there: the apps for their own codes first, the general ones last.
-    // Asking the package manager is a call into another process, so it stays off the main thread.
-    val candidates by produceState(emptyList<ActiveFerry>()) {
-        value = withContext(Dispatchers.IO) { ActiveFerries.all.filter { it.installed(context) }.sortedBy { it.general } }
+    // Asking the package manager is a call into another process, so it stays off the main thread,
+    // and the apps are named there too, as every app offered is.
+    val candidates by produceState(emptyList<NamedFerry<ActiveFerry>>()) {
+        value = withContext(Dispatchers.IO) {
+            ActiveFerries.all.filter { it.installed(context) }.sortedBy { it.general }.map { NamedFerry(it, it.label(context)) }
+        }
     }
     val appFade = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
     val appResize = MaterialTheme.motionScheme.fastSpatialSpec<IntSize>()
     val ready = readyApps()
     // The apps for the text are the ones result cards offer for the same content, in the same order,
-    // looked up once typing pauses rather than on every keystroke.
-    val offered by produceState(emptyList<Ferry>(), ready) {
+    // looked up once typing pauses rather than on every keystroke. An app the system opens the text
+    // in is named by the package manager, so each is named here, off the main thread.
+    val offered by produceState(emptyList<NamedFerry<Ferry>>(), ready) {
         snapshotFlow { field.text.toString() }.collectLatest { text ->
             delay(OFFER_DELAY_MS)
             value = withContext(Dispatchers.IO) {
-                Ferries.offered(context, Classifier.classify(text), ready).filter { it.installed(context) }
+                Ferries.offered(context, Classifier.classify(text), ready)
+                    .filter { it.installed(context) }
+                    .map { NamedFerry(it, it.label(context)) }
             }
         }
     }
@@ -304,8 +310,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
 
             // What is done with the code sits in one toolbar under it: actions on the code itself,
             // then the apps that can open the text, with sharing as the main way out.
-            val sendApp: (Ferry) -> SendApp = { ferry ->
-                val name = ferry.label(context)
+            val sendApp: (NamedFerry<Ferry>) -> SendApp = { (ferry, name) ->
                 // Without the module the app could only open its scanner on nothing, so the
                 // button looks disabled but still explains why when tapped.
                 val looksEnabled = ferry.isReady(ready)
@@ -478,22 +483,22 @@ fun GeneratorScreen(onBack: () -> Unit) {
                             // time, the same way as when an app appears for the text.
                             AppGroup {
                                 val enabled = hasText
-                                for (ferry in candidates.filterNot { it.general }) {
-                                    AppSlot(ferry in shown.inline, sendApp(ferry), enabled, appFade, appResize)
+                                for (app in candidates.filterNot { it.ferry.general }) {
+                                    AppSlot(shown.inline.any { it.ferry == app.ferry }, sendApp(app), enabled, appFade, appResize)
                                 }
                                 // The app the system opens the text in has a place of its own, between the
                                 // apps for their own codes and the general ones, and keeps it while it fades out.
                                 AnimatedContent(
-                                    targetState = shown.passive?.takeIf { it in shown.inline },
-                                    contentKey = { it?.pkg },
+                                    targetState = shown.passive?.takeIf { passive -> shown.inline.any { it.ferry == passive.ferry } },
+                                    contentKey = { it?.ferry?.pkg },
                                     transitionSpec = appsMotion,
                                     contentAlignment = Alignment.Center,
                                     label = "passive-app",
-                                ) { ferry ->
-                                    if (ferry != null) AppButton(sendApp(ferry), enabled)
+                                ) { app ->
+                                    if (app != null) AppButton(sendApp(app), enabled)
                                 }
-                                for (ferry in candidates.filter { it.general }) {
-                                    AppSlot(ferry in shown.inline, sendApp(ferry), enabled, appFade, appResize)
+                                for (app in candidates.filter { it.ferry.general }) {
+                                    AppSlot(shown.inline.any { it.ferry == app.ferry }, sendApp(app), enabled, appFade, appResize)
                                 }
                                 AnimatedVisibility(
                                     visible = shown.folded.isNotEmpty(),

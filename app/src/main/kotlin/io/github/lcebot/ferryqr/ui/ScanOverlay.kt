@@ -3,9 +3,15 @@
 package io.github.lcebot.ferryqr.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationVector
+import androidx.compose.animation.core.AnimationVector2D
+import androidx.compose.animation.core.AnimationVector4D
+import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.TwoWayConverter
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
@@ -34,6 +40,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,7 +52,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asComposePath
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -63,7 +73,10 @@ import io.github.lcebot.ferryqr.scan.Sighting
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 
 private val MARKER_PADDING = 14.dp
 private val MIN_MARKER = 72.dp
@@ -76,10 +89,14 @@ private val FOUND_SIZE = 56.dp
 /** zxing-cpp often misses a code for a frame or two; the marker rides through such gaps. */
 private const val HIDE_DELAY_MS = 250L
 
+/** Frames further apart than this mean the value was left standing in between, not moving. */
+private const val STALE_FRAME_NANOS = 100_000_000L
+
 /**
  * Feedback drawn where the code actually is, since codes are read anywhere in the frame: corner
  * brackets follow a located code, a loading indicator sits on it while the WeChat detector works,
- * and a short confirmation plays on it after a successful read.
+ * and a short confirmation plays on it after a successful read. The confirmation, [confirming],
+ * stays on the code until the scanner moves on, and then leaves with its brackets.
  */
 @Composable
 fun ScanOverlay(
@@ -99,83 +116,90 @@ fun ScanOverlay(
         val viewHeight = constraints.maxHeight.toFloat()
         val padding = with(density) { MARKER_PADDING.toPx() }
         val minSide = with(density) { MIN_MARKER.toPx() }
+        val effects = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
+        val spatial = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
 
-        val target: Rect? = when {
-            confirming != null -> confirming.detection.bounds.let { b ->
-                if (b.isEmpty) Rect(Offset(viewWidth / 2, viewHeight / 2), 0f)
-                else toView(confirming.frameWidth, confirming.frameHeight, b.left, b.top, b.right, b.bottom, viewWidth, viewHeight)
-            }
-            sighting != null -> sighting.bounds.let { b ->
-                toView(
-                    sighting.frameWidth, sighting.frameHeight,
-                    b.left.toFloat(), b.top.toFloat(), b.right.toFloat(), b.bottom.toFloat(),
-                    viewWidth, viewHeight,
-                )
-            }
-            else -> null
+        // The confirmation that has just ended still shows while it leaves.
+        val lastConfirmation = remember { Last<Phase.Confirming?>(null) }
+        SideEffect { if (confirming != null) lastConfirmation.value = confirming }
+        val held = confirming ?: lastConfirmation.value
+        val confirmation = remember { MutableTransitionState(false) }
+        confirmation.targetState = confirming != null
+        val confirmationShown = confirmation.currentState || confirmation.targetState
+
+        val confirmedRect = held?.let { c ->
+            val b = c.detection.bounds
+            if (b.isEmpty) Rect(Offset(viewWidth / 2, viewHeight / 2), 0f)
+            else toView(c.frameWidth, c.frameHeight, b.left, b.top, b.right, b.bottom, viewWidth, viewHeight)
         }?.squarePadded(padding, minSide)
+        val sightedRect = sighting?.let { s ->
+            val b = s.bounds
+            toView(
+                s.frameWidth, s.frameHeight,
+                b.left.toFloat(), b.top.toFloat(), b.right.toFloat(), b.bottom.toFloat(),
+                viewWidth, viewHeight,
+            )
+        }?.squarePadded(padding, minSide)
+        // While the confirmation shows, leaving included, the brackets stay on the code it confirmed.
+        val target = if (confirmationShown) confirmedRect else sightedRect
 
-        val rect = remember { Animatable(Rect.Zero, Rect.VectorConverter) }
-        val moveSpec = MaterialTheme.motionScheme.fastSpatialSpec<Rect>()
-        LaunchedEffect(target) {
-            val next = target ?: return@LaunchedEffect
-            if (rect.value == Rect.Zero) rect.snapTo(next) else rect.animateTo(next, moveSpec)
+        val rect = remember { Glide(Rect.Zero, Rect.VectorConverter, AnimationVector4D(0f, 0f, 0f, 0f), placed = false) }
+        val moveSpec by rememberUpdatedState(MaterialTheme.motionScheme.fastSpatialSpec<Rect>())
+        val goal by rememberUpdatedState(target)
+        val holding by rememberUpdatedState(confirmationShown)
+        LaunchedEffect(rect) {
+            var last: Rect? = null
+            var wasHolding = false
+            snapshotFlow { goal to holding }.collectLatest { (next, nowHolding) ->
+                // A code sighted once a confirmation has left appears in place, as after any code
+                // that has left the view.
+                val released = wasHolding && !nowHolding
+                wasHolding = nowHolding
+                if (next != null) {
+                    if (released) rect.clear(Rect.Zero)
+                    last = next
+                    rect.moveTo(next, moveSpec)
+                } else {
+                    // Through the frames that miss the code, the brackets carry on to where it was
+                    // last seen. Once it has been gone for longer, the next code appears in place
+                    // instead of sliding in from the last one.
+                    coroutineScope {
+                        last?.let { launch { rect.moveTo(it, moveSpec) } }
+                        delay(2 * HIDE_DELAY_MS)
+                    }
+                    rect.clear(Rect.Zero)
+                    last = null
+                }
+            }
         }
 
         var visible by remember { mutableStateOf(false) }
-        LaunchedEffect(target != null) {
-            if (target != null) {
+        LaunchedEffect(sightedRect != null) {
+            if (sightedRect != null) {
                 visible = true
             } else {
                 delay(HIDE_DELAY_MS)
                 visible = false
-                // The next code then appears in place instead of sliding in from the last one.
-                delay(HIDE_DELAY_MS)
-                rect.snapTo(Rect.Zero)
             }
         }
 
         val alpha by animateFloatAsState(
-            targetValue = if (visible) 1f else 0f,
-            animationSpec = MaterialTheme.motionScheme.fastEffectsSpec(),
+            targetValue = if (visible && !confirmationShown) 1f else 0f,
+            animationSpec = effects,
             label = "marker-alpha",
         )
-        val color by animateColorAsState(
-            targetValue = if (confirming != null) MaterialTheme.colorScheme.primary else Color.White,
-            animationSpec = MaterialTheme.motionScheme.fastEffectsSpec(),
-            label = "marker-color",
-        )
-
         Canvas(Modifier.fillMaxSize().graphicsLayer { this.alpha = alpha }) {
-            val r = rect.value
-            if (r == Rect.Zero) return@Canvas
-            val arm = min(r.width, r.height) * 0.3f
-            val corner = min(arm * 0.45f, 10.dp.toPx())
-            val brackets = Path().apply {
-                moveTo(r.left, r.top + arm); lineTo(r.left, r.top + corner)
-                quadraticTo(r.left, r.top, r.left + corner, r.top); lineTo(r.left + arm, r.top)
-                moveTo(r.right - arm, r.top); lineTo(r.right - corner, r.top)
-                quadraticTo(r.right, r.top, r.right, r.top + corner); lineTo(r.right, r.top + arm)
-                moveTo(r.right, r.bottom - arm); lineTo(r.right, r.bottom - corner)
-                quadraticTo(r.right, r.bottom, r.right - corner, r.bottom); lineTo(r.right - arm, r.bottom)
-                moveTo(r.left + arm, r.bottom); lineTo(r.left + corner, r.bottom)
-                quadraticTo(r.left, r.bottom, r.left, r.bottom - corner); lineTo(r.left, r.bottom - arm)
-            }
-            drawPath(
-                brackets, color,
-                style = Stroke(width = 4.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
-            )
+            // The confirmation draws the brackets in its own colour while it shows.
+            if (!confirmationShown) drawBrackets(rect.value, Color.White)
         }
 
         // It comes later than the brackets, only once looking closer has gone on for a moment, so a
         // code read at the first closer look never makes it blink. When the code leaves, it stays
         // with the brackets through the frames that miss it and leaves with them.
         AnimatedVisibility(
-            visible = confirming == null && lookingCloser && (sighting != null || visible),
-            enter = fadeIn(MaterialTheme.motionScheme.fastEffectsSpec()) +
-                scaleIn(MaterialTheme.motionScheme.fastSpatialSpec()),
-            exit = fadeOut(MaterialTheme.motionScheme.fastEffectsSpec()) +
-                scaleOut(MaterialTheme.motionScheme.fastSpatialSpec()),
+            visible = !confirmationShown && lookingCloser && (sighting != null || visible),
+            enter = fadeIn(effects) + scaleIn(spatial),
+            exit = fadeOut(effects) + scaleOut(spatial),
             modifier = Modifier.centeredOn(LOADING_SIZE) { rect.value.center },
         ) {
             // Contained, since the camera image behind it may be as light as the indicator itself.
@@ -186,8 +210,8 @@ fun ScanOverlay(
         // arrives. When the sighting ends, the markers last shown stay as long as the brackets do and
         // leave with them, which also carries them through a frame or two that misses the code. A
         // confirmed code hands its marker to the success badge at once, since the badge grows from it.
-        val spots = if (confirming == null && sighting != null) foundSpots(sighting, viewWidth, viewHeight) else null
-        val lastSpots = remember { LastSpots() }
+        val spots = if (!confirmationShown && sighting != null) foundSpots(sighting, viewWidth, viewHeight) else null
+        val lastSpots = remember { Last<List<FoundSpot>>(emptyList()) }
         SideEffect {
             when {
                 spots != null -> lastSpots.value = spots
@@ -195,35 +219,68 @@ fun ScanOverlay(
                 confirming != null -> lastSpots.value = emptyList()
             }
         }
-        val shownSpots = spots ?: if (confirming == null) lastSpots.value else emptyList()
+        val shownSpots = spots ?: if (!confirmationShown) lastSpots.value else emptyList()
         shownSpots.forEach { spot ->
             key(spot.text) {
                 FoundMarker(spot.center, visible = spots != null || visible)
             }
         }
 
-        if (confirming != null) {
-            key(confirming) {
-                SuccessBadge(
-                    center = { rect.value.center },
-                    fromMarker = confirming.wasShown,
-                    onDone = { onConfirmed(confirming.detection) },
-                )
+        // Brackets and badge shrink away together about the code once the scanner moves on. They
+        // come in at once while the brackets were already on the code, since they only change colour
+        // there; a code read before its brackets showed has them fade in.
+        val origin = confirmedRect?.center
+            ?.takeIf { viewWidth > 0f && viewHeight > 0f }
+            ?.let { TransformOrigin(it.x / viewWidth, it.y / viewHeight) }
+            ?: TransformOrigin.Center
+        AnimatedVisibility(
+            visibleState = confirmation,
+            enter = if (visible) EnterTransition.None else fadeIn(effects),
+            exit = fadeOut(effects) + scaleOut(spatial, transformOrigin = origin),
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            held?.let { shown ->
+                key(shown.detection) {
+                    Confirmation(
+                        rect = { rect.value },
+                        fromMarker = shown.wasShown,
+                        handedOn = shown.handedOn,
+                        onDone = { onConfirmed(shown.detection) },
+                    )
+                }
             }
         }
     }
 }
 
+/**
+ * The brackets on a confirmed code, which take the confirmation's colour from the white they had
+ * while the code was sighted, and the success badge on them. Once the code has been [handedOn],
+ * both show settled.
+ */
+@Composable
+private fun Confirmation(rect: () -> Rect, fromMarker: Boolean, handedOn: Boolean, onDone: () -> Unit) {
+    // A fixed colour keeps one light tone in both themes, which the camera image behind needs; the
+    // dim one sets the brackets apart from the badge they hold.
+    val toned = MaterialTheme.colorScheme.primaryFixedDim
+    var arrived by remember { mutableStateOf(handedOn) }
+    LaunchedEffect(Unit) { arrived = true }
+    val color by animateColorAsState(
+        targetValue = if (arrived) toned else Color.White,
+        animationSpec = MaterialTheme.motionScheme.fastEffectsSpec(),
+        label = "confirmed-color",
+    )
+    Box(Modifier.fillMaxSize(), contentAlignment = AbsoluteAlignment.TopLeft) {
+        Canvas(Modifier.fillMaxSize()) { drawBrackets(rect(), color) }
+        SuccessBadge(center = { rect().center }, fromMarker = fromMarker, settled = handedOn, onDone = onDone)
+    }
+}
+
+/** What was composed last, held outside the snapshot system, since keeping it is no reason to compose again. */
+private class Last<T>(var value: T)
+
 /** A decoded code's text and where its center falls on the view. */
 private class FoundSpot(val text: String, val center: Offset)
-
-/**
- * The markers of the sighting composed last, held outside the snapshot system, since keeping them
- * is no reason to compose again.
- */
-private class LastSpots {
-    var value: List<FoundSpot> = emptyList()
-}
 
 /** The decoded codes of [sighting] that have a place in the frame, placed on a [viewWidth] by [viewHeight] view. */
 private fun foundSpots(sighting: Sighting, viewWidth: Float, viewHeight: Float): List<FoundSpot> =
@@ -239,9 +296,12 @@ private fun foundSpots(sighting: Sighting, viewWidth: Float, viewHeight: Float):
  */
 @Composable
 private fun FoundMarker(target: Offset, visible: Boolean) {
-    val position = remember { Animatable(target, Offset.VectorConverter) }
-    val moveSpec = MaterialTheme.motionScheme.fastSpatialSpec<Offset>()
-    LaunchedEffect(target) { position.animateTo(target, moveSpec) }
+    val position = remember { Glide(target, Offset.VectorConverter, AnimationVector2D(0f, 0f), placed = true) }
+    val moveSpec by rememberUpdatedState(MaterialTheme.motionScheme.fastSpatialSpec<Offset>())
+    val goal by rememberUpdatedState(target)
+    LaunchedEffect(position) {
+        snapshotFlow { goal }.collectLatest { position.moveTo(it, moveSpec) }
+    }
     // Starts hidden, so a marker composed for a code just appended pops in.
     val shown = remember { MutableTransitionState(false) }
     shown.targetState = visible
@@ -254,38 +314,45 @@ private fun FoundMarker(target: Offset, visible: Boolean) {
     ) {
         val haptics = rememberHaptics()
         LaunchedEffect(Unit) { haptics.found() }
+        // A fixed colour keeps one light tone in both themes, which the camera image behind needs.
         Box(
             modifier = Modifier
                 .size(FOUND_SIZE)
                 .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primary),
+                .background(MaterialTheme.colorScheme.primaryFixed),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 painterResource(R.drawable.ic_check),
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.onPrimary,
+                tint = MaterialTheme.colorScheme.onPrimaryFixed,
                 modifier = Modifier.size(28.dp),
             )
         }
     }
 }
 
-/** A burst that pops onto the code and settles into a circle with a check mark. */
+/**
+ * A burst that pops onto the code and settles into a circle with a check mark. Composed [settled],
+ * as when the activity is made again after the code went on, it shows as it ended.
+ */
 @Composable
-private fun SuccessBadge(center: () -> Offset, fromMarker: Boolean, onDone: () -> Unit) {
+private fun SuccessBadge(center: () -> Offset, fromMarker: Boolean, settled: Boolean, onDone: () -> Unit) {
     val haptics = LocalHapticFeedback.current
     val done by rememberUpdatedState(onDone)
     // A code that already wore a found marker grows from that marker instead of popping in again.
-    val pop = remember { Animatable(if (fromMarker) FOUND_SIZE / BADGE_SIZE else 0f) }
+    val pop = remember { Animatable(if (settled) 1f else if (fromMarker) FOUND_SIZE / BADGE_SIZE else 0f) }
+    val plays = remember { !settled }
     val popSpec = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
     val morph = remember { Morph(MaterialShapes.SoftBurst, MaterialShapes.Circle) }
-    val fill = MaterialTheme.colorScheme.primary
-    val tint = MaterialTheme.colorScheme.onPrimary
+    // A fixed colour keeps one light tone in both themes, which the camera image behind needs.
+    val fill = MaterialTheme.colorScheme.primaryFixed
+    val tint = MaterialTheme.colorScheme.onPrimaryFixed
     val path = remember { android.graphics.Path() }
     val matrix = remember { android.graphics.Matrix() }
 
     LaunchedEffect(Unit) {
+        if (!plays) return@LaunchedEffect
         haptics.performHapticFeedback(HapticFeedbackType.Confirm)
         pop.animateTo(1f, popSpec)
         delay(140)
@@ -315,6 +382,82 @@ private fun SuccessBadge(center: () -> Offset, fromMarker: Boolean, onDone: () -
             tint = tint,
             modifier = Modifier.align(Alignment.Center).size(36.dp),
         )
+    }
+}
+
+/** Corner brackets around [r]; [Rect.Zero] stands for no place yet, and draws nothing. */
+private fun DrawScope.drawBrackets(r: Rect, color: Color) {
+    if (r == Rect.Zero) return
+    val arm = min(r.width, r.height) * 0.3f
+    val corner = min(arm * 0.45f, 10.dp.toPx())
+    val brackets = Path().apply {
+        moveTo(r.left, r.top + arm); lineTo(r.left, r.top + corner)
+        quadraticTo(r.left, r.top, r.left + corner, r.top); lineTo(r.left + arm, r.top)
+        moveTo(r.right - arm, r.top); lineTo(r.right - corner, r.top)
+        quadraticTo(r.right, r.top, r.right, r.top + corner); lineTo(r.right, r.top + arm)
+        moveTo(r.right, r.bottom - arm); lineTo(r.right, r.bottom - corner)
+        quadraticTo(r.right, r.bottom, r.right - corner, r.bottom); lineTo(r.right - arm, r.bottom)
+        moveTo(r.left + arm, r.bottom); lineTo(r.left + corner, r.bottom)
+        quadraticTo(r.left, r.bottom, r.left, r.bottom - corner); lineTo(r.left, r.bottom - arm)
+    }
+    drawPath(brackets, color, style = Stroke(width = 4.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+}
+
+/**
+ * A value of several dimensions, such as a point or a rect, that follows a target which may move
+ * with every camera frame, the way [Follower] follows a single one. A new target retargets the
+ * spring already running, stepped one frame at a time from where the value is and with the speed it
+ * has, rather than starting it anew, which would hold the value still on the frame it starts. Until
+ * it is [placed], and once [cleared][clear], the next target is taken at once.
+ */
+private class Glide<T, V : AnimationVector>(
+    initial: T,
+    private val converter: TwoWayConverter<T, V>,
+    private val still: V,
+    private var placed: Boolean,
+) {
+    var value by mutableStateOf(initial)
+        private set
+
+    private var velocity = still
+    private var lastFrame = 0L
+
+    /** Moves to [target] on [spec], returning once it is there. */
+    suspend fun moveTo(target: T, spec: FiniteAnimationSpec<T>) {
+        if (!placed) {
+            placed = true
+            value = target
+            return
+        }
+        val animation = spec.vectorize(converter)
+        val to = converter.convertToVector(target)
+        while (true) {
+            val now = withFrameNanos { it }
+            var elapsed = if (lastFrame == 0L) 0L else now - lastFrame
+            lastFrame = now
+            if (elapsed > STALE_FRAME_NANOS) {
+                velocity = still
+                elapsed = 0L
+            }
+            if (elapsed <= 0L) continue
+            val from = converter.convertToVector(value)
+            if (animation.getDurationNanos(from, to, velocity) <= elapsed) {
+                value = target
+                velocity = still
+                lastFrame = 0L
+                return
+            }
+            value = converter.convertFromVector(animation.getValueFromNanos(elapsed, from, to, velocity))
+            velocity = animation.getVelocityFromNanos(elapsed, from, to, velocity)
+        }
+    }
+
+    /** Leaves the value at [to], with no place, so the next target is taken at once. */
+    fun clear(to: T) {
+        placed = false
+        value = to
+        velocity = still
+        lastFrame = 0L
     }
 }
 

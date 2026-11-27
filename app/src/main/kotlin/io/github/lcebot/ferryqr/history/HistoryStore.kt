@@ -3,7 +3,7 @@ package io.github.lcebot.ferryqr.history
 import android.content.Context
 import android.util.AtomicFile
 import io.github.lcebot.ferryqr.AppSettings
-import io.github.lcebot.ferryqr.dispatch.EntryNames
+import io.github.lcebot.ferryqr.dispatch.ContentNames
 import io.github.lcebot.ferryqr.dispatch.ReadContent
 import io.github.lcebot.ferryqr.scan.MINI_LOCATED_FORMAT
 import java.io.File
@@ -272,7 +272,7 @@ class HistoryStore private constructor(private val context: Context) {
 
     /**
      * [label] as a name the user gave the content, or null when it is none, see
-     * [EntryNames.isOwnName]. Accepted unchanged, a title FerryQR shows anyway changes nothing, so
+     * [ContentNames.isOwnName]. Accepted unchanged, a title FerryQR shows anyway changes nothing, so
      * the content still counts as unnamed and goes on following its own title.
      */
     private fun ownLabel(content: ReadContent, label: String): String? =

@@ -16,8 +16,8 @@ private const val CACHED = 1024
 
 /**
  * Content that was read, [text] in [format], classified once into [payload], from which every layer
- * takes what it needs: the scanner its way to an app and its card, history whether to keep it, and
- * every list, shortcut and dialog its [names]. Values for the same text in the same format are
+ * takes what it needs: the scanner its way to an app, history whether to keep it, and every list,
+ * shortcut, dialog and card its [names]. Values for the same text in the same format are
  * equal, as the content they hold is, and [of] hands out one value for each, so classifying a
  * content and naming it are done once in the process rather than again in every layer.
  */
@@ -36,10 +36,10 @@ class ReadContent private constructor(val text: String, val format: String) {
      * apart, and asking in another one works them out again. They are worked out with the
      * application's context, so the names kept for the process hold on to no activity.
      */
-    fun names(context: Context, label: String?): EntryNames {
+    fun names(context: Context, label: String?): ContentNames {
         val app = context.applicationContext
         val key = NamesKey(this, label, app.resources.configuration.locales)
-        return NAMES.get(key) ?: EntryNames(app, this, label).also { NAMES.put(key, it) }
+        return NAMES.get(key) ?: ContentNames(app, this, label).also { NAMES.put(key, it) }
     }
 
     override fun equals(other: Any?): Boolean = other is ReadContent && other.text == text && other.format == format
@@ -50,7 +50,7 @@ class ReadContent private constructor(val text: String, val format: String) {
 
     companion object {
         private val CONTENTS = LruCache<Pair<String, String>, ReadContent>(CACHED)
-        private val NAMES = LruCache<NamesKey, EntryNames>(CACHED)
+        private val NAMES = LruCache<NamesKey, ContentNames>(CACHED)
 
         /**
          * The content [text] read in [format], classified here unless it was already. Classifying

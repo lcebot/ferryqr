@@ -107,6 +107,9 @@ class LiveAnalyzer(
     private val candidates = ArrayList<Candidate>()
     private var lastDeepAt = 0L
 
+    /** The grey frame of each [UprightFrame], turned in the same place every frame. */
+    private val uprightBuffer = UprightBuffer()
+
     /**
      * Set from the first deep read of the codes in view until none waits any longer, so a sighting
      * tells that they are being looked at closer throughout, not only during each read.
@@ -136,6 +139,9 @@ class LiveAnalyzer(
     private val mutedAt = HashMap<String, RectF>()
 
     /** Starts over as if the analyzer had just been created. */
+    /** Lets go of the native image the frames are read into; call it on the analysis thread, after the last frame. */
+    fun release() = uprightBuffer.release()
+
     fun reset() {
         dismissed = null
         clearRequested = true
@@ -268,7 +274,8 @@ class LiveAnalyzer(
      * The frame upright, as [width] by [height] pixels. Its grey image for the detector and for deep
      * reads is read straight from the camera's luma plane, and the colour bitmap, which costs several
      * conversions of the whole frame, is made only for the steps that need colour: the frame handed
-     * on with a result and the crop of a mini program code. Each is made at most once.
+     * on with a result and the crop of a mini program code. Each is made at most once, and the grey
+     * image lives in [uprightBuffer], which the next frame reuses.
      */
     private inner class UprightFrame(private val image: ImageProxy, val width: Int, val height: Int) {
         private var bitmap: Bitmap? = null
@@ -282,7 +289,7 @@ class LiveAnalyzer(
         private fun gray(): Mat? {
             if (!grayTried) {
                 grayTried = true
-                grayMat = wechat.upright(image)
+                grayMat = wechat.upright(image, uprightBuffer)
             }
             return grayMat
         }
@@ -296,7 +303,6 @@ class LiveAnalyzer(
         }
 
         fun recycle() {
-            grayMat?.release()
             if (!handedOn) bitmap?.recycle()
         }
     }

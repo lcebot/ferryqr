@@ -7,7 +7,10 @@ import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.collection.intListOf
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDp
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.updateTransition
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -17,10 +20,10 @@ import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.material3.DropdownMenuGroup
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.DropdownMenuPopup
@@ -41,10 +44,12 @@ import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,16 +61,21 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.offset
 import io.github.lcebot.ferryqr.EntryPresentation
 import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.history.FavoriteShortcuts
@@ -171,68 +181,18 @@ internal class EntryActions(
 )
 
 /**
- * A favorite while the favorites are reordered: it neither opens nor swipes nor opens its menu. A
- * long press anywhere on it picks it up, and its handle at the end picks it up at once, as in
- * Android's own reorderable lists. While [lifted], the list item takes its dragged look, from the
- * expressive list's reorder tokens, through a drag interaction.
+ * How a favorite row takes part in reordering the favorites. While [active], it neither opens nor
+ * swipes nor opens its menu, and a long press anywhere on it or a drag on its handle picks it up,
+ * as in Android's own reorderable lists. While [lifted], it takes the dragged look of the
+ * expressive list's reorder tokens. [onDrag] moves it by a distance down the list.
  */
-@Composable
-internal fun ReorderRow(
-    entry: HistoryEntry,
-    listed: EntryPresentation?,
-    shape: Shape,
-    lifted: Boolean,
-    onDragStart: () -> Unit,
-    onDrag: (Float) -> Unit,
-    onDragEnd: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val interactions = rememberLiftedInteraction(lifted)
-    Box(
-        modifier.pointerInput(entry.text) {
-            detectDragGesturesAfterLongPress(
-                onDragStart = { onDragStart() },
-                onDragEnd = onDragEnd,
-                onDragCancel = onDragEnd,
-                onDrag = { change, amount ->
-                    change.consume()
-                    onDrag(amount.y)
-                },
-            )
-        },
-    ) {
-        EntryItem(
-            entry,
-            listed,
-            shape,
-            onClick = {},
-            onLongClick = null,
-            interactionSource = interactions,
-            trailingOverride = {
-                // The drag is detected outside the minimum interactive size, so a touch anywhere in
-                // it picks the row up, not only one on the glyph.
-                Icon(
-                    painterResource(R.drawable.ic_drag_indicator),
-                    contentDescription = stringResource(R.string.favorite_drag),
-                    modifier = Modifier
-                        .pointerInput(entry.text) {
-                            detectDragGestures(
-                                onDragStart = { onDragStart() },
-                                onDragEnd = onDragEnd,
-                                onDragCancel = onDragEnd,
-                                onDrag = { change, amount ->
-                                    change.consume()
-                                    onDrag(amount.y)
-                                },
-                            )
-                        }
-                        .minimumInteractiveComponentSize()
-                        .size(24.dp),
-                )
-            },
-        )
-    }
-}
+internal class RowReorder(
+    val active: Boolean,
+    val lifted: Boolean,
+    val onDragStart: () -> Unit,
+    val onDrag: (Float) -> Unit,
+    val onDragEnd: () -> Unit,
+)
 
 /**
  * One entry: a tap opens it, a long press opens its menu, a swipe toward the start deletes it, and a
@@ -240,7 +200,9 @@ internal fun ReorderRow(
  * back once done. The swipe works as a notification's does: the row follows the finger at half its
  * pace, pulling the rows around it, until it comes loose at [DETACH_AT] and follows the finger
  * itself. A row swiped away and deleted leaves its swipe with [list] while undoing can bring it
- * back, and brought back, it flies back into its place from where it went, as a tile does.
+ * back, and brought back, it flies back into its place from where it went in its turn, as a tile
+ * does. A favorite row is reordered through [reorder], the same row showing its handle while that
+ * is active, so entering and leaving the mode moves only what the handle changes.
  */
 @Composable
 internal fun EntryRow(
@@ -252,7 +214,10 @@ internal fun EntryRow(
     list: MagneticList,
     actions: EntryActions,
     modifier: Modifier = Modifier,
+    reorder: RowReorder? = null,
 ) {
+    val reordering = reorder?.active == true
+    val drag by rememberUpdatedState(reorder)
     var menu by remember { mutableStateOf(false) }
     var touch by remember { mutableStateOf(Offset.Zero) }
     val density = LocalDensity.current
@@ -275,7 +240,7 @@ internal fun EntryRow(
     LaunchedEffect(swipe) {
         if (kept == null) return@LaunchedEffect
         list.departed.remove(entry.text)
-        if (swipe.acting) swipe.comeBack()
+        if (swipe.acting) list.returnInTurn(entry.text, swipe)
     }
     // What a swipe shows behind the row takes the row's own shape, rounding with it as it is pulled
     // and comes loose, so it matches the corners of the neighbours that round toward it.
@@ -286,7 +251,19 @@ internal fun EntryRow(
         modifier
             .onSizeChanged { width = it.width }
             .trackTouch { touch = it }
-            .entrySwipe(swipe),
+            .entrySwipe(swipe, enabled = !reordering)
+            .pointerInput(entry.text, reordering) {
+                if (!reordering) return@pointerInput
+                detectDragGesturesAfterLongPress(
+                    onDragStart = { drag?.onDragStart() },
+                    onDragEnd = { drag?.onDragEnd() },
+                    onDragCancel = { drag?.onDragEnd() },
+                    onDrag = { change, amount ->
+                        change.consume()
+                        drag?.onDrag(amount.y)
+                    },
+                )
+            },
     ) {
         SwipeBackground(
             swipe.direction,
@@ -300,8 +277,10 @@ internal fun EntryRow(
                 entry,
                 listed,
                 shape,
-                onClick = { actions.onOpen(entry) },
-                onLongClick = { menu = true },
+                onClick = { if (!reordering) actions.onOpen(entry) },
+                onLongClick = if (reordering) null else ({ menu = true }),
+                interactionSource = rememberLiftedInteraction(reorder?.lifted == true),
+                reorder = reorder,
             )
         }
         EntryMenu(
@@ -315,8 +294,8 @@ internal fun EntryRow(
 }
 
 /**
- * [listed] is how the history lists show [entry]. [trailingOverride] replaces what the row shows at
- * its end, as the handle does while reordering.
+ * [listed] is how the history lists show [entry]. A favorite row reordered through [reorder] shows
+ * its drag handle at its end while that is active.
  */
 @Composable
 private fun EntryItem(
@@ -325,36 +304,123 @@ private fun EntryItem(
     shape: Shape,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)?,
-    trailingOverride: (@Composable () -> Unit)? = null,
-    interactionSource: MutableInteractionSource? = null,
+    interactionSource: MutableInteractionSource,
+    reorder: RowReorder?,
 ) {
     val context = LocalContext.current
     val shown = rememberPresentation(entry, listed)
     val time = remember(entry.time) { DateFormat.getTimeFormat(context).format(Date(entry.time)) }
     // A favorite is kept for what it is rather than when it was scanned.
-    val timeTrailing: (@Composable () -> Unit)? = if (entry.favorite) null else {
+    val trailing: (@Composable () -> Unit)? = if (entry.favorite) null else {
         { Text(time, style = MaterialTheme.typography.labelMedium) }
     }
-    val trailing = trailingOverride ?: timeTrailing
-    ListItem(
-        onClick = onClick,
-        onLongClick = onLongClick,
-        onLongClickLabel = if (onLongClick != null) stringResource(R.string.entry_more) else null,
-        interactionSource = interactionSource,
-        // Deliberately centred, as the settings rows are, against the list's rule that top-aligns
-        // the icon, time and handle of a row three lines tall, which a title on two lines makes it.
-        verticalAlignment = Alignment.CenterVertically,
-        leadingContent = { EntryAvatar(shown.kind.icon, entry.favorite) },
-        trailingContent = trailing,
-        supportingContent = { Text(stringResource(shown.kind.label)) },
-        shapes = ListItemDefaults.shapes(shape = shape),
-        colors = ListItemDefaults.colors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainer,
-            contentColor = MaterialTheme.colorScheme.onSurface,
-        ),
-    ) {
-        EntryTitle(shown.title)
+    val handle = reorder?.let { rememberHandleShow(it.active) }
+    // The text makes room for the handle as the handle comes and goes, so a title that wraps anew
+    // does so beside the moving handle rather than in one frame. Measured here rather than padded
+    // in composition, so the room changing on every frame lays the text out again without
+    // composing the row again.
+    val room = Modifier.layout { measurable, constraints ->
+        val clear = handle?.room?.roundToPx() ?: 0
+        val placeable = measurable.measure(constraints.offset(horizontal = -clear))
+        layout(constraints.constrainWidth(placeable.width + clear), placeable.height) { placeable.placeRelative(0, 0) }
     }
+    Box {
+        ListItem(
+            onClick = onClick,
+            onLongClick = onLongClick,
+            onLongClickLabel = if (onLongClick != null) stringResource(R.string.entry_more) else null,
+            interactionSource = interactionSource,
+            // Deliberately centred, as the settings rows are, against the list's rule that top-aligns
+            // the icon, time and handle of a row three lines tall, which a title on two lines makes it.
+            verticalAlignment = Alignment.CenterVertically,
+            leadingContent = { EntryAvatar(shown.kind.icon, entry.favorite) },
+            trailingContent = trailing,
+            supportingContent = { Text(stringResource(shown.kind.label), modifier = room) },
+            shapes = ListItemDefaults.shapes(shape = shape),
+            colors = ListItemDefaults.colors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+            ),
+        ) {
+            Box(room) { EntryTitle(shown.title) }
+        }
+        if (reorder != null && handle != null && handle.present) {
+            DragHandle(entry.text, reorder, handle, Modifier.align(Alignment.CenterEnd))
+        }
+    }
+}
+
+/** The drag handle's glyph. */
+private val HANDLE_SIZE = 24.dp
+
+/**
+ * The space a row's text keeps clear for its handle: the glyph and, before it, a gap as wide as the
+ * 12dp a list item keeps between its leading content and its text.
+ */
+private val HANDLE_ROOM = HANDLE_SIZE + 12.dp
+
+/** The touch area Material gives a control smaller than it. */
+private val HANDLE_TOUCH = 48.dp
+
+/**
+ * How far a favorite row's handle has come in: the [room] its row's text keeps clear for it, on the
+ * fast spatial spring, its [alpha], on the fast effects one, and whether it is [present] at all,
+ * shown or on its way in or out. Both run on one transition, so they start and end together.
+ */
+private class HandleShow(roomState: State<Dp>, alphaState: State<Float>, val present: Boolean) {
+    val room by roomState
+    val alpha by alphaState
+}
+
+/** The handle of a favorite row, shown while [active], on the fast springs as a small part of the row. */
+@Composable
+private fun rememberHandleShow(active: Boolean): HandleShow {
+    val motion = MaterialTheme.motionScheme
+    val transition = updateTransition(active, label = "reorder-handle")
+    val room = transition.animateDp({ motion.fastSpatialSpec() }, label = "handle-room") { if (it) HANDLE_ROOM else 0.dp }
+    val alpha = transition.animateFloat({ motion.fastEffectsSpec() }, label = "handle-alpha") { if (it) 1f else 0f }
+    return HandleShow(room, alpha, transition.currentState || transition.targetState)
+}
+
+/**
+ * The drag handle, laid over the end of the row rather than in its trailing slot, where the list
+ * item would open the space before it in one frame. It slides in from the end by as much as the
+ * text has still to make room, so the two meet as they move, and it fades as it does. The drag is
+ * detected across the whole touch area, so a touch anywhere in it picks the row up, not only one on
+ * the glyph.
+ */
+@Composable
+private fun DragHandle(key: String, reorder: RowReorder, handle: HandleShow, modifier: Modifier = Modifier) {
+    val drag by rememberUpdatedState(reorder)
+    val layoutDirection = LocalLayoutDirection.current
+    val toEnd = if (layoutDirection == LayoutDirection.Rtl) -1f else 1f
+    // The glyph keeps the list item's end padding, its touch area reaching into that padding.
+    val end = (ListItemDefaults.ContentPadding.calculateEndPadding(layoutDirection) - (HANDLE_TOUCH - HANDLE_SIZE) / 2)
+        .coerceAtLeast(0.dp)
+    Icon(
+        painterResource(R.drawable.ic_drag_indicator),
+        contentDescription = stringResource(R.string.favorite_drag),
+        modifier = modifier
+            .padding(end = end)
+            .graphicsLayer {
+                alpha = handle.alpha
+                translationX = (HANDLE_ROOM - handle.room).toPx() * toEnd
+            }
+            .pointerInput(key, reorder.active) {
+                if (!reorder.active) return@pointerInput
+                detectDragGestures(
+                    onDragStart = { drag.onDragStart() },
+                    onDragEnd = { drag.onDragEnd() },
+                    onDragCancel = { drag.onDragEnd() },
+                    onDrag = { change, amount ->
+                        change.consume()
+                        drag.onDrag(amount.y)
+                    },
+                )
+            }
+            .minimumInteractiveComponentSize()
+            .size(HANDLE_SIZE),
+    )
 }
 
 /**

@@ -19,73 +19,83 @@ import io.github.lcebot.ferryqr.content.WifiPayload
 import io.github.lcebot.wxcode.WxText
 
 /**
+ * The name content carries, [name], or null when it carries none. [distinct] is whether that name
+ * tells this content apart from other content of its kind, which a contact's name, an event's title,
+ * a network's name, a vehicle's number, a flight, the account a two-factor key is for and whom a
+ * message goes to all do. A name every code of the kind shares, such as a passkey sign-in's or a
+ * WeChat merchant's payment code's, or one that is only part of the content, such as an eSIM's
+ * server, says what the content is but not which, so it is not distinct.
+ */
+internal data class CarriedName(val name: String?, val distinct: Boolean)
+
+/**
  * Names for content in words, where the content alone says what it is: the links of [KnownLink],
  * with a vehicle's number where the link carries one, and the parts of the basic kinds that name
  * them. Content these do not cover has no such name, and is shown as it is.
  */
 internal object Titles {
 
-    /** The name of the link or app URI [uri]; null for one FerryQR does not know. */
-    fun link(context: Context, uri: String): String? {
-        val link = KnownLink.of(uri) ?: return null
-        if (link.numbering == Numbering.NONE) return context.getString(link.title)
-        return context.getString(link.title, link.number(uri) ?: return null)
-    }
+    private val NONE = CarriedName(null, distinct = false)
 
     /**
-     * The name [payload] carries, or null when it carries none and is best shown as it is: a link
+     * The name [payload] carries. It carries none and is best shown as it is when it is a link
      * FerryQR does not know, plain text or a Wi-Fi Easy Connect code. A passkey request is named for
      * what it asks, since its content is only digits.
      */
-    fun of(context: Context, payload: Payload): String? = when (payload) {
+    fun carried(context: Context, payload: Payload): CarriedName = when (payload) {
         is WebPayload -> link(context, payload.url)
-        is SchemePayload -> link(context, payload.raw) ?: schemeTarget(payload)
-        is WifiPayload -> payload.ssid.ifBlank { context.getString(R.string.wifi_hidden) }
-        is ContactPayload -> with(payload.contact) {
-            listOfNotNull(name, organization, phones.firstOrNull(), emails.firstOrNull()).firstOrNull { it.isNotBlank() }
+        is SchemePayload -> {
+            val known = link(context, payload.raw)
+            val target = schemeTarget(payload)
+            CarriedName(known.name ?: target, known.distinct || target != null)
         }
-        is EventPayload -> payload.event.title?.takeIf { it.isNotBlank() }
-        is EsimPayload -> esimServer(payload.raw)
-        // The payload means something only as WeChat reads it.
-        is MiniProgramPayload -> WxText.forWeChat(payload.raw)
-        is OtpPayload -> otpName(context, payload)
-        is FidoPayload -> context.getString(
-            when (PasskeyQr.operation(payload.raw)) {
-                PasskeyOperation.SIGN_IN -> R.string.title_passkey_sign_in
-                PasskeyOperation.CREATE -> R.string.title_passkey_create
-                PasskeyOperation.PRESENT_CREDENTIAL -> R.string.title_credential_present
-                PasskeyOperation.ADD_CREDENTIAL -> R.string.title_credential_add
-                null -> R.string.title_passkey_request
-            },
+        is WifiPayload -> CarriedName(
+            payload.ssid.ifBlank { context.getString(R.string.wifi_hidden) },
+            distinct = payload.ssid.isNotBlank(),
         )
-        is BoardingPassPayload -> payload.pass.legs.firstOrNull()?.flight?.ifEmpty { null }
-            ?.let { context.getString(R.string.title_boarding_pass, it) }
-            ?: context.getString(R.string.kind_boarding_pass)
-        else -> null
+        is ContactPayload -> with(payload.contact) {
+            named(listOfNotNull(name, organization, phones.firstOrNull(), emails.firstOrNull()).firstOrNull { it.isNotBlank() })
+        }
+        is EventPayload -> named(payload.event.title?.takeIf { it.isNotBlank() })
+        is EsimPayload -> CarriedName(esimServer(payload.raw), distinct = false)
+        // The payload means something only as WeChat reads it.
+        is MiniProgramPayload -> CarriedName(WxText.forWeChat(payload.raw), distinct = false)
+        is OtpPayload -> CarriedName(otpName(context, payload), distinct = payload.key.issuer != null || payload.key.account != null)
+        is FidoPayload -> CarriedName(
+            context.getString(
+                when (PasskeyQr.operation(payload.raw)) {
+                    PasskeyOperation.SIGN_IN -> R.string.title_passkey_sign_in
+                    PasskeyOperation.CREATE -> R.string.title_passkey_create
+                    PasskeyOperation.PRESENT_CREDENTIAL -> R.string.title_credential_present
+                    PasskeyOperation.ADD_CREDENTIAL -> R.string.title_credential_add
+                    null -> R.string.title_passkey_request
+                },
+            ),
+            distinct = false,
+        )
+        is BoardingPassPayload -> {
+            val flight = payload.pass.legs.firstOrNull()?.flight?.ifEmpty { null }
+            CarriedName(
+                flight?.let { context.getString(R.string.title_boarding_pass, it) } ?: context.getString(R.string.kind_boarding_pass),
+                distinct = flight != null,
+            )
+        }
+        else -> NONE
     }
+
+    /** A name taken from the content's own fields, as a contact's or an event's is, which tells it apart whenever there is one. */
+    private fun named(name: String?): CarriedName = CarriedName(name, distinct = name != null)
 
     /**
-     * The name [payload] carries when it tells this content apart from other content of its kind:
-     * a contact's name, an event's title, a network's name, a vehicle's number, a flight, the
-     * account a two-factor key is for, or whom a message goes to. Null where the only name is one
-     * every code of the kind shares, such as a passkey sign-in or a WeChat merchant's payment code,
-     * or one that is only part of the content, such as an eSIM's server; such a name says what the
-     * content is, but not which.
+     * The name of the link or app URI [uri], with no name for one FerryQR does not know. Only a link
+     * that carries a vehicle's number is told from others of its kind, by that number.
      */
-    fun distinct(context: Context, payload: Payload): String? = when (payload) {
-        is WebPayload -> numberedLink(context, payload.url)
-        is SchemePayload -> numberedLink(context, payload.raw) ?: schemeTarget(payload)
-        is WifiPayload -> payload.ssid.takeIf { it.isNotBlank() }
-        is ContactPayload, is EventPayload -> of(context, payload)
-        is OtpPayload -> otpName(context, payload).takeIf { payload.key.issuer != null || payload.key.account != null }
-        is BoardingPassPayload -> payload.pass.legs.firstOrNull()?.flight?.ifEmpty { null }
-            ?.let { context.getString(R.string.title_boarding_pass, it) }
-        else -> null
+    private fun link(context: Context, uri: String): CarriedName {
+        val link = KnownLink.of(uri) ?: return NONE
+        if (link.numbering == Numbering.NONE) return CarriedName(context.getString(link.title), distinct = false)
+        val number = link.number(uri) ?: return NONE
+        return CarriedName(context.getString(link.title, number), distinct = true)
     }
-
-    /** The name of a known link that carries a vehicle's number, which tells one vehicle from another. */
-    private fun numberedLink(context: Context, uri: String): String? =
-        KnownLink.of(uri)?.takeIf { it.numbering != Numbering.NONE }?.let { link(context, uri) }
 
     /**
      * Who a message, call or email goes to, or the place a location names, which is what such a

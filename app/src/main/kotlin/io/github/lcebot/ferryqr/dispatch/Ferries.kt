@@ -31,7 +31,10 @@ internal sealed interface Ferry {
 
     fun installed(context: Context) = Launch.isInstalled(context, pkg)
 
-    /** What the app is called on buttons and in messages. */
+    /**
+     * What the app is called on buttons and in messages. Naming an app the system finds asks the
+     * package manager, so it is looked up off the main thread.
+     */
     fun label(context: Context): String
 
     /** Hands [text] over; false when the app could not be opened. */

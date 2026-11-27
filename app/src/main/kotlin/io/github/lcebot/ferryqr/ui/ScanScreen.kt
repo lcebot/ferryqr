@@ -17,7 +17,6 @@ import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
-import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -60,6 +59,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -83,6 +83,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.lcebot.ferryqr.Phase
 import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.ScanViewModel
+import io.github.lcebot.ferryqr.dispatch.CardSource
 import io.github.lcebot.ferryqr.dispatch.Dispatcher
 import kotlin.math.abs
 import kotlinx.coroutines.flow.collectLatest
@@ -121,8 +122,13 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
         }
     }
 
+    // A mini program code found is felt once as its card shows, and not again as the activity is
+    // made again while it shows.
+    var miniCodeFelt by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(phase) {
-        if (phase is Phase.MiniCodeFound) haptics.found()
+        val miniCode = (phase as? Phase.Showing)?.source is CardSource.LocatedMini
+        if (miniCode && !miniCodeFelt) haptics.found()
+        miniCodeFelt = miniCode
     }
     // A code goes to its app from here, the only place with an activity to start it; each is tried
     // once, and only while the user has not moved on from it.
@@ -278,12 +284,13 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
                                 onZoom = { zoom = it },
                                 onUnavailable = { vm.message(R.string.no_camera) },
                                 scanning = phase == Phase.Scanning,
+                                contentPadding = padding,
                                 modifier = Modifier.fillMaxSize(),
                             )
                             ScanOverlay(
                                 sighting = { sightingState.value },
                                 lookingCloser = lookingCloser,
-                                confirming = phase as? Phase.Confirming,
+                                confirming = phase.confirmation,
                                 onConfirmed = vm::confirmed,
                                 modifier = Modifier.fillMaxSize(),
                             )
@@ -339,7 +346,12 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
     }
 
     (phase as? Phase.Showing)?.let { showing ->
-        ResultSheet(card = showing.card, onDismiss = vm::resume, onHandoff = activity::finish)
+        // Keyed on what it shows, so the card of one code never stands in for a frame for the next.
+        key(showing.source) {
+            rememberResultCard(showing.source, initial = showing.card, builtFor = showing.builtFor)?.let { card ->
+                ResultSheet(card = card, onDismiss = vm::resume, onHandoff = activity::finish)
+            }
+        }
     }
 }
 
@@ -362,7 +374,7 @@ private fun ControlButton(
                 haptics.tap()
                 onClick()
             },
-            shapes = IconButtonDefaults.shapes(),
+            shapes = IconButtonDefaults.shapes(pressedShape = IconButtonDefaults.mediumPressedShape),
             modifier = Modifier.size(IconButtonDefaults.mediumContainerSize()),
         ) {
             Icon(
@@ -415,7 +427,10 @@ private fun TorchButton(checked: Boolean, onCheckedChange: (Boolean) -> Unit, mo
         FilledIconToggleButton(
             checked = checked,
             onCheckedChange = { haptics.toggle(it); onCheckedChange(it) },
-            shapes = IconButtonDefaults.toggleableShapes(),
+            shapes = IconButtonDefaults.toggleableShapes(
+                pressedShape = IconButtonDefaults.mediumPressedShape,
+                checkedShape = IconButtonDefaults.mediumSelectedRoundShape,
+            ),
             modifier = Modifier.size(IconButtonDefaults.mediumContainerSize()),
         ) {
             Icon(
@@ -428,15 +443,20 @@ private fun TorchButton(checked: Boolean, onCheckedChange: (Boolean) -> Unit, mo
     }
 }
 
-/** The hint under the camera; a new hint fades in over the old one as the pill takes its width. */
+/**
+ * The hint under the camera; a new hint fades in over the old one as the pill springs to its size,
+ * never going below the size of the hint it holds, which would cut the hint off.
+ */
 @Composable
 private fun StatusPill(@StringRes text: Int, modifier: Modifier = Modifier) {
     val fade = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
     val resize = MaterialTheme.motionScheme.fastSpatialSpec<IntSize>()
     PillSurface(modifier) {
+        // Centred in the pill as it takes the new hint's size, so neither hint moves inside it.
         AnimatedContent(
             targetState = text,
-            transitionSpec = { (fadeIn(fade) togetherWith fadeOut(fade)) using SizeTransform { _, _ -> resize } },
+            modifier = Modifier.animateSize(resize, Alignment.Center),
+            transitionSpec = { (fadeIn(fade) togetherWith fadeOut(fade)) using null },
             contentAlignment = Alignment.Center,
             label = "hint",
         ) { shown ->

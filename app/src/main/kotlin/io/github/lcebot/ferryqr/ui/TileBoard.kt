@@ -3,11 +3,9 @@ package io.github.lcebot.ferryqr.ui
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.VectorConverter
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue

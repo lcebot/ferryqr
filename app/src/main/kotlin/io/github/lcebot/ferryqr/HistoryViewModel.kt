@@ -123,7 +123,10 @@ private object Presentations {
     }
 }
 
-/** Entries deleted one after another, which one undo brings back together; [id] tells sessions apart. */
+/**
+ * Entries deleted one after another, earliest first, which one undo brings back together; [id]
+ * tells sessions apart.
+ */
 data class UndoSession(val id: Long, val entries: List<HistoryEntry>) {
     val texts: Set<String> = entries.mapTo(HashSet()) { it.text }
 }
@@ -236,11 +239,15 @@ class HistoryViewModel(app: Application) : AndroidViewModel(app) {
         _undo.value = session?.copy(entries = session.entries + entry) ?: UndoSession(++sessions, listOf(entry))
     }
 
-    /** Brings back every entry deleted since the chance to undo last passed. */
-    fun undoDeletes() {
-        val session = _undo.value ?: return
+    /**
+     * Brings back every entry deleted since the chance to undo last passed, and returns them in the
+     * order they were deleted, the order the page flies them back in.
+     */
+    fun undoDeletes(): List<HistoryEntry> {
+        val session = _undo.value ?: return emptyList()
         store.restore(session.entries)
         _undo.value = null
+        return session.entries
     }
 
     /** The chance to undo the deletions so far has passed. */

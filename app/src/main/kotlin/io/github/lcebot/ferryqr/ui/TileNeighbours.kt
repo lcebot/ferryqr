@@ -1,8 +1,5 @@
 package io.github.lcebot.ferryqr.ui
 
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
-
 /**
  * The share of the finger's travel the tiles beside a pulled tile lean by: a little more than the
  * rows next to a pulled row, so that the tiles three steps away still visibly move.

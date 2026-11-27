@@ -4,6 +4,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationVector2D
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.VectorConverter
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.Measurable
 import androidx.compose.ui.layout.MeasureResult
@@ -27,23 +28,33 @@ import kotlinx.coroutines.launch
  * it has got there, nor at all on the way down; growing, it bounces only outward.
  *
  * Unlike animateContentSize, it does not clip what it holds: a [clipToBounds][androidx.compose.ui.draw.clipToBounds]
- * before it hides what has not yet been reached while growing, where that is wanted.
+ * before it hides what has not yet been reached while growing, where that is wanted. What it holds
+ * sits at [alignment] within the size reported, so content centred in a container stays centred
+ * while the container takes its new size.
  */
-internal fun Modifier.animateSize(spec: FiniteAnimationSpec<IntSize>): Modifier = this.then(SizeAnimationElement(spec))
+internal fun Modifier.animateSize(spec: FiniteAnimationSpec<IntSize>, alignment: Alignment = Alignment.TopStart): Modifier =
+    this.then(SizeAnimationElement(spec, alignment))
 
-private class SizeAnimationElement(val spec: FiniteAnimationSpec<IntSize>) : ModifierNodeElement<SizeAnimationNode>() {
-    override fun create() = SizeAnimationNode(spec)
+private class SizeAnimationElement(
+    val spec: FiniteAnimationSpec<IntSize>,
+    val alignment: Alignment,
+) : ModifierNodeElement<SizeAnimationNode>() {
+    override fun create() = SizeAnimationNode(spec, alignment)
 
     override fun update(node: SizeAnimationNode) {
         node.spec = spec
+        node.alignment = alignment
     }
 
-    override fun equals(other: Any?) = other is SizeAnimationElement && other.spec == spec
+    override fun equals(other: Any?) = other is SizeAnimationElement && other.spec == spec && other.alignment == alignment
 
-    override fun hashCode() = spec.hashCode()
+    override fun hashCode() = 31 * spec.hashCode() + alignment.hashCode()
 }
 
-private class SizeAnimationNode(var spec: FiniteAnimationSpec<IntSize>) : Modifier.Node(), LayoutModifierNode {
+private class SizeAnimationNode(
+    var spec: FiniteAnimationSpec<IntSize>,
+    var alignment: Alignment,
+) : Modifier.Node(), LayoutModifierNode {
     private var size: Animatable<IntSize, AnimationVector2D>? = null
     private var target = IntSize.Zero
 
@@ -70,6 +81,10 @@ private class SizeAnimationNode(var spec: FiniteAnimationSpec<IntSize>) : Modifi
         if (now.height >= target.height) heightReached = true
         val width = if (widthReached) max(now.width, target.width) else now.width
         val height = if (heightReached) max(now.height, target.height) else now.height
-        return layout(constraints.constrainWidth(width), constraints.constrainHeight(height)) { placeable.place(0, 0) }
+        val shownWidth = constraints.constrainWidth(width)
+        val shownHeight = constraints.constrainHeight(height)
+        return layout(shownWidth, shownHeight) {
+            placeable.place(alignment.align(goal, IntSize(shownWidth, shownHeight), layoutDirection))
+        }
     }
 }

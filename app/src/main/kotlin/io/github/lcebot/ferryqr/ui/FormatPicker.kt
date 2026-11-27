@@ -42,10 +42,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
@@ -196,6 +194,8 @@ private fun FormatTile(type: CodeType, option: FormatOption?, selected: Boolean,
                     modifier = Modifier.weight(1f, fill = false).graphicsLayer { alpha = textAlpha },
                 )
                 if (original) {
+                    // Deliberately a text badge off the shape scale: its 6dp corner suits a word in the
+                    // small label type, and its padding and tertiary colours keep that word legible.
                     Text(
                         stringResource(R.string.format_original),
                         style = MaterialTheme.typography.labelSmall,

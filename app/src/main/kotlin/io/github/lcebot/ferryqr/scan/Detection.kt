@@ -15,16 +15,15 @@ data class Detection(
     val format: String,
     val corners: List<PointF>,
 ) {
-    val center: PointF
-        get() = if (corners.isEmpty()) PointF() else PointF(
-            corners.map { it.x }.average().toFloat(),
-            corners.map { it.y }.average().toFloat(),
-        )
+    // Worked out once, since a detection never changes and both are read on every camera frame.
+    val center: PointF = if (corners.isEmpty()) PointF() else PointF(
+        corners.map { it.x }.average().toFloat(),
+        corners.map { it.y }.average().toFloat(),
+    )
 
-    val bounds: RectF
-        get() = if (corners.isEmpty()) RectF() else RectF(
-            corners.minOf { it.x }, corners.minOf { it.y }, corners.maxOf { it.x }, corners.maxOf { it.y },
-        )
+    val bounds: RectF = if (corners.isEmpty()) RectF() else RectF(
+        corners.minOf { it.x }, corners.minOf { it.y }, corners.maxOf { it.x }, corners.maxOf { it.y },
+    )
 }
 
 /**

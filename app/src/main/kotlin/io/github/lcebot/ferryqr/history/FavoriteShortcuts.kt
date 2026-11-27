@@ -44,16 +44,16 @@ object FavoriteShortcuts {
 
     fun update(context: Context, favorites: List<HistoryEntry>) {
         try {
-            val chosen = favorites.filter { it.shortcut }.take(MAX)
-            ShortcutManagerCompat.setDynamicShortcuts(
-                context,
-                chosen.mapIndexed { rank, entry -> shortcut(context, entry, rank) },
-            )
+            val dynamic = favorites.filter { it.shortcut }.take(MAX).mapIndexed { rank, entry -> shortcut(context, entry, rank) }
+            ShortcutManagerCompat.setDynamicShortcuts(context, dynamic)
+            val dynamicById = dynamic.associateBy { it.id }
             val byId = favorites.associateBy { idOf(it.text) }
             val onHomeScreen = ShortcutManagerCompat.getShortcuts(context, ShortcutManagerCompat.FLAG_MATCH_PINNED)
             val (kept, stale) = onHomeScreen.partition { it.id in byId }
             if (kept.isNotEmpty()) {
-                val refreshed = kept.map { shortcut(context, byId.getValue(it.id), 0) }
+                // An update sets the rank it carries, so a shortcut that is also dynamic is refreshed
+                // with the rank it was just given. One that is only pinned is in no list a rank orders.
+                val refreshed = kept.map { dynamicById[it.id] ?: shortcut(context, byId.getValue(it.id)) }
                 ShortcutManagerCompat.enableShortcuts(context, refreshed)
                 ShortcutManagerCompat.updateShortcuts(context, refreshed)
             }
@@ -67,7 +67,8 @@ object FavoriteShortcuts {
 
     private fun idOf(text: String) = "favorite-${text.hashCode().toUInt().toString(16)}-${text.length}"
 
-    private fun shortcut(context: Context, entry: HistoryEntry, rank: Int): ShortcutInfoCompat {
+    /** The shortcut for [entry], placed at [rank] among the dynamic ones when it is one of them. */
+    private fun shortcut(context: Context, entry: HistoryEntry, rank: Int? = null): ShortcutInfoCompat {
         val names = entry.content.names(context, entry.label)
         val kind = names.kind
         val title = names.shortTitle
@@ -79,13 +80,13 @@ object FavoriteShortcuts {
         val history = Intent(context, HistoryActivity::class.java)
             .setAction(ACTION_SHOW)
             .putExtra(EXTRA_TEXT, entry.text)
-        return ShortcutInfoCompat.Builder(context, idOf(entry.text))
+        val builder = ShortcutInfoCompat.Builder(context, idOf(entry.text))
             .setShortLabel(title.shortened(SHORT_LABEL))
             .setLongLabel(title.shortened(LONG_LABEL))
             .setIcon(icon(context, kind.icon))
             .setIntents(arrayOf(scanner, history))
-            .setRank(rank)
-            .build()
+        if (rank != null) builder.setRank(rank)
+        return builder.build()
     }
 
     /** The kind's glyph on a tonal container, the way the system draws its own shortcut icons. */

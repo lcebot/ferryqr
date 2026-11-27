@@ -58,6 +58,21 @@ class Survey(val read: List<Detection>, val located: List<MiniCode>, val regions
 }
 
 /**
+ * Where [WeChatEngine.upright] turns frames, kept from one frame to the next by the one thread that
+ * reads them, since a new luma plane for every look would keep the garbage collector busy on the
+ * analysis thread just while a code waits to be read. It holds nothing until OpenCV is loaded.
+ */
+class UprightBuffer {
+    internal var mat: Mat? = null
+
+    /** Gives the native image back at once rather than when the collector gets to it. */
+    fun release() {
+        mat?.release()
+        mat = null
+    }
+}
+
+/**
  * WeChat's CNN code detector, run directly as a proposer, and OpenCV's WeChatQRCode as a second QR
  * decoder for regions zxing-cpp cannot read.
  */
@@ -96,36 +111,36 @@ class WeChatEngine(context: Context) {
 
     /**
      * The luma plane of [image], cropped and turned upright the way zxing-cpp reads the frame, so
-     * positions in it match the upright frame; null until OpenCV is loaded. Read straight from the
-     * camera's plane, it saves turning the frame into colour and back into grey. [image] must still
-     * be open, and the caller releases what this returns.
+     * positions in it match the upright frame; null until OpenCV is loaded, or for a plane OpenCV
+     * cannot read in place. Read straight from the camera's plane, it saves turning the frame into
+     * colour and back into grey. [image] must still be open. What this returns belongs to [into] and
+     * holds until the next frame is turned there.
      */
-    fun upright(image: ImageProxy): Mat? {
+    fun upright(image: ImageProxy, into: UprightBuffer): Mat? {
         if (!ensureReady()) return null
         return try {
             val plane = image.planes[0]
+            // OpenCV reads a direct buffer in place, where the camera wrote it.
+            val buffer = plane.buffer.takeIf { it.isDirect } ?: return null
             val crop = image.cropRect
-            val width = crop.width()
-            val height = crop.height()
-            // The luma plane always has a pixel stride of one, but its rows may be padded.
-            val buffer = plane.buffer.duplicate()
-            val bytes = ByteArray(width * height)
-            for (row in 0 until height) {
-                buffer.position((crop.top + row) * plane.rowStride + crop.left)
-                buffer.get(bytes, row * width, width)
-            }
-            val cropped = Mat(height, width, CvType.CV_8UC1)
-            cropped.put(0, 0, bytes)
             val turn = when (image.imageInfo.rotationDegrees) {
                 90 -> Core.ROTATE_90_CLOCKWISE
                 180 -> Core.ROTATE_180
                 270 -> Core.ROTATE_90_COUNTERCLOCKWISE
-                else -> return cropped
+                else -> null
             }
-            Mat().also {
-                Core.rotate(cropped, it, turn)
+            // The luma plane always has a pixel stride of one, but its rows may be padded, which the
+            // step skips. Neither header copies a pixel, so the frame is copied only as it is turned.
+            val whole = Mat(crop.bottom, crop.right, CvType.CV_8UC1, buffer, plane.rowStride.toLong())
+            val cropped = whole.submat(crop.top, crop.bottom, crop.left, crop.right)
+            val upright = into.mat ?: Mat().also { into.mat = it }
+            try {
+                if (turn == null) cropped.copyTo(upright) else Core.rotate(cropped, upright, turn)
+            } finally {
                 cropped.release()
+                whole.release()
             }
+            upright
         } catch (t: Throwable) {
             null
         }

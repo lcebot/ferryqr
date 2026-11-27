@@ -42,7 +42,6 @@ data class MiniCode(val center: PointF, val radius: Float, val eyes: List<PointF
         return Detection(code.text, MINI_PROGRAM_FORMAT, code.corners.map { PointF(it.x.toFloat(), it.y.toFloat()) })
     }
 
-
     /** The square holding the whole code with a margin, clipped to a [width] by [height] image. */
     fun bounds(width: Int, height: Int): Rect {
         val half = radius * EXTENT

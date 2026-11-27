@@ -68,21 +68,31 @@ internal class SendApp(
 )
 
 /**
+ * An app with what it is called. Naming an app the system finds asks the package manager, so the
+ * name is looked up off the main thread together with the app and travels with it from there.
+ */
+internal data class NamedFerry<out F : Ferry>(val ferry: F, val name: String)
+
+/**
  * The apps shown in the toolbar, and those folded behind its overflow button. [passive] is the app
  * the system opens the text in, which has a place of its own among them.
  */
-internal class SendLayout(val inline: Set<Ferry>, val folded: List<Ferry>, val passive: Ferry?)
+internal class SendLayout(
+    val inline: Set<NamedFerry<Ferry>>,
+    val folded: List<NamedFerry<Ferry>>,
+    val passive: NamedFerry<Ferry>?,
+)
 
 /**
  * Which of the [offered] apps fit a toolbar [room] wide. All of them when they fit; otherwise the
  * first, the one the text goes to best, stays in view beside the overflow button, which the
  * narrowest phone screen Android allows still holds, and the others fold away.
  */
-internal fun sendLayout(offered: List<Ferry>, room: Dp): SendLayout {
+internal fun sendLayout(offered: List<NamedFerry<Ferry>>, room: Dp): SendLayout {
     fun fits(groupButtons: Int) =
         TOOLBAR_PADDING + TOOLBAR_BUTTON * (CODE_ACTIONS + groupButtons) + GROUP_GAP + TOOLBAR_FAB <= room
     val first = offered.firstOrNull()
-    val passive = offered.firstOrNull { it is PassiveFerry }
+    val passive = offered.firstOrNull { it.ferry is PassiveFerry }
     return when {
         fits(offered.size) -> SendLayout(offered.toSet(), emptyList(), passive)
         first != null && fits(2) -> SendLayout(setOf(first), offered - first, passive)

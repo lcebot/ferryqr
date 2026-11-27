@@ -54,10 +54,12 @@ import kotlin.math.max
 import kotlin.math.pow
 import kotlin.math.round
 import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 import kotlin.math.sign
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
@@ -135,7 +137,71 @@ internal class MagneticList(val scope: CoroutineScope) {
      * went, as a tile does.
      */
     val departed = HashMap<String, EntrySwipe>()
+
+    /** Where each entry the last undo brought back stood in the order they were deleted. */
+    private var turns: Map<String, Int> = emptyMap()
+
+    /** Entries brought back and ready to fly back, by content, gathered before any of them starts. */
+    private val ready = ArrayList<Pair<String, EntrySwipe>>()
+
+    /** Takes the contents of the entries an undo brings back, in the order they were deleted, earliest first. */
+    fun undone(contents: List<String>) {
+        turns = contents.withIndex().associate { (turn, content) -> content to turn }
+    }
+
+    /**
+     * Flies [swipe], of the entry with content [key], back into its place in its turn. Every entry
+     * an undo brings back rejoins the list in the same frame, their gaps opening together, so those
+     * ready are gathered until the next frame. They then fly back in the order they were deleted,
+     * the first at once, so its return overlaps the gaps opening, and each later one a little after
+     * the one before, as [returnDelay] spaces them. An entry already on its way is left to it.
+     */
+    fun returnInTurn(key: String, swipe: EntrySwipe) {
+        if (swipe.returning) return
+        swipe.returning = true
+        ready += key to swipe
+        if (ready.size > 1) return
+        scope.launch {
+            withFrameNanos {}
+            val inTurn = ready.sortedBy { (content, _) -> turns[content] ?: Int.MAX_VALUE }
+            ready.clear()
+            inTurn.forEachIndexed { turn, (_, back) ->
+                launch {
+                    delay(returnDelay(turn))
+                    back.comeBack()
+                }
+            }
+        }
+    }
 }
+
+/**
+ * How long after the first of the entries one undo brings back the second starts flying back: long
+ * enough to read as following it, well short of the return itself.
+ */
+private const val RETURN_STAGGER_MS = 50f
+
+/**
+ * Each later wait between two returns lasts this share of the wait before it. The waits shrink, so
+ * a long run of returns closes up rather than trailing behind, and however many there are, the
+ * last starts within RETURN_STAGGER_MS / (1 - RETURN_STAGGER_DECAY) of the first, a quarter of a
+ * second, while the first ones are still on their way, so the returns read as one.
+ */
+private const val RETURN_STAGGER_DECAY = 0.8f
+
+/** How long after the first the return in [turn] starts, counting from 0 for the first, which starts at once. */
+private fun returnDelay(turn: Int): Long =
+    (RETURN_STAGGER_MS * (1f - RETURN_STAGGER_DECAY.pow(turn)) / (1f - RETURN_STAGGER_DECAY)).roundToLong()
+
+/**
+ * The longest time a [Follower] steps its animation by in one frame: two frames at 60 Hz, which
+ * still covers a dropped frame. A follow is cancelled and started again for each new target, and
+ * the time since its last step carries over so a retarget moves on in its first frame; while it
+ * keeps up, that time is a frame's. Resumed after a pause, as when frames stop while the page is
+ * hidden or after the value was held for another animation, it is far longer, and stepping by all
+ * of it would land the value on its target at once rather than going on from where it is.
+ */
+private const val MAX_FOLLOW_STEP_NANOS = 33_333_333L
 
 /**
  * A value set directly while nothing animates it, and retargeted while an animation carries it, as
@@ -181,7 +247,7 @@ internal class Follower {
                 return
             }
             val now = withFrameNanos { it }
-            val elapsed = if (lastFrame == 0L) 0L else now - lastFrame
+            val elapsed = if (lastFrame == 0L) 0L else (now - lastFrame).coerceAtMost(MAX_FOLLOW_STEP_NANOS)
             lastFrame = now
             if (elapsed <= 0L) continue
             val from = AnimationVector1D(value.value)
@@ -423,6 +489,12 @@ internal class EntrySwipe {
     val backdrop = Animatable(1f)
 
     /**
+     * Whether undo has brought the entry back and it waits its turn to fly back or is on its way, so
+     * an entry composed again meanwhile does not start its return over.
+     */
+    internal var returning = false
+
+    /**
      * What a favorite swipe will do, fixed when it starts, so an entry sliding back after the
      * change still shows the change it made rather than the opposite one.
      */
@@ -555,16 +627,21 @@ internal fun rememberEntrySwipe(
 
         swipe.onReturn = {
             swipe.release?.cancel()
+            swipe.returning = true
             swipe.release = list.scope.launch {
-                launch {
-                    swipe.backdrop.snapTo(0f)
-                    swipe.backdrop.animateTo(1f, fade)
+                try {
+                    launch {
+                        swipe.backdrop.snapTo(0f)
+                        swipe.backdrop.animateTo(1f, fade)
+                    }
+                    shift.held = true
+                    shift.value.updateBounds(null, null)
+                    shift.value.animateTo(0f, settle)
+                    swipe.acting = false
+                    shift.held = false
+                } finally {
+                    swipe.returning = false
                 }
-                shift.held = true
-                shift.value.updateBounds(null, null)
-                shift.value.animateTo(0f, settle)
-                swipe.acting = false
-                shift.held = false
             }
         }
 

@@ -1,7 +1,5 @@
 package io.github.lcebot.ferryqr.ui
 
-import androidx.compose.foundation.layout.size
-import androidx.compose.runtime.key
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import kotlin.math.ceil

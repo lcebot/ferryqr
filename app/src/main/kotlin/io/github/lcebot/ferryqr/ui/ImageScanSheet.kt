@@ -45,6 +45,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -63,6 +64,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.lcebot.ferryqr.ImageScan
 import io.github.lcebot.ferryqr.ImageScanViewModel
@@ -79,7 +82,6 @@ import kotlinx.coroutines.launch
 
 private val TILE_WIDTH = 96.dp
 private val THUMBNAIL_SIZE = 80.dp
-
 
 /**
  * The result of a shared or opened image as a single card. The sheet starts with a reading state,
@@ -100,6 +102,17 @@ fun ImageScanSheet(vm: ImageScanViewModel, onClose: () -> Unit) {
         scope.launch { sheetState.hide() }.invokeOnCompletion { onClose() }
     }
 
+    // After a handoff the sheet slides away as when dismissed rather than vanishing as the other app
+    // opens. Covered by that app, the activity stops and draws no frames, so the slide would only end
+    // on return; once stopped, the sheet closes at once instead.
+    var handedOff by remember { mutableStateOf(false) }
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { if (handedOff) onClose() }
+
+    fun handOff() {
+        handedOff = true
+        dismiss()
+    }
+
     LaunchedEffect(result) {
         when (val read = result) {
             null -> {}
@@ -111,7 +124,7 @@ fun ImageScanSheet(vm: ImageScanViewModel, onClose: () -> Unit) {
 
     val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
     val resize = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
-    CardSheet(onDismissRequest = onClose, sheetState = sheetState, onHandoff = onClose) { onAction, onMessage ->
+    CardSheet(onDismissRequest = onClose, sheetState = sheetState, onHandoff = ::handOff) { onAction, onMessage ->
         AnimatedContent(
             targetState = result,
             contentKey = { read ->

@@ -3,7 +3,6 @@ package io.github.lcebot.ferryqr.dispatch
 import android.content.Context
 import android.graphics.Bitmap
 import io.github.lcebot.ferryqr.R
-import io.github.lcebot.ferryqr.content.TextPayload
 import io.github.lcebot.ferryqr.generate.CodeGenerator
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -37,14 +36,14 @@ object CardFactory {
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
-        plain(context, source, ready)
+        plain(context, source)
     }
 
     private fun card(context: Context, source: CardSource, ready: Set<String>): ResultCard = when (source) {
         is CardSource.LocatedMini -> Cards.miniProgram(context, source.crop, live = source.live, ready = ready)
         is CardSource.Read -> {
             val content = source.content
-            val card = Cards.build(context, content.payload, content.format, source.origin, ready, source.scannedAt)
+            val card = Cards.build(context, content, source.origin, ready, source.scannedAt)
             if (source.origin != Origin.HISTORY) {
                 card
             } else {
@@ -56,7 +55,7 @@ object CardFactory {
         }
     }
 
-    private fun plain(context: Context, source: CardSource, ready: Set<String>): ResultCard = when (source) {
+    private fun plain(context: Context, source: CardSource): ResultCard = when (source) {
         is CardSource.LocatedMini -> ResultCard(
             raw = "",
             kind = R.string.kind_mini_program,
@@ -67,9 +66,6 @@ object CardFactory {
             actions = emptyList(),
             image = source.crop,
         )
-        is CardSource.Read -> {
-            val content = source.content
-            Cards.build(context, TextPayload(content.text), content.format, source.origin, ready, source.scannedAt)
-        }
+        is CardSource.Read -> Cards.plainText(context, source.content.text, source.content.format)
     }
 }
