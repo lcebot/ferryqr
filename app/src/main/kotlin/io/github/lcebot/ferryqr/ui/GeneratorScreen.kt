@@ -2,12 +2,7 @@
 
 package io.github.lcebot.ferryqr.ui
 
-import android.content.ClipboardManager
-import android.content.ContentResolver
-import android.content.Context
-import android.content.Intent
 import android.graphics.Bitmap
-import android.net.Uri
 import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedContentTransitionScope
@@ -99,6 +94,7 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -111,7 +107,9 @@ import io.github.lcebot.ferryqr.dispatch.ActiveFerries
 import io.github.lcebot.ferryqr.dispatch.ActiveFerry
 import io.github.lcebot.ferryqr.dispatch.Ferries
 import io.github.lcebot.ferryqr.dispatch.Ferry
+import io.github.lcebot.ferryqr.dispatch.FerryEnv
 import io.github.lcebot.ferryqr.generate.AutoFormat
+import io.github.lcebot.ferryqr.generate.CodeDrawing
 import io.github.lcebot.ferryqr.generate.CodeGenerator
 import io.github.lcebot.ferryqr.generate.CodeProblem
 import io.github.lcebot.ferryqr.generate.CodeType
@@ -130,12 +128,6 @@ private const val AUTO = "auto"
 /** Longer text is regenerated only after typing pauses, so each keystroke stays responsive. */
 private const val LARGE_TEXT = 800
 private const val LARGE_TEXT_DELAY_MS = 350L
-
-/**
- * The most of a clip the page takes in. It is beyond what any format holds, so a longer clip still
- * reads as too long rather than becoming a code of its beginning.
- */
-private const val CLIP_MAX_CHARS = 4096
 
 /** How long the format picker waits for the keyboard to start going down before it opens anyway. */
 private const val KEYBOARD_CLOSE_TIMEOUT_MS = 300L
@@ -208,12 +200,15 @@ fun GeneratorScreen(onBack: () -> Unit) {
     // and the apps are named there too, as every app offered is.
     val candidates by produceState(emptyList<NamedFerry<ActiveFerry>>()) {
         value = withContext(Dispatchers.IO) {
-            ActiveFerries.all.filter { it.installed(context) }.sortedBy { it.general }.map { NamedFerry(it, it.label(context)) }
+            val env = FerryEnv(context)
+            ActiveFerries.all.filter { it.installed(env) }.sortedBy { it.general }.map { NamedFerry(it, it.label(context)) }
         }
     }
     val appFade = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
     val appResize = MaterialTheme.motionScheme.fastSpatialSpec<IntSize>()
     val ready = readyApps()
+    // Readiness alone, which asks the package manager nothing, so it is read on the main thread.
+    val readiness = remember(context, ready) { FerryEnv(context, ready) }
     // The apps for the text are the ones result cards offer for the same content, in the same order,
     // looked up once typing pauses rather than on every keystroke. An app the system opens the text
     // in is named by the package manager, so each is named here, off the main thread.
@@ -221,8 +216,9 @@ fun GeneratorScreen(onBack: () -> Unit) {
         snapshotFlow { field.text.toString() }.collectLatest { text ->
             delay(OFFER_DELAY_MS)
             value = withContext(Dispatchers.IO) {
-                Ferries.offered(context, Classifier.classify(text), ready)
-                    .filter { it.installed(context) }
+                val env = FerryEnv(context, ready)
+                Ferries.offered(env, Classifier.classify(text))
+                    .filter { it.installed(env) }
                     .map { NamedFerry(it, it.label(context)) }
             }
         }
@@ -247,7 +243,10 @@ fun GeneratorScreen(onBack: () -> Unit) {
                 return@collectLatest
             }
             if (text.length > LARGE_TEXT) delay(LARGE_TEXT_DELAY_MS)
-            made = withContext(Dispatchers.Default) { Made(text, wanted, CodeGenerator.generate(text, wanted)) }
+            made = withContext(Dispatchers.Default) {
+                val generated = CodeGenerator.generate(text, wanted)
+                Made(wanted, generated, (generated as? Generated.Code)?.let { CodeDrawing(text, wanted, it.bitmap) })
+            }
         }
     }
 
@@ -310,7 +309,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
             val sendApp: (NamedFerry<Ferry>) -> SendApp = { (ferry, name) ->
                 // Without the module the app could only open its scanner on nothing, so the
                 // button looks disabled but still explains why when tapped.
-                val looksEnabled = ferry.isReady(ready)
+                val looksEnabled = ferry.isReady(readiness)
                 SendApp(context.getString(R.string.open_in_app, name), ferry.pkg, looksEnabled) {
                     when {
                         activity == null -> Unit
@@ -377,23 +376,17 @@ fun GeneratorScreen(onBack: () -> Unit) {
             }
             val codeFade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
             val codeArea: @Composable () -> Unit = {
-                val current = made
-                val code = (current?.generated as? Generated.Code)?.bitmap
-                // The format of the code shown, which the format chosen may have moved on from.
-                val long = current?.type?.long == true
                 // A long code is drawn again at the shape it is shown in, so its bars fill it without a
                 // scaled picture, from the same text and format as the code it replaces.
-                val drawTall: ((Float) -> Bitmap?)? = if (current != null && long) {
-                    { ratio -> (CodeGenerator.generate(current.text, current.type, ratio) as? Generated.Code)?.bitmap }
-                } else {
-                    null
-                }
-                if (enlarged && code != null) {
-                    CodeOverlay(code, brighten, codeBounds, onDismiss = { enlarged = false }, drawTall = drawTall, long = long)
+                val drawing = made?.drawing
+                // The format of the code shown, which the format chosen may have moved on from.
+                val long = drawing?.type?.long == true
+                if (enlarged && drawing != null) {
+                    CodeOverlay(drawing.base, brighten, codeBounds, onDismiss = { enlarged = false }, drawing = drawing, long = long)
                 }
                 Box(
                     modifier = Modifier.fillMaxSize().then(
-                        if (code == null) {
+                        if (drawing == null) {
                             Modifier
                         } else {
                             Modifier.clickable(onClickLabel = stringResource(R.string.code_enlarge)) {
@@ -405,14 +398,14 @@ fun GeneratorScreen(onBack: () -> Unit) {
                     contentAlignment = Alignment.Center,
                 ) {
                     val look = when {
-                        code == null || !long -> CodeLook.SQUARE
+                        drawing == null || !long -> CodeLook.SQUARE
                         enlarge == LongCodeEnlarge.TILT -> CodeLook.TILTED
                         else -> CodeLook.STRETCHED
                     }
                     // A code drawn another way crossfades into the new one; drawn the same way, it is
                     // simply drawn again.
                     AnimatedContent(
-                        targetState = ShownCode(look, code),
+                        targetState = ShownCode(look, drawing),
                         contentKey = { it.look },
                         transitionSpec = { fadeIn(codeFade) togetherWith fadeOut(codeFade) },
                         contentAlignment = Alignment.Center,
@@ -421,15 +414,18 @@ fun GeneratorScreen(onBack: () -> Unit) {
                     ) { shown ->
                         // Where the code itself is drawn, which the enlarged code grows out of.
                         val bounds = Modifier.onGloballyPositioned { codeBounds = it.boundsInWindow() }
-                        val bitmap = shown.code
+                        val code = shown.drawing
                         // The transition hands its content the area's exact size; inside a box the
                         // square preview is free to be smaller, as large as the shorter side.
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             when {
-                                shown.look == CodeLook.TILTED && bitmap != null -> TiltedCode(bitmap, bounds.fillMaxSize())
-                                shown.look == CodeLook.STRETCHED && bitmap != null ->
-                                    FilledTallCode(bitmap, drawTall, bounds.fillMaxSize())
-                                else -> CodePreview(bitmap, bounds.aspectRatio(1f, matchHeightConstraintsFirst = true))
+                                // The code turns with its area as the keyboard resizes it.
+                                shown.look == CodeLook.TILTED && code != null -> BoxWithConstraints(bounds.fillMaxSize()) {
+                                    TiltedCode(code.base, DpSize(maxWidth, maxHeight), Modifier.fillMaxSize())
+                                }
+                                shown.look == CodeLook.STRETCHED && code != null ->
+                                    FilledTallCode(code.base, code, bounds.fillMaxSize())
+                                else -> CodePreview(code?.base, bounds.aspectRatio(1f, matchHeightConstraintsFirst = true))
                             }
                         }
                     }
@@ -440,7 +436,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
                     (fadeOut(appFade) + shrinkHorizontally(appResize)) using null
             }
             val toolbar: @Composable () -> Unit = {
-                val code = (made?.generated as? Generated.Code)?.bitmap
+                val code = made?.drawing?.base
                 // Worked out again only when the offered apps or their room change, not for each new code.
                 val layout = remember(offered, toolbarRoom) { if (offered.isEmpty()) null else sendLayout(offered, toolbarRoom) }
                 CodeToolbar(
@@ -557,8 +553,11 @@ fun GeneratorScreen(onBack: () -> Unit) {
     }
 }
 
-/** What was made from [text] in [type], kept with both so a long code is drawn again from the same. */
-private class Made(val text: String, val type: CodeType, val generated: Generated)
+/**
+ * What was made from the text in [type]: whether it fits, and when it does, its [drawing], from which
+ * a long code is drawn again with the same text and format.
+ */
+private class Made(val type: CodeType, val generated: Generated, val drawing: CodeDrawing?)
 
 /**
  * Why the text does not fit [type], naming the common formats that would hold it, or null when
@@ -586,7 +585,7 @@ private fun unfitMessage(unfit: Generated.Unfit?, type: CodeType): String? {
 private enum class CodeLook { SQUARE, TILTED, STRETCHED }
 
 /** The code the preview shows, null before one is made, and how it is drawn. */
-private data class ShownCode(val look: CodeLook, val code: Bitmap?)
+private data class ShownCode(val look: CodeLook, val drawing: CodeDrawing?)
 
 /** The code always sits on white, whatever the theme, because readers expect dark modules on light. */
 @Composable
@@ -642,47 +641,4 @@ private fun CodePreview(code: Bitmap?, modifier: Modifier = Modifier) {
             }
         }
     }
-}
-
-/**
- * The text on the clipboard, up to [CLIP_MAX_CHARS]. Some apps put text on the clipboard as a
- * content URI, which `coerceToText` would read to its end however large it is, so the URI is read
- * here only as far as the field can take. It asks the clipboard and possibly another app's
- * provider, so it runs off the main thread.
- */
-private fun readClipboardText(context: Context): String? {
-    val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return null
-    if (clipboard.primaryClipDescription?.hasMimeType("text/*") != true) return null
-    val clip = clipboard.primaryClip ?: return null
-    if (clip.itemCount == 0) return null
-    val item = clip.getItemAt(0)
-    item.text?.let { return it.take(CLIP_MAX_CHARS).toString() }
-    item.uri?.let { uri ->
-        // A URI that cannot be read as text stands for itself, unless it points into this device,
-        // as coerceToText treats it.
-        return readText(context, uri) ?: uri.toString().take(CLIP_MAX_CHARS).takeIf { uri.scheme !in LOCAL_SCHEMES }
-    }
-    return item.intent?.toUri(Intent.URI_INTENT_SCHEME)?.take(CLIP_MAX_CHARS)
-}
-
-/** URI schemes that name something on this device rather than a link worth showing as text. */
-private val LOCAL_SCHEMES = setOf(ContentResolver.SCHEME_CONTENT, ContentResolver.SCHEME_ANDROID_RESOURCE, ContentResolver.SCHEME_FILE)
-
-/** The first [CLIP_MAX_CHARS] of the text behind [uri], in UTF-8 as the clipboard reads it, or null when it cannot be read. */
-private fun readText(context: Context, uri: Uri): String? = try {
-    context.contentResolver.openTypedAssetFileDescriptor(uri, "text/*", null)?.use { descriptor ->
-        descriptor.createInputStream().bufferedReader(Charsets.UTF_8).use { reader ->
-            val buffer = CharArray(CLIP_MAX_CHARS)
-            var read = 0
-            while (read < buffer.size) {
-                val count = reader.read(buffer, read, buffer.size - read)
-                if (count < 0) break
-                read += count
-            }
-            String(buffer, 0, read)
-        }
-    }
-} catch (e: Exception) {
-    // A provider may refuse, go away or fail midway, and the clip then counts as unreadable.
-    null
 }

@@ -83,8 +83,6 @@ import io.github.lcebot.ferryqr.FavoriteLayout
 import io.github.lcebot.ferryqr.HistoryDialog
 import io.github.lcebot.ferryqr.HistoryViewModel
 import io.github.lcebot.ferryqr.R
-import io.github.lcebot.ferryqr.dispatch.CardSource
-import io.github.lcebot.ferryqr.dispatch.Origin
 import io.github.lcebot.ferryqr.history.FavoriteShortcuts
 import io.github.lcebot.ferryqr.history.HistoryEntry
 import java.time.LocalDate
@@ -110,15 +108,17 @@ private fun rowKey(text: String): Any = "entry:$text"
 private enum class HistoryContent { LOADING, EMPTY, LIST }
 
 /**
- * [openText] is content to show at once, from a favorite's app shortcut; [onOpened] is called once
- * it has been shown or found missing.
+ * [openSaved] is an entry to show at once, kept as its
+ * [savedForm][io.github.lcebot.ferryqr.history.savedForm] in a favorite's app shortcut; [onOpened]
+ * is called once it has been shown or found missing.
  */
 @Composable
-fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = null, onOpened: () -> Unit = {}) {
+fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openSaved: String? = null, onOpened: () -> Unit = {}) {
     val haptics = rememberHaptics()
     val lists by vm.lists.collectAsStateWithLifecycle()
     val dialog by vm.dialog.collectAsStateWithLifecycle()
     val showing by vm.showing.collectAsStateWithLifecycle()
+    val card by vm.card.collectAsStateWithLifecycle()
     val undo by vm.undo.collectAsStateWithLifecycle()
     val settings = vm.settings
     val folded by settings.favoritesFolded.flow.collectAsStateWithLifecycle()
@@ -152,9 +152,9 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
     val favoriting = rememberFavoriteRequester()
     val messages = rememberHistoryMessages(vm, snackbar) { restored -> magnetic.undone(restored.map { it.text }) }
 
-    LaunchedEffect(openText) {
-        if (openText == null) return@LaunchedEffect
-        vm.open(openText)
+    LaunchedEffect(openSaved) {
+        if (openSaved == null) return@LaunchedEffect
+        vm.openSaved(openSaved)
         onOpened()
     }
 
@@ -392,7 +392,6 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openText: String? = 
     // History stays open after a handoff, so returning to the app lands back on the list.
     showing?.let { entry ->
         key(entry.text) {
-            val card = rememberResultCard(remember(entry) { CardSource.Read(entry.content, Origin.HISTORY, entry.time) })
             card?.let { ResultSheet(card = it, onClosed = { vm.open(null) }) }
         }
     }

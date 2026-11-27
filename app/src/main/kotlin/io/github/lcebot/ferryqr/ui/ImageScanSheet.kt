@@ -2,7 +2,6 @@
 
 package io.github.lcebot.ferryqr.ui
 
-import android.graphics.Bitmap
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedContent
@@ -61,17 +60,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.lcebot.ferryqr.ImageCode
 import io.github.lcebot.ferryqr.ImageScan
 import io.github.lcebot.ferryqr.ImageScanViewModel
 import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.dispatch.CardAction
-import io.github.lcebot.ferryqr.dispatch.CardSource
-import io.github.lcebot.ferryqr.dispatch.Kind
-import io.github.lcebot.ferryqr.dispatch.Origin
-import io.github.lcebot.ferryqr.dispatch.ReadContent
+import io.github.lcebot.ferryqr.dispatch.Cards
 import io.github.lcebot.ferryqr.dispatch.ResultCard
-import io.github.lcebot.ferryqr.scan.Detection
-import io.github.lcebot.ferryqr.scan.isLocatedMiniCode
 
 private val TILE_WIDTH = 96.dp
 private val THUMBNAIL_SIZE = 80.dp
@@ -86,33 +81,24 @@ fun ImageScanSheet(vm: ImageScanViewModel, onClose: () -> Unit) {
     val haptics = rememberHaptics()
     val result by vm.result.collectAsStateWithLifecycle()
 
-    LaunchedEffect(result) {
-        when (val read = result) {
-            null -> {}
-            ImageScan.Unreadable -> haptics.reject()
-            is ImageScan.Read ->
-                if (read.detections.isEmpty() && read.miniCrop == null) haptics.reject() else haptics.confirm()
+    // Felt as the image is read, which the view model tells once, rather than whenever the sheet
+    // is composed with its result, as it is again when the activity is made again.
+    LaunchedEffect(vm) {
+        vm.outcomes.collect { read ->
+            val found = read is ImageScan.Read && (read.codes.isNotEmpty() || read.miniCrop != null)
+            if (found) haptics.confirm() else haptics.reject()
         }
     }
 
     var selected by rememberSaveable { mutableIntStateOf(0) }
     val scanned = result as? ImageScan.Read
-    val index = scanned?.detections?.takeIf { it.isNotEmpty() }?.let { selected.coerceIn(it.indices) }
-    val content = if (scanned != null && index != null) scanned.contents[index] else null
-    LaunchedEffect(content) { content?.let(vm::shown) }
-    // Built here rather than where the card shows, so the sheet keeps its one reading state until
-    // the first card is ready. A mini program code that could not be read has no content to route;
-    // WeChat gets its picture.
-    val source = remember(scanned, index) {
-        when {
-            scanned == null -> null
-            index != null -> scanned.locatedCrops[index]?.let { CardSource.LocatedMini(it, live = false) }
-                ?: CardSource.Read(scanned.contents[index], Origin.IMAGE)
-            else -> scanned.miniCrop?.let { CardSource.LocatedMini(it, live = false) }
-        }
-    }
-    val card = rememberResultCard(source)
-    val shown = result.takeUnless { source != null && card == null }
+    val index = scanned?.codes?.takeIf { it.isNotEmpty() }?.let { selected.coerceIn(it.indices) }
+    LaunchedEffect(scanned, index) { scanned?.let { vm.show(it, index) } }
+    // Read here rather than where the card shows, so the sheet keeps its one reading state until
+    // the first card is ready.
+    val card by vm.card.collectAsStateWithLifecycle()
+    val hasCard = scanned != null && (index != null || scanned.miniCrop != null)
+    val shown = result.takeUnless { hasCard && card == null }
 
     val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
     val resize = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
@@ -122,7 +108,7 @@ fun ImageScanSheet(vm: ImageScanViewModel, onClose: () -> Unit) {
             contentKey = { read ->
                 when {
                     read !is ImageScan.Read -> read
-                    read.detections.isNotEmpty() -> "codes"
+                    read.codes.isNotEmpty() -> "codes"
                     read.miniCrop != null -> "mini"
                     else -> "none"
                 }
@@ -133,8 +119,8 @@ fun ImageScanSheet(vm: ImageScanViewModel, onClose: () -> Unit) {
             when {
                 read == null -> Reading()
                 // The sheet reads on until the first card exists, so these always have one to show.
-                read is ImageScan.Read && read.detections.isNotEmpty() -> card?.let {
-                    Found(
+                read is ImageScan.Read && read.codes.isNotEmpty() -> card?.let {
+                    CodesFound(
                         read,
                         card = it,
                         selected = selected,
@@ -224,7 +210,7 @@ private fun SheetMessage(@DrawableRes icon: Int, @StringRes title: Int, @StringR
 }
 
 @Composable
-private fun Found(
+private fun CodesFound(
     read: ImageScan.Read,
     card: ResultCard,
     selected: Int,
@@ -239,8 +225,8 @@ private fun Found(
             .padding(bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
-        if (read.detections.size > 1) {
-            CodeChooser(read.thumbnails, read.detections, read.contents, selected) { picked ->
+        if (read.codes.size > 1) {
+            CodeChooser(read.codes, selected) { picked ->
                 if (picked != selected) haptics.step()
                 onSelect(picked)
             }
@@ -294,16 +280,10 @@ private fun CardCrossfade(
 
 /** Shown above the card only when the image holds several codes. */
 @Composable
-private fun CodeChooser(
-    thumbnails: List<Bitmap?>,
-    detections: List<Detection>,
-    contents: List<ReadContent>,
-    selected: Int,
-    onSelect: (Int) -> Unit,
-) {
+private fun CodeChooser(codes: List<ImageCode>, selected: Int, onSelect: (Int) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
-            pluralStringResource(R.plurals.image_code_count, detections.size, detections.size),
+            pluralStringResource(R.plurals.image_code_count, codes.size, codes.size),
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.primary,
             modifier = Modifier.padding(horizontal = 24.dp),
@@ -312,18 +292,20 @@ private fun CodeChooser(
             contentPadding = PaddingValues(horizontal = 24.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            itemsIndexed(detections, key = { _, d -> d.text }) { index, detection ->
-                CodeTile(thumbnails.getOrNull(index), detection, contents[index], index == selected) { onSelect(index) }
+            itemsIndexed(codes, key = { _, code -> code.found.key }) { index, code ->
+                CodeTile(code, index == selected) { onSelect(index) }
             }
         }
     }
 }
 
 @Composable
-private fun CodeTile(picture: Bitmap?, detection: Detection, content: ReadContent, selected: Boolean, onClick: () -> Unit) {
-    val thumbnail = remember(picture) { picture?.asImageBitmap() }
-    val kind = if (detection.isLocatedMiniCode) Kind(R.string.kind_mini_program, R.drawable.ic_qr_code_scanner) else content.kind
-    val description = if (detection.isLocatedMiniCode) stringResource(R.string.mini_headline) else detection.text
+private fun CodeTile(code: ImageCode, selected: Boolean, onClick: () -> Unit) {
+    val thumbnail = remember(code.thumbnail) { code.thumbnail?.asImageBitmap() }
+    // Only a mini program code located but not read comes without content.
+    val content = code.content
+    val kind = content?.kind ?: Cards.MINI_PROGRAM_KIND
+    val description = content?.text ?: stringResource(R.string.mini_headline)
     val effects = MaterialTheme.motionScheme.fastEffectsSpec<Color>()
     val container by animateColorAsState(
         if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,

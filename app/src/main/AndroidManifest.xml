@@ -100,9 +100,12 @@
             android:exported="false"
             android:theme="@style/Theme.FerryQR.Page" />
 
-        <!-- Shared and opened images show their result in a sheet without starting the scanner. -->
+        <!-- Shared and opened images show their result in a sheet without starting the scanner.
+             It turns in place, as history does, since an enlarged long code turns the screen
+             sideways and back, and it has no camera that would need to follow a rotation. -->
         <activity
             android:name=".ImageScanActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
             android:excludeFromRecents="true"
             android:exported="true"
             android:label="@string/share_label"

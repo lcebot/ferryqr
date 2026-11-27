@@ -2,22 +2,25 @@
 
 package io.github.lcebot.ferryqr.ui
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationVector4D
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.rememberTransition
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
@@ -30,6 +33,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -37,6 +41,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,10 +57,12 @@ import androidx.compose.ui.graphics.asComposePath
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.graphics.shapes.Morph
 import androidx.graphics.shapes.toPath
@@ -69,6 +76,7 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 
 private val MARKER_PADDING = 14.dp
@@ -106,83 +114,81 @@ fun ScanOverlay(
     onRelease: (Detection) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val density = LocalDensity.current
+    val effects = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
+    val spatial = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
+    var viewSize by remember { mutableStateOf(IntSize.Zero) }
+    val placement = remember(viewSize, density) {
+        with(density) { Placement(viewSize, MARKER_PADDING.toPx(), MIN_MARKER.toPx()) }
+    }
+    val placing by rememberUpdatedState(placement)
+
+    // The sighting changes with nearly every camera frame. The overlay composes again only as a code
+    // comes into view or leaves it and as its decoded codes change; where they are is read frame by
+    // frame by the effects that move the brackets and the markers, outside composition.
+    val sightingNow by rememberUpdatedState(sighting)
+    val sighted by remember { derivedStateOf { sightingNow() != null } }
+    val foundTexts by remember {
+        derivedStateOf { sightingNow()?.found?.filter { it.corners.isNotEmpty() }?.map { it.text } }
+    }
+
+    // Started from none, so a confirmation already up as the overlay is composed comes in as any
+    // other does. A confirmation that has ended stays the current state until its exit has played,
+    // so it stays in place while it leaves.
+    val confirmationState = remember { MutableTransitionState<Confirmation?>(null) }
+    confirmationState.targetState = confirming
+    val confirmation = rememberTransition(confirmationState, label = "confirmation")
+    val confirmationShown = confirmation.targetState != null || confirmation.currentState != null
+
+    val rect = remember { SpringFollower(Animatable(Rect.Zero, Rect.VectorConverter)) }
+    val moveSpec by rememberUpdatedState(MaterialTheme.motionScheme.fastSpatialSpec<Rect>())
+    LaunchedEffect(rect) {
+        var last: Rect? = null
+        var wasHolding = false
+        snapshotFlow {
+            // While the confirmation shows, leaving included, the brackets stay on the code it confirmed.
+            val held = confirmationState.targetState ?: confirmationState.currentState
+            if (held != null) {
+                placing.brackets(held) to true
+            } else {
+                sightingNow()?.let { placing.brackets(it) } to false
+            }
+        }.collectLatest { (next, nowHolding) ->
+            // A code sighted once a confirmation has left appears in place, as after any code
+            // that has left the view.
+            val released = wasHolding && !nowHolding
+            wasHolding = nowHolding
+            if (next != null) {
+                if (released) rect.unplace()
+                last = next
+                rect.moveTo(next, moveSpec)
+            } else {
+                // Through the frames that miss the code, the brackets carry on to where it was
+                // last seen. Once it has been gone for longer, the next code appears in place
+                // instead of sliding in from the last one.
+                coroutineScope {
+                    last?.let { launch { rect.moveTo(it, moveSpec) } }
+                    delay(2 * HIDE_DELAY_MS)
+                }
+                rect.unplace()
+                last = null
+            }
+        }
+    }
+
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(sighted) {
+        if (sighted) {
+            visible = true
+        } else {
+            delay(HIDE_DELAY_MS)
+            visible = false
+        }
+    }
+
     // Camera pixels map onto the view from its left edge whatever the layout direction, so what is
     // placed on a code starts from the top left corner and is moved by absolute offsets.
-    BoxWithConstraints(modifier, contentAlignment = AbsoluteAlignment.TopLeft) {
-        // Read here rather than by the caller, so only the overlay follows the code frame by frame.
-        val sighting = sighting()
-        val density = LocalDensity.current
-        val viewWidth = constraints.maxWidth.toFloat()
-        val viewHeight = constraints.maxHeight.toFloat()
-        val padding = with(density) { MARKER_PADDING.toPx() }
-        val minSide = with(density) { MIN_MARKER.toPx() }
-        val effects = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
-        val spatial = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
-
-        // The confirmation that has just ended still shows while it leaves.
-        val lastConfirmation = remember { Last<Confirmation?>(null) }
-        SideEffect { if (confirming != null) lastConfirmation.value = confirming }
-        val held = confirming ?: lastConfirmation.value
-        val confirmation = remember { MutableTransitionState(false) }
-        confirmation.targetState = confirming != null
-        val confirmationShown = confirmation.currentState || confirmation.targetState
-
-        val confirmedRect = held?.let { c ->
-            val b = c.detection.bounds
-            if (b.isEmpty) Rect(Offset(viewWidth / 2, viewHeight / 2), 0f)
-            else toView(c.frameWidth, c.frameHeight, b.left, b.top, b.right, b.bottom, viewWidth, viewHeight)
-        }?.squarePadded(padding, minSide)
-        val sightedRect = sighting?.let { s ->
-            val b = s.bounds
-            toView(
-                s.frameWidth, s.frameHeight,
-                b.left.toFloat(), b.top.toFloat(), b.right.toFloat(), b.bottom.toFloat(),
-                viewWidth, viewHeight,
-            )
-        }?.squarePadded(padding, minSide)
-        // While the confirmation shows, leaving included, the brackets stay on the code it confirmed.
-        val target = if (confirmationShown) confirmedRect else sightedRect
-
-        val rect = remember { SpringFollower(Animatable(Rect.Zero, Rect.VectorConverter)) }
-        val moveSpec by rememberUpdatedState(MaterialTheme.motionScheme.fastSpatialSpec<Rect>())
-        val goal by rememberUpdatedState(target)
-        val holding by rememberUpdatedState(confirmationShown)
-        LaunchedEffect(rect) {
-            var last: Rect? = null
-            var wasHolding = false
-            snapshotFlow { goal to holding }.collectLatest { (next, nowHolding) ->
-                // A code sighted once a confirmation has left appears in place, as after any code
-                // that has left the view.
-                val released = wasHolding && !nowHolding
-                wasHolding = nowHolding
-                if (next != null) {
-                    if (released) rect.unplace()
-                    last = next
-                    rect.moveTo(next, moveSpec)
-                } else {
-                    // Through the frames that miss the code, the brackets carry on to where it was
-                    // last seen. Once it has been gone for longer, the next code appears in place
-                    // instead of sliding in from the last one.
-                    coroutineScope {
-                        last?.let { launch { rect.moveTo(it, moveSpec) } }
-                        delay(2 * HIDE_DELAY_MS)
-                    }
-                    rect.unplace()
-                    last = null
-                }
-            }
-        }
-
-        var visible by remember { mutableStateOf(false) }
-        LaunchedEffect(sightedRect != null) {
-            if (sightedRect != null) {
-                visible = true
-            } else {
-                delay(HIDE_DELAY_MS)
-                visible = false
-            }
-        }
-
+    Box(modifier.onSizeChanged { viewSize = it }, contentAlignment = AbsoluteAlignment.TopLeft) {
         val alpha by animateFloatAsState(
             targetValue = if (visible && !confirmationShown) 1f else 0f,
             animationSpec = effects,
@@ -198,7 +204,7 @@ fun ScanOverlay(
         // code read at the first closer look never makes it blink. When the code leaves, it stays
         // with the brackets through the frames that miss it and leaves with them.
         AnimatedVisibility(
-            visible = !confirmationShown && lookingCloser && (sighting != null || visible),
+            visible = !confirmationShown && lookingCloser && (sighted || visible),
             enter = fadeIn(effects) + scaleIn(spatial),
             exit = fadeOut(effects) + scaleOut(spatial),
             modifier = Modifier.centeredOn(LOADING_SIZE) { rect.value.value.center },
@@ -211,8 +217,9 @@ fun ScanOverlay(
         // arrives. When the sighting ends, the markers last shown stay as long as the brackets do and
         // leave with them, which also carries them through a frame or two that misses the code. A
         // confirmed code hands its marker to the success badge at once, since the badge grows from it.
-        val spots = if (!confirmationShown && sighting != null) foundSpots(sighting, viewWidth, viewHeight) else null
-        val lastSpots = remember { Last<List<FoundSpot>>(emptyList()) }
+        // Markers wait for the view to have its size, so each starts where its code is.
+        val spots = if (!confirmationShown && placement.laidOut) foundTexts else null
+        val lastSpots = remember { Last<List<String>>(emptyList()) }
         SideEffect {
             when {
                 spots != null -> lastSpots.value = spots
@@ -221,36 +228,39 @@ fun ScanOverlay(
             }
         }
         val shownSpots = spots ?: if (!confirmationShown) lastSpots.value else emptyList()
-        shownSpots.forEach { spot ->
-            key(spot.text) {
-                FoundMarker(spot.center, visible = spots != null || visible)
+        shownSpots.forEach { text ->
+            key(text) {
+                FoundMarker(
+                    target = { sightingNow()?.let { placing.center(it, text) } },
+                    visible = spots != null || visible,
+                )
             }
         }
 
         // Brackets and badge shrink away together about the code once the confirmation is released,
         // or once the scanner moves on before that. They come in at once while the brackets were
         // already on the code, since they only change colour there; a code read before its brackets
-        // showed has them fade in.
-        val origin = confirmedRect?.center
-            ?.takeIf { viewWidth > 0f && viewHeight > 0f }
-            ?.let { TransformOrigin(it.x / viewWidth, it.y / viewHeight) }
-            ?: TransformOrigin.Center
-        AnimatedVisibility(
-            visibleState = confirmation,
-            enter = if (visible) EnterTransition.None else fadeIn(effects),
-            exit = fadeOut(effects) + scaleOut(spatial, transformOrigin = origin),
+        // showed has them fade in. Each confirmed code is content of its own, which keeps the
+        // confirmation it showed while it leaves; handing the code on only updates it in place.
+        confirmation.AnimatedContent(
             modifier = Modifier.fillMaxSize(),
-        ) {
-            held?.let { shown ->
-                key(shown.detection) {
-                    ConfirmedCode(
-                        rect = rect,
-                        fromMarker = shown.wasShown,
-                        handedOn = shown.handedOn,
-                        onDone = { onConfirmed(shown.detection) },
-                        onRelease = { onRelease(shown.detection) },
-                    )
-                }
+            transitionSpec = {
+                val enter = if (targetState == null || visible) EnterTransition.None else fadeIn(effects)
+                val exit = initialState?.let { left ->
+                    fadeOut(effects) + scaleOut(spatial, transformOrigin = placing.origin(left))
+                } ?: ExitTransition.None
+                (enter togetherWith exit) using null
+            },
+            contentKey = { it?.detection },
+        ) { shown ->
+            if (shown != null) {
+                ConfirmedCode(
+                    rect = rect,
+                    fromMarker = shown.wasShown,
+                    handedOn = shown.handedOn,
+                    onDone = { onConfirmed(shown.detection) },
+                    onRelease = { onRelease(shown.detection) },
+                )
             }
         }
     }
@@ -297,28 +307,65 @@ private fun ConfirmedCode(
 /** What was composed last, held outside the snapshot system, since keeping it is no reason to compose again. */
 private class Last<T>(var value: T)
 
-/** A decoded code's text and where its center falls on the view. */
-private class FoundSpot(val text: String, val center: Offset)
+/**
+ * Places what the overlay draws on a view of [size] from the pixels of the upright frame a code was
+ * read in: the square of the brackets around a code, [padding] clear of it and at least [minSide]
+ * across, and the centers of decoded codes. Nothing has a place before the view has a size.
+ */
+private class Placement(size: IntSize, private val padding: Float, private val minSide: Float) {
+    private val width = size.width.toFloat()
+    private val height = size.height.toFloat()
+    val laidOut = size.width > 0 && size.height > 0
 
-/** The decoded codes of [sighting] that have a place in the frame, placed on a [viewWidth] by [viewHeight] view. */
-private fun foundSpots(sighting: Sighting, viewWidth: Float, viewHeight: Float): List<FoundSpot> =
-    sighting.found.filter { it.corners.isNotEmpty() }.map { detection ->
-        val c = detection.center
-        val at = toView(sighting.frameWidth, sighting.frameHeight, c.x, c.y, c.x, c.y, viewWidth, viewHeight)
-        FoundSpot(detection.text, at.center)
+    fun brackets(confirmation: Confirmation): Rect? {
+        if (!laidOut) return null
+        val b = confirmation.detection.bounds
+        val code = if (b.isEmpty) {
+            Rect(Offset(width / 2, height / 2), 0f)
+        } else {
+            toView(confirmation.frameWidth, confirmation.frameHeight, b.left, b.top, b.right, b.bottom, width, height)
+        }
+        return code.squarePadded(padding, minSide)
     }
 
+    fun brackets(sighting: Sighting): Rect? {
+        if (!laidOut) return null
+        val b = sighting.bounds
+        return toView(
+            sighting.frameWidth, sighting.frameHeight,
+            b.left.toFloat(), b.top.toFloat(), b.right.toFloat(), b.bottom.toFloat(),
+            width, height,
+        ).squarePadded(padding, minSide)
+    }
+
+    /** The center of the decoded code [text] of [sighting], or null while it has no place in the frame. */
+    fun center(sighting: Sighting, text: String): Offset? {
+        if (!laidOut) return null
+        val code = sighting.found.firstOrNull { it.text == text && it.corners.isNotEmpty() } ?: return null
+        val c = code.center
+        return toView(sighting.frameWidth, sighting.frameHeight, c.x, c.y, c.x, c.y, width, height).center
+    }
+
+    /** Where on the view, as a fraction of it, the brackets of [confirmation] have their center. */
+    fun origin(confirmation: Confirmation): TransformOrigin =
+        brackets(confirmation)?.center?.let { TransformOrigin(it.x / width, it.y / height) } ?: TransformOrigin.Center
+}
+
 /**
- * Pops in with a light tick when its code is appended, follows the code as the camera moves, and
- * fades as it shrinks away once it is no longer [visible].
+ * Pops in with a light tick when its code is appended, follows the code at [target] as the camera
+ * moves, and fades as it shrinks away once [visible] turns false. Through frames where [target]
+ * has no place, it stays where the code was last seen.
  */
 @Composable
-private fun FoundMarker(target: Offset, visible: Boolean) {
-    val position = remember { SpringFollower(Animatable(target, Offset.VectorConverter)) }
+private fun FoundMarker(target: () -> Offset?, visible: Boolean) {
+    // Starts where the code is. The place is read without composing the marker again as it moves.
+    val position = remember {
+        SpringFollower(Animatable(Snapshot.withoutReadObservation { target() } ?: Offset.Zero, Offset.VectorConverter))
+    }
     val moveSpec by rememberUpdatedState(MaterialTheme.motionScheme.fastSpatialSpec<Offset>())
     val goal by rememberUpdatedState(target)
     LaunchedEffect(position) {
-        snapshotFlow { goal }.collectLatest { position.follow(it, moveSpec) }
+        snapshotFlow { goal() }.filterNotNull().collectLatest { position.follow(it, moveSpec) }
     }
     // Starts hidden, so a marker composed for a code just appended pops in.
     val shown = remember { MutableTransitionState(false) }

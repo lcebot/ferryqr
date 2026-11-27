@@ -160,7 +160,7 @@ internal fun SendMenu(apps: List<SendApp>, enabled: Boolean) {
                             app.onClick()
                         },
                         text = { Text(app.label) },
-                        shape = menuItemShape(index, apps.size),
+                        shape = MenuDefaults.itemShape(index, apps.size).shape,
                         leadingIcon = {
                             AppIcon(
                                 app.app,

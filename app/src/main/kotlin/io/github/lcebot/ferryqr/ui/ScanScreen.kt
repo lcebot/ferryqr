@@ -80,13 +80,15 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.github.lcebot.ferryqr.AppSettings
 import io.github.lcebot.ferryqr.Phase
 import io.github.lcebot.ferryqr.R
+import io.github.lcebot.ferryqr.ScanEvent
 import io.github.lcebot.ferryqr.ScanViewModel
-import io.github.lcebot.ferryqr.dispatch.CardSource
 import io.github.lcebot.ferryqr.dispatch.Dispatcher
 import kotlin.math.abs
-import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 
 /** The smallest a control label shrinks to before it is cut short. */
 private val MIN_LABEL_SIZE = 9.sp
@@ -112,24 +114,24 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
     var zoom by remember { mutableFloatStateOf(1f) }
 
     val haptics = rememberHaptics()
-    // Messages the scanner sends by itself, such as an image without a code, mark a failure with a
-    // haptic of their own; an action's message follows the haptic its button already gave.
+    // Outcomes are felt as the scanner tells of them, once each, so a page made again never plays
+    // them a second time. Messages the scanner sends by itself, such as an image without a code,
+    // mark a failure with a haptic of their own; an action's message follows the haptic its button
+    // already gave. A newer message takes the place of the one showing.
     LaunchedEffect(vm) {
-        vm.messages.collectLatest { message ->
-            when (message) {
-                R.string.no_code_found, R.string.image_unreadable, R.string.no_camera -> haptics.reject()
+        var showing: Job? = null
+        vm.events.collect { event ->
+            when (event) {
+                is ScanEvent.Message -> {
+                    when (event.text) {
+                        R.string.no_code_found, R.string.image_unreadable, R.string.no_camera -> haptics.reject()
+                    }
+                    showing?.cancel()
+                    showing = launch { snackbar.showLatest(context.getString(event.text)) }
+                }
+                ScanEvent.MiniCodeFound -> haptics.found()
             }
-            snackbar.showLatest(context.getString(message))
         }
-    }
-
-    // A mini program code found is felt once as its card shows, and not again as the activity is
-    // made again while it shows.
-    var miniCodeFelt by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(phase) {
-        val miniCode = (phase as? Phase.Showing)?.source is CardSource.LocatedMini
-        if (miniCode && !miniCodeFelt) haptics.found()
-        miniCodeFelt = miniCode
     }
     // A code goes to its app from here, the only place with an activity to start it; each is tried
     // once, and only while the user has not moved on from it.
@@ -284,6 +286,7 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
                                 torch = torch,
                                 onZoom = { zoom = it },
                                 onUnavailable = { vm.message(R.string.no_camera) },
+                                onSettled = vm::cameraSettled,
                                 // A code being confirmed has its outcome, so tapping to focus ends with it.
                                 scanning = phase == Phase.Scanning && confirmation == null,
                                 contentPadding = padding,
@@ -329,7 +332,7 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
                 }
                 PickOverlay(
                     picking.frame.bitmap,
-                    picking.detections,
+                    picking.codes,
                     picking.alreadyShown,
                     active = phase == picking,
                     onPick = vm::pick,
@@ -341,8 +344,11 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
 
     (phase as? Phase.Showing)?.let { showing ->
         // Keyed on what it shows, so the card of one code never stands in for a frame for the next.
+        // The card is collected from here, so it starts from the one the holder has as the phase
+        // turns, which for a routed code is its card already built.
         key(showing.source) {
-            rememberResultCard(showing.source, initial = showing.card, builtFor = showing.builtFor)?.let { card ->
+            val shown by vm.card.collectAsStateWithLifecycle()
+            shown?.let { card ->
                 ResultSheet(
                     card = card,
                     // The scanner has done its part once another app took over.
@@ -511,30 +517,48 @@ private fun rememberCameraPermission(activity: Activity): CameraPermissionState 
     // Set as the request goes out rather than when it is answered, so a page made again while the
     // system asks, as after a rotation, does not ask a second time.
     var requested by rememberSaveable { mutableStateOf(false) }
+    // A refusal for good shows only as the rationale flag reading false after a refusal, which is
+    // what turned the flag true. A prompt dismissed with back or a tap outside also leaves it false,
+    // but before any refusal, so it keeps the grant button. The refusal is kept across runs of the
+    // app, since a prompt refused for good in an earlier run returns at once without showing, and
+    // a grant forgets it, since the system may later ask afresh, as when a one-time grant lapses.
+    val refused = remember { AppSettings.of(activity).cameraRefused }
+    fun rationale() = activity.shouldShowRequestPermissionRationale(Manifest.permission.CAMERA)
+    fun noteRefusal() {
+        if (!refused.value && rationale()) refused.value = true
+    }
+    var refusedForGood by rememberSaveable { mutableStateOf(false) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         granted = it
         asked = true
+        if (it) refused.value = false
+        refusedForGood = !it && !rationale() && refused.value
+        noteRefusal()
+    }
+    fun request() {
+        noteRefusal()
+        launcher.launch(Manifest.permission.CAMERA)
     }
     LaunchedEffect(Unit) {
         if (!granted && !asked && !requested) {
             requested = true
-            launcher.launch(Manifest.permission.CAMERA)
+            request()
         }
     }
     // The user may grant the permission from system settings while the app is in the background.
     LifecycleResumeEffect(Unit) {
         granted = check()
+        if (granted) refused.value = false
         onPauseOrDispose { }
     }
-    val permanentlyDenied = asked && !granted &&
-        !activity.shouldShowRequestPermissionRationale(Manifest.permission.CAMERA)
+    val permanentlyDenied = !granted && refusedForGood
     return CameraPermissionState(granted, permanentlyDenied) {
         if (permanentlyDenied) {
             activity.startActivity(
                 Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", activity.packageName, null))
             )
         } else {
-            launcher.launch(Manifest.permission.CAMERA)
+            request()
         }
     }
 }

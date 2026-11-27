@@ -40,6 +40,10 @@ import kotlinx.coroutines.launch
  * it moves, so a size that changes again on the way moves on in its next frame rather than holding
  * for one while a new animation starts. It moves in fractions of a pixel and is rounded only where it is
  * reported.
+ *
+ * In a lookahead scope it reports the new size at once to the lookahead pass and moves toward it in
+ * the pass after, as the scope's own animations do, so it moves together with parts inside that
+ * animate their bounds.
  */
 internal fun Modifier.animateSize(spec: FiniteAnimationSpec<Size>, alignment: Alignment = Alignment.TopStart): Modifier =
     this.then(SizeAnimationElement(spec, alignment))
@@ -68,13 +72,24 @@ private class SizeAnimationNode(
     private var target = IntSize.Zero
     private var following: Job? = null
 
+    /** The size the last lookahead pass measured, when the node is in a lookahead scope. */
+    private var lookahead: IntSize? = null
+
     // Whether the size has reached the target in each direction, from where on it stays at least as large.
     private var widthReached = true
     private var heightReached = true
 
     override fun MeasureScope.measure(measurable: Measurable, constraints: Constraints): MeasureResult {
         val placeable = measurable.measure(constraints)
-        val goal = IntSize(placeable.width, placeable.height)
+        val measured = IntSize(placeable.width, placeable.height)
+        // In a lookahead scope the goal is the size the lookahead finds, where what it holds stands
+        // as it will end. The pass after it measures what it holds on its way there, at sizes that
+        // change on every frame and would start the size over on each.
+        if (isLookingAhead) {
+            lookahead = measured
+            return layout(measured.width, measured.height) { placeable.place(0, 0) }
+        }
+        val goal = lookahead ?: measured
         val shown = size ?: SpringFollower(Animatable(goal.toSize(), Size.VectorConverter)).also {
             size = it
             target = goal
@@ -95,7 +110,7 @@ private class SizeAnimationNode(
         val shownWidth = constraints.constrainWidth(width)
         val shownHeight = constraints.constrainHeight(height)
         return layout(shownWidth, shownHeight) {
-            placeable.place(alignment.align(goal, IntSize(shownWidth, shownHeight), layoutDirection))
+            placeable.place(alignment.align(measured, IntSize(shownWidth, shownHeight), layoutDirection))
         }
     }
 }

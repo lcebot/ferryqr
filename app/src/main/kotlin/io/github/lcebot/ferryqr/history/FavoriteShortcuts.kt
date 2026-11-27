@@ -10,6 +10,7 @@ import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.drawable.IconCompat
+import io.github.lcebot.ferryqr.AppSettings
 import io.github.lcebot.ferryqr.HistoryActivity
 import io.github.lcebot.ferryqr.MainActivity
 import io.github.lcebot.ferryqr.dispatch.cutToCodePoints
@@ -41,11 +42,18 @@ object FavoriteShortcuts {
     const val MAX = 4
 
     const val ACTION_SHOW = "io.github.lcebot.ferryqr.action.SHOW_FAVORITE"
-    const val EXTRA_TEXT = "text"
+
+    /**
+     * The favorite to show, as its [savedForm]: the system keeps shortcuts outside the app, as it
+     * keeps saved state, so a sensitive entry the settings do not keep in history goes there only
+     * as a digest, the same way.
+     */
+    const val EXTRA_ENTRY = "entry"
 
     fun update(context: Context, favorites: List<HistoryEntry>) {
         try {
-            val dynamic = favorites.filter { it.shortcut }.take(MAX).mapIndexed { rank, entry -> shortcut(context, entry, rank) }
+            val settings = AppSettings.of(context)
+            val dynamic = favorites.filter { it.shortcut }.take(MAX).mapIndexed { rank, entry -> shortcut(context, settings, entry, rank) }
             ShortcutManagerCompat.setDynamicShortcuts(context, dynamic)
             val dynamicById = dynamic.associateBy { it.id }
             val byId = favorites.associateBy { idOf(it.text) }
@@ -54,7 +62,7 @@ object FavoriteShortcuts {
             if (kept.isNotEmpty()) {
                 // An update sets the rank it carries, so a shortcut that is also dynamic is refreshed
                 // with the rank it was just given. One that is only pinned is in no list a rank orders.
-                val refreshed = kept.map { dynamicById[it.id] ?: shortcut(context, byId.getValue(it.id)) }
+                val refreshed = kept.map { dynamicById[it.id] ?: shortcut(context, settings, byId.getValue(it.id)) }
                 ShortcutManagerCompat.enableShortcuts(context, refreshed)
                 ShortcutManagerCompat.updateShortcuts(context, refreshed)
             }
@@ -66,10 +74,14 @@ object FavoriteShortcuts {
         }
     }
 
-    private fun idOf(text: String) = "favorite-${text.hashCode().toUInt().toString(16)}-${text.length}"
+    /**
+     * From the content's digest, so no two favorites share an id, which would make the launcher
+     * refuse the whole set.
+     */
+    private fun idOf(text: String) = "favorite-" + digestOf(text)
 
     /** The shortcut for [entry], placed at [rank] among the dynamic ones when it is one of them. */
-    private fun shortcut(context: Context, entry: HistoryEntry, rank: Int? = null): ShortcutInfoCompat {
+    private fun shortcut(context: Context, settings: AppSettings, entry: HistoryEntry, rank: Int? = null): ShortcutInfoCompat {
         val names = entry.content.names(context, entry.label)
         val kind = names.kind
         val title = names.shortTitle
@@ -80,7 +92,7 @@ object FavoriteShortcuts {
             .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         val history = Intent(context, HistoryActivity::class.java)
             .setAction(ACTION_SHOW)
-            .putExtra(EXTRA_TEXT, entry.text)
+            .putExtra(EXTRA_ENTRY, savedForm(entry, settings))
         val builder = ShortcutInfoCompat.Builder(context, idOf(entry.text))
             .setShortLabel(title.shortened(SHORT_LABEL))
             .setLongLabel(title.shortened(LONG_LABEL))

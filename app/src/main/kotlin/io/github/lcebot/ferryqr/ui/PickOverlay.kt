@@ -43,8 +43,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import io.github.lcebot.ferryqr.R
-import io.github.lcebot.ferryqr.scan.Detection
-import io.github.lcebot.ferryqr.scan.isLocatedMiniCode
+import io.github.lcebot.ferryqr.scan.Found
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -66,10 +65,10 @@ private const val STAGGER_MS = 70L
 @Composable
 fun PickOverlay(
     frame: Bitmap,
-    detections: List<Detection>,
+    codes: List<Found>,
     alreadyShown: Set<String>,
     active: Boolean,
-    onPick: (Detection) -> Unit,
+    onPick: (Found) -> Unit,
     onClose: () -> Unit,
 ) {
     // How far a back gesture has shrunk the overlay, and apart from it how far it has dimmed it, so
@@ -123,18 +122,20 @@ fun PickOverlay(
         Image(image, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.scrim.copy(alpha = PICKER_SCRIM_ALPHA)))
 
-        val fresh = detections.filter { it.text !in alreadyShown }
-        detections.forEach { detection ->
-            val center = detection.center
+        // Only read codes had markers while the camera ran, so a located one is always fresh.
+        fun Found.wasShown() = this is Found.Read && detection.text in alreadyShown
+        val fresh = codes.filterNot { it.wasShown() }
+        codes.forEach { code ->
+            val center = code.center
             val x = (center.x * scale + dx).coerceIn(half, viewWidth - half)
             val y = (center.y * scale + dy).coerceIn(half, viewHeight - half)
             // A code that already had a marker while the camera ran keeps it without popping again;
             // codes that arrived with the frozen frame pop in one after another.
-            val wasShown = detection.text in alreadyShown
-            val pop = remember(detection) { MutableTransitionState(wasShown) }
-            LaunchedEffect(detection) {
+            val wasShown = code.wasShown()
+            val pop = remember(code) { MutableTransitionState(wasShown) }
+            LaunchedEffect(code) {
                 if (wasShown) return@LaunchedEffect
-                delay(fresh.indexOf(detection) * STAGGER_MS)
+                delay(fresh.indexOf(code) * STAGGER_MS)
                 pop.targetState = true
             }
             AnimatedVisibility(
@@ -146,7 +147,7 @@ fun PickOverlay(
                 // behind needs. The copy fading out is disabled in the same colours, so it fades out
                 // as it was rather than greying first.
                 FilledIconButton(
-                    onClick = { haptics.tap(); onPick(detection) },
+                    onClick = { haptics.tap(); onPick(code) },
                     enabled = active,
                     shapes = IconButtonDefaults.shapes(pressedShape = IconButtonDefaults.mediumPressedShape),
                     colors = IconButtonDefaults.filledIconButtonColors(
@@ -159,7 +160,10 @@ fun PickOverlay(
                 ) {
                     Icon(
                         painterResource(R.drawable.ic_arrow_forward),
-                        contentDescription = if (detection.isLocatedMiniCode) stringResource(R.string.mini_headline) else detection.text,
+                        contentDescription = when (code) {
+                            is Found.Read -> code.detection.text
+                            is Found.Located -> stringResource(R.string.mini_headline)
+                        },
                         modifier = Modifier.size(IconButtonDefaults.mediumIconSize),
                     )
                 }

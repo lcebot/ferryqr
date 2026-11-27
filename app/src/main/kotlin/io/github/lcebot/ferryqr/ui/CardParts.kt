@@ -4,12 +4,20 @@ package io.github.lcebot.ferryqr.ui
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.BoundsTransform
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.animateBounds
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,7 +27,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
@@ -27,13 +34,17 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.LookaheadScope
 import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -53,44 +64,70 @@ import io.github.lcebot.ferryqr.dispatch.CardAction
 @Composable
 internal fun CardNotes(notes: List<String>) {
     val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
-    // Every note in sight, those still fading out included, each where it was among the rest.
-    val shown = remember { notes.toMutableStateList() }
-    val opening = remember { notes.toMutableSet() }
-    LaunchedEffect(notes) {
-        notes.forEachIndexed { index, note ->
-            if (note !in shown) shown.add(index.coerceAtMost(shown.size), note)
-        }
-    }
     // Clipped, so a note fading in is uncovered as the notes grow rather than drawn over the actions.
     Column(
         Modifier.clipToBounds().animateSize(MaterialTheme.motionScheme.defaultSpatialSpec()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        shown.forEach { note ->
-            key(note) {
-                val visible = remember { MutableTransitionState(note in opening) }
-                visible.targetState = note in notes
-                AnimatedVisibility(visibleState = visible, enter = fadeIn(fade), exit = fadeOut(fade)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            painterResource(R.drawable.ic_warning),
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.tertiary,
-                            modifier = Modifier.size(18.dp),
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            note,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.tertiary,
-                        )
-                    }
-                }
-                if (visible.isIdle && !visible.currentState) {
-                    LaunchedEffect(Unit) {
-                        opening -= note
-                        shown -= note
-                    }
+        AppearingItems(notes, keyOf = { it }, enter = fadeIn(fade), exit = fadeOut(fade)) { note ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    painterResource(R.drawable.ic_warning),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    note,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * [items] in their order, each known by [keyOf], together with those that have left and are still
+ * on their way out, each where it was among the rest. An item that comes after the first
+ * composition enters on [enter], and one that leaves exits on [exit] before it gives up its place;
+ * the items there from the start are shown from the start. Each item is one element of the layout
+ * it is emitted in, with [itemModifier], and one that is leaving shows as it last was.
+ */
+@Composable
+private fun <T> AppearingItems(
+    items: List<T>,
+    keyOf: (T) -> Any,
+    enter: EnterTransition,
+    exit: ExitTransition,
+    itemModifier: Modifier = Modifier,
+    content: @Composable (T) -> Unit,
+) {
+    val current = items.associateBy(keyOf)
+    // Every item in sight, those still leaving included, each where it was among the rest.
+    val shown = remember { items.toMutableStateList() }
+    val opening = remember { current.keys.toMutableSet() }
+    LaunchedEffect(items) {
+        val merged = items.toMutableList()
+        shown.forEachIndexed { index, item ->
+            if (keyOf(item) !in current) merged.add(index.coerceAtMost(merged.size), item)
+        }
+        shown.clear()
+        shown.addAll(merged)
+    }
+    shown.forEach { item ->
+        val itemKey = keyOf(item)
+        key(itemKey) {
+            val visible = remember { MutableTransitionState(itemKey in opening) }
+            visible.targetState = itemKey in current
+            AnimatedVisibility(visibleState = visible, modifier = itemModifier, enter = enter, exit = exit) {
+                content(current[itemKey] ?: item)
+            }
+            if (visible.isIdle && !visible.currentState) {
+                LaunchedEffect(Unit) {
+                    opening -= itemKey
+                    shown.removeAll { keyOf(it) == itemKey }
                 }
             }
         }
@@ -110,24 +147,74 @@ internal fun CardNotes(notes: List<String>) {
 internal fun CardActions(actions: List<CardAction>, onAction: (CardAction) -> Unit, modifier: Modifier = Modifier) {
     val primary = actions.firstOrNull() ?: return
     val (labeled, tools) = actions.drop(1).partition { it.labeled }
-    ActionLines(
-        modifier = modifier,
-        tools = { tools.forEach { action -> ToolButton(action, onAction) } },
-        main = {
-            Button(onClick = { onAction(primary) }, shapes = ButtonDefaults.shapes()) {
-                ActionIcon(primary, ButtonDefaults.IconSize)
-                Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-                ActionLabel(primary)
-            }
-            labeled.forEach { action ->
-                FilledTonalButton(onClick = { onAction(action) }, shapes = ButtonDefaults.shapes()) {
-                    ActionIcon(action, ButtonDefaults.IconSize)
-                    Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-                    ActionLabel(action)
-                }
-            }
-        },
+    val motion = MaterialTheme.motionScheme
+    // Small parts of the card, so they move, appear and leave on the fast springs, and the lines
+    // resize on the same spring as the buttons move within them, since they belong together.
+    val spatial = motion.fastSpatialSpec<Rect>()
+    val bounds = remember(spatial) { BoundsTransform { _, _ -> spatial } }
+    val fade = motion.fastEffectsSpec<Float>()
+    val scale = motion.fastSpatialSpec<Float>()
+    // Scaled from near full size rather than from nothing, so the spring's bounce never turns a
+    // button inside out.
+    val enter = fadeIn(fade) + scaleIn(scale, initialScale = APPEARING_SCALE)
+    val exit = fadeOut(fade) + scaleOut(scale, targetScale = APPEARING_SCALE)
+    // A layout of its own around the scope, so the buttons move relative to the actions, and the
+    // gap above them, which moves on its own spring, does not set them chasing it.
+    Box(modifier.fillMaxWidth()) {
+        LookaheadScope {
+            val moving = Modifier.animateBounds(this, boundsTransform = bounds)
+            ActionLines(
+                tools = {
+                    AppearingItems(tools, ::actionKey, enter, exit, moving) { action -> ToolButton(action, onAction) }
+                },
+                main = {
+                    AppearingItems(listOf(primary) + labeled, ::actionKey, enter, exit, moving) { action ->
+                        ActionButton(action, primary = actionKey(action) == actionKey(primary), onAction)
+                    }
+                },
+            )
+        }
+    }
+}
+
+/**
+ * What a button stands for, so it keeps its own label and icon and moves to its new place when a
+ * card built again offers the actions in another order.
+ */
+private fun actionKey(action: CardAction): Any = action.label to action.app
+
+/** How far from full size an action scales as it appears and leaves. */
+private const val APPEARING_SCALE = 0.8f
+
+/**
+ * A button opening the content somewhere, filled for the [primary] action and tonal for the rest.
+ * One button for both, its colours changing on the fast effects spring, so an action that becomes
+ * the primary one moves to the front as itself rather than leaving one place and appearing in another.
+ */
+@Composable
+private fun ActionButton(action: CardAction, primary: Boolean, onAction: (CardAction) -> Unit) {
+    val filled = ButtonDefaults.buttonColors()
+    val tonal = ButtonDefaults.filledTonalButtonColors()
+    val spec = MaterialTheme.motionScheme.fastEffectsSpec<Color>()
+    val container by animateColorAsState(
+        if (primary) filled.containerColor else tonal.containerColor,
+        spec,
+        label = "action-container",
     )
+    val content by animateColorAsState(
+        if (primary) filled.contentColor else tonal.contentColor,
+        spec,
+        label = "action-content",
+    )
+    Button(
+        onClick = { onAction(action) },
+        shapes = ButtonDefaults.shapes(),
+        colors = ButtonDefaults.buttonColors(containerColor = container, contentColor = content),
+    ) {
+        ActionIcon(action, ButtonDefaults.IconSize)
+        Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+        ActionLabel(action)
+    }
 }
 
 private val ACTION_GAP = 8.dp
@@ -137,13 +224,13 @@ private val ACTION_LINE_GAP = 12.dp
  * [main] and [tools] on one line, [tools] at its end, when the width holds both. Otherwise [tools]
  * go on a line above [main], and each wraps onto further lines when it is too long by itself, as
  * on a narrow screen or with large text. Items on a line are centred on each other. The lines
- * resize on a spring when the actions change, as when a card is built again.
+ * resize on the fast spatial spring the buttons move on, as when a card is built again.
  */
 @Composable
 private fun ActionLines(main: @Composable () -> Unit, tools: @Composable () -> Unit, modifier: Modifier = Modifier) {
     Layout(
         contents = listOf(main, tools),
-        modifier = modifier.fillMaxWidth().animateSize(MaterialTheme.motionScheme.defaultSpatialSpec()),
+        modifier = modifier.fillMaxWidth().animateSize(MaterialTheme.motionScheme.fastSpatialSpec()),
     ) { (mainItems, toolItems), constraints ->
         val loose = constraints.copy(minWidth = 0, minHeight = 0)
         val mains = mainItems.map { it.measure(loose) }

@@ -32,10 +32,10 @@ sealed interface StillOutcome {
     }
 
     /**
-     * The codes read in [frame]. Mini program codes only located join them as located entries, so
-     * a chooser offers every code.
+     * The codes found in [frame]: those read, joined by the mini program codes only located, so a
+     * chooser offers every code.
      */
-    class Codes(val detections: List<Detection>, val frame: Bitmap) : StillOutcome {
+    class Codes(val codes: List<Found>, val frame: Bitmap) : StillOutcome {
         override fun release() = frame.recycle()
     }
 }
@@ -76,7 +76,7 @@ private fun outcomeOf(frame: Bitmap, zxing: ZxingEngine, wechat: WeChatEngine): 
         }
     val detections = found.mergedWith(survey.read).mergedWith(deep)
     if (detections.isNotEmpty()) {
-        return StillOutcome.Codes(detections + survey.located.map { it.asLocatedDetection(frame.width, frame.height) }, frame)
+        return StillOutcome.Codes(detections.map(Found::Read) + survey.located.map { it.locatedIn(frame.width, frame.height) }, frame)
     }
     val crop = survey.located.firstOrNull()?.crop(frame)
     frame.recycle()
@@ -87,8 +87,8 @@ private fun outcomeOf(frame: Bitmap, zxing: ZxingEngine, wechat: WeChatEngine): 
 private const val THUMBNAIL_MARGIN = 0.15f
 
 /** The code's own region of [frame] with a little margin, or null when its position is unknown. */
-fun Detection.thumbnail(frame: Bitmap): Bitmap? {
-    if (corners.isEmpty()) return null
+fun Found.thumbnail(frame: Bitmap): Bitmap? {
+    if (this is Found.Read && detection.corners.isEmpty()) return null
     val margin = max(bounds.width(), bounds.height()) * THUMBNAIL_MARGIN
     return frame.ownedCrop(
         Rect(

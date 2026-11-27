@@ -1,6 +1,3 @@
-// The menu item shapes belong to the expressive menus, which are experimental.
-@file:OptIn(ExperimentalMaterial3ExpressiveApi::class)
-
 package io.github.lcebot.ferryqr.ui
 
 import androidx.compose.animation.core.animateDpAsState
@@ -9,9 +6,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -104,12 +99,4 @@ internal fun segmentShape(index: Int, count: Int, roundTop: Float, roundBottom: 
     val shownTop = maxOf(top, lerp(INNER_CORNER, OUTER_CORNER, roundTop.coerceIn(0f, 1f)))
     val shownBottom = maxOf(bottom, lerp(INNER_CORNER, OUTER_CORNER, roundBottom.coerceIn(0f, 1f)))
     return RoundedCornerShape(topStart = shownTop, topEnd = shownTop, bottomStart = shownBottom, bottomEnd = shownBottom)
-}
-
-@Composable
-fun menuItemShape(index: Int, count: Int): Shape = when {
-    count == 1 -> MenuDefaults.standaloneItemShape
-    index == 0 -> MenuDefaults.leadingItemShape
-    index == count - 1 -> MenuDefaults.trailingItemShape
-    else -> MenuDefaults.middleItemShape
 }

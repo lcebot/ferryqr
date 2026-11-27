@@ -1,18 +1,20 @@
 package io.github.lcebot.ferryqr
 
 import android.app.Application
-import android.content.ComponentCallbacks
 import android.content.Context
-import android.content.res.Configuration
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
+import io.github.lcebot.ferryqr.dispatch.CardSource
 import io.github.lcebot.ferryqr.dispatch.ContentNames
+import io.github.lcebot.ferryqr.dispatch.Origin
 import io.github.lcebot.ferryqr.dispatch.ReadContent
+import io.github.lcebot.ferryqr.dispatch.ResultCard
 import io.github.lcebot.ferryqr.history.HistoryEntry
 import io.github.lcebot.ferryqr.history.HistoryStore
+import io.github.lcebot.ferryqr.history.isSaved
+import io.github.lcebot.ferryqr.history.savedForm
 import java.io.OutputStream
-import java.security.MessageDigest
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -83,20 +85,6 @@ private const val SHOWING_KEY = "showing"
 private const val DIALOG_KEY = "dialog"
 private const val DIALOG_ENTRY_KEY = "dialog-entry"
 
-/** Marks what the saved state keeps of an entry: its content itself, or only a digest of it. */
-private const val SAVED_TEXT = "text:"
-private const val SAVED_DIGEST = "sha256:"
-
-private fun digestOf(text: String): String =
-    MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }
-
-/** Whether [entry] is the one the saved state keeps as [saved]. */
-private fun isSaved(entry: HistoryEntry, saved: String): Boolean = when {
-    saved.startsWith(SAVED_TEXT) -> entry.text == saved.removePrefix(SAVED_TEXT)
-    saved.startsWith(SAVED_DIGEST) -> digestOf(entry.text) == saved.removePrefix(SAVED_DIGEST)
-    else -> false
-}
-
 /** What each dialog is kept as; the entry a rename shows is kept beside it. */
 private const val CLEAR_DIALOG = "clear"
 private const val SUGGEST_TILES_DIALOG = "suggest-tiles"
@@ -120,29 +108,8 @@ class HistoryViewModel(app: Application, private val saved: SavedStateHandle) : 
     private val store = HistoryStore.get(app)
     val settings = AppSettings.of(app)
 
-    /**
-     * The languages the app shows text in. This view model outlives the page across a change of
-     * language, while the names in its lists hold words in the language they were made in, so it
-     * follows the language itself and makes the lists again when it changes. It listens on the
-     * application, which hears of the change with its resources already in the new language and
-     * before the page is made again, so the lists in the new language are on their way by the time
-     * the page shows. A page passing in its own language would be heard only once made again, and
-     * would show the old names until then.
-     */
-    private val languages = MutableStateFlow(app.resources.configuration.locales)
-
-    private val languageChanges = object : ComponentCallbacks {
-        override fun onConfigurationChanged(newConfig: Configuration) {
-            languages.value = newConfig.locales
-        }
-
-        @Suppress("OVERRIDE_DEPRECATION")
-        override fun onLowMemory() = Unit
-    }
-
-    init {
-        app.registerComponentCallbacks(languageChanges)
-    }
+    /** The languages the app shows text in, which the names in the lists are made in. */
+    private val languages = app.languages(viewModelScope)
 
     /**
      * The entries with the names each is shown by, or null while the history is still being read.
@@ -164,6 +131,11 @@ class HistoryViewModel(app: Application, private val saved: SavedStateHandle) : 
     /** The entry whose card is open. */
     private val _showing = MutableStateFlow<HistoryEntry?>(null)
     val showing: StateFlow<HistoryEntry?> = _showing.asStateFlow()
+
+    private val cards = CardHolder(app, viewModelScope, languages)
+
+    /** The card of the entry [showing] shows, with its code drawn again. */
+    val card: StateFlow<ResultCard?> = cards.card
 
     init {
         // A view model made again after the process was let go finds the card and the dialog it
@@ -213,28 +185,21 @@ class HistoryViewModel(app: Application, private val saved: SavedStateHandle) : 
             HistoryDialog.SuggestTiles -> SUGGEST_TILES_DIALOG
             is HistoryDialog.Rename -> RENAME_DIALOG
         }
-        saved[DIALOG_ENTRY_KEY] = (dialog as? HistoryDialog.Rename)?.entry?.let(::savedForm)
+        saved[DIALOG_ENTRY_KEY] = (dialog as? HistoryDialog.Rename)?.entry?.let { savedForm(it, settings) }
     }
 
     fun open(entry: HistoryEntry?) {
+        // Another entry's card never stands in for the one opened, while the same entry opened
+        // again keeps its card until it is built again.
+        val same = entry != null && entry.text == _showing.value?.text
         _showing.value = entry
-        saved[SHOWING_KEY] = entry?.let(::savedForm)
+        saved[SHOWING_KEY] = entry?.let { savedForm(it, settings) }
+        cards.show(entry?.let { CardSource.Read(it.content, Origin.HISTORY, it.time) }, keep = same)
     }
 
-    /**
-     * What the saved state keeps of [entry], which the system holds outside the app while the
-     * process is gone: its content itself, unless it is of a sensitive kind, such as a two-factor
-     * key, that the settings do not keep in history, when only a digest goes there. Either finds the
-     * entry again once the history is read.
-     */
-    private fun savedForm(entry: HistoryEntry): String {
-        val kind = entry.content.sensitiveKind
-        return if (kind == null || settings.keeps(kind).value) SAVED_TEXT + entry.text else SAVED_DIGEST + digestOf(entry.text)
-    }
-
-    /** Opens the entry with [text], from a favorite's app shortcut, once the history is read. */
-    suspend fun open(text: String) {
-        store.find(text)?.let(::open)
+    /** Opens the entry kept as [saved], a [savedForm] from a favorite's app shortcut, once the history is read. */
+    suspend fun openSaved(saved: String) {
+        store.find { isSaved(it, saved) }?.let(::open)
     }
 
     /** Deletes [entries], which join the deletions the current undo would bring back. */
@@ -293,9 +258,5 @@ class HistoryViewModel(app: Application, private val saved: SavedStateHandle) : 
     fun useTiles() {
         settings.favoriteTiles.value = true
         show(null)
-    }
-
-    override fun onCleared() {
-        getApplication<Application>().unregisterComponentCallbacks(languageChanges)
     }
 }

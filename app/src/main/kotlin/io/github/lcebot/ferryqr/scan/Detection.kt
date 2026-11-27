@@ -1,13 +1,11 @@
 package io.github.lcebot.ferryqr.scan
 
 import android.graphics.Bitmap
+import android.graphics.Point
 import android.graphics.PointF
 import android.graphics.Rect
 import android.graphics.RectF
 import kotlin.math.roundToInt
-
-/** The [Detection.format] of a mini program code that was located but could not be read. */
-const val MINI_LOCATED_FORMAT = "WX_CODE_LOCATED"
 
 /** A decoded symbol; [corners] are in the pixel space of the upright frame it was read from. */
 data class Detection(
@@ -40,26 +38,42 @@ data class Sighting(
 )
 
 /**
- * Whether this stands for a mini program code that was located but could not be read. Its text
- * is then only a key, and it is offered to WeChat as a picture rather than routed by content.
+ * A code found in a frame or an image: one that was read, or a mini program code that was located
+ * but could not be read, which is offered to WeChat as its picture. [center] and [bounds] are in the
+ * pixel space of the upright frame or image it was found in.
  */
-val Detection.isLocatedMiniCode: Boolean get() = format == MINI_LOCATED_FORMAT
+sealed interface Found {
+    val center: PointF
+    val bounds: RectF
 
-/** A located mini program code as an entry among read codes, keyed by its place in the image. */
-fun MiniCode.asLocatedDetection(width: Int, height: Int): Detection {
-    val b = bounds(width, height)
-    val corners = listOf(
-        PointF(b.left.toFloat(), b.top.toFloat()), PointF(b.right.toFloat(), b.top.toFloat()),
-        PointF(b.right.toFloat(), b.bottom.toFloat()), PointF(b.left.toFloat(), b.bottom.toFloat()),
-    )
-    return Detection("located:${center.x.roundToInt()},${center.y.roundToInt()}", MINI_LOCATED_FORMAT, corners)
+    /**
+     * Tells the code from the others found with it, and can be kept in saved state: a read code's
+     * text, or a located code's place as a [Point], which no text can be equal to.
+     */
+    val key: Any
+
+    data class Read(val detection: Detection) : Found {
+        override val center: PointF get() = detection.center
+        override val bounds: RectF get() = detection.bounds
+        override val key: Any get() = detection.text
+    }
+
+    /** [mini] as the mini program check located it, in [region] of its frame. */
+    data class Located(val mini: MiniCode, val region: Rect) : Found {
+        override val bounds: RectF = RectF(region)
+        override val center: PointF = PointF(bounds.centerX(), bounds.centerY())
+        override val key: Any = Point(mini.center.x.roundToInt(), mini.center.y.roundToInt())
+
+        /** The region of [frame] the code covers, for handing to WeChat. */
+        fun crop(frame: Bitmap): Bitmap? = frame.cropForWeChat(region)
+    }
 }
 
-/** The region of [frame] a located mini program code covers, for handing to WeChat. */
-fun Detection.locatedCrop(frame: Bitmap): Bitmap? {
-    val b = bounds
-    return frame.cropForWeChat(Rect(b.left.roundToInt(), b.top.roundToInt(), b.right.roundToInt(), b.bottom.roundToInt()))
-}
+/** The code read when it is the only one found, which then needs no choosing. */
+fun List<Found>.soleRead(): Detection? = (singleOrNull() as? Found.Read)?.detection
+
+/** This code as found in a [width] by [height] frame, its region clipped to the frame. */
+fun MiniCode.locatedIn(width: Int, height: Int): Found.Located = Found.Located(this, bounds(width, height))
 
 internal fun List<Detection>.mergedWith(other: List<Detection>): List<Detection> {
     val seen = mapTo(HashSet()) { it.text }

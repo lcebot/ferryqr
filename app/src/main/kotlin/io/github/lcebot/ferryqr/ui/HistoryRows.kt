@@ -262,12 +262,16 @@ internal fun EntryRow(
                 )
             },
     ) {
+        // What the swipe shows behind the row leans with the rows next to it, as behind a tile.
         SwipeBackground(
             swipe.direction,
             swipe.armed,
             swipe.becomesFavorite,
             shape,
-            Modifier.matchParentSize().graphicsLayer { alpha = swipe.backdrop.value },
+            Modifier.matchParentSize().graphicsLayer {
+                translationX = onWholePixels(magnet.backdrop.value.value)
+                alpha = swipe.backdrop.value
+            },
         )
         Box(Modifier.graphicsLayer { translationX = onWholePixels(swipe.shift.value.value + magnet.lean.value.value) }) {
             EntryItem(
@@ -548,14 +552,14 @@ internal fun EntryMenu(entry: HistoryEntry, at: Offset, expanded: Boolean, onDis
         }
         DropdownMenuGroup(shapes = MenuDefaults.groupShape(0, 2)) {
             keep.forEachIndexed { index, item ->
-                MenuRow(item, menuItemShape(index, keep.size), onDismiss)
+                MenuRow(item, MenuDefaults.itemShape(index, keep.size).shape, onDismiss)
             }
         }
         Spacer(Modifier.height(MenuDefaults.GroupSpacing))
         DropdownMenuGroup(shapes = MenuDefaults.groupShape(1, 2)) {
             MenuRow(
                 MenuEntry(R.string.delete, R.drawable.ic_delete) { actions.onDelete(entry) },
-                menuItemShape(0, 1),
+                MenuDefaults.itemShape(0, 1).shape,
                 onDismiss,
                 destructive = true,
             )

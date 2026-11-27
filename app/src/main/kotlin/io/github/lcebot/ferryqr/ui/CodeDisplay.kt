@@ -12,12 +12,12 @@ import android.view.Window
 import android.view.WindowManager
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.core.Animatable
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBars
@@ -39,24 +39,29 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.lerp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import io.github.lcebot.ferryqr.R
+import io.github.lcebot.ferryqr.generate.CodeDrawing
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
 /** Space kept clear around a code shown over the whole window, as its quiet zone and more. */
@@ -128,9 +133,9 @@ private fun KeepScreenOn() {
  * when it closes, even when the activity was recreated for the turn. A screen about to turn fades
  * the code in and out instead, since the card's code is where it was only in the window's earlier
  * shape.
- * [drawTall], when given, draws a long code again as tall as the window lets it be, so its bars or
- * rows grow rather than a scaled picture. Any other code keeps its own shape and the screen its
- * orientation.
+ * [drawing], the code drawn from its content, is drawn again for a long code as tall as the window
+ * lets it be, so its bars or rows grow rather than a scaled picture. Any other code keeps its own
+ * shape and the screen its orientation.
  */
 @Composable
 fun CodeOverlay(
@@ -138,7 +143,7 @@ fun CodeOverlay(
     brighten: Boolean,
     source: Rect?,
     onDismiss: () -> Unit,
-    drawTall: ((Float) -> Bitmap?)? = null,
+    drawing: CodeDrawing? = null,
     long: Boolean = true,
 ) {
     Dialog(
@@ -238,7 +243,7 @@ fun CodeOverlay(
                     }
                 if (long) {
                     // Bars taller than the code is wide add nothing a reader needs.
-                    FilledTallCode(code, drawTall, codeModifier.size(maxWidth, minOf(maxHeight, maxWidth)))
+                    FilledTallCode(code, drawing, codeModifier.size(maxWidth, minOf(maxHeight, maxWidth)))
                 } else {
                     // Sized to the code's own shape, so it grows from and back into the code it came from.
                     val aspect = code.width.toFloat() / code.height
@@ -262,22 +267,35 @@ fun CodeOverlay(
 }
 
 /**
- * A code drawn on white; [stretch] fills the area exactly, for a code drawn at the area's own
- * shape. Drawn larger than its pixels, a code keeps the edges of its modules sharp only unsmoothed,
- * since smoothing a few pixels per module across a whole screen blurs every edge; drawn smaller,
- * smoothing keeps thin modules from dropping out.
+ * A code drawn on white, in the middle of the area [modifier] gives it; [stretch] fills the area
+ * exactly, for a code drawn at the area's own shape. Drawn larger than its pixels, a code keeps the
+ * edges of its modules sharp only unsmoothed, since smoothing a few pixels per module across a whole
+ * screen blurs every edge; drawn smaller, smoothing keeps thin modules from dropping out. A
+ * [picture], a photographed code or one drawn with curves at a size of its own, has no modules a
+ * pixel wide to keep sharp, so it is smoothed at any size.
+ *
+ * The size is read only while drawing, so an area that resizes on every frame draws the code again
+ * without composing it again.
  */
 @Composable
-internal fun PlainCode(code: Bitmap, modifier: Modifier, stretch: Boolean) {
+internal fun PlainCode(code: Bitmap, modifier: Modifier, stretch: Boolean, picture: Boolean = false) {
     val image = remember(code) { code.asImageBitmap() }
-    BoxWithConstraints(modifier.clip(MaterialTheme.shapes.medium).background(Color.White), contentAlignment = Alignment.Center) {
-        val scale = minOf(constraints.maxWidth.toFloat() / code.width, constraints.maxHeight.toFloat() / code.height)
-        Image(
-            bitmap = image,
-            contentDescription = null,
-            contentScale = if (stretch) ContentScale.FillBounds else ContentScale.Fit,
-            filterQuality = if (scale >= 1f) FilterQuality.None else FilterQuality.Medium,
-            modifier = Modifier.fillMaxSize(),
-        )
-    }
+    Spacer(
+        modifier
+            .clip(MaterialTheme.shapes.medium)
+            .background(Color.White)
+            .drawBehind {
+                val scale = minOf(size.width / image.width, size.height / image.height)
+                val shown = if (stretch) size else Size(image.width * scale, image.height * scale)
+                drawImage(
+                    image = image,
+                    dstOffset = IntOffset(
+                        ((size.width - shown.width) / 2).roundToInt(),
+                        ((size.height - shown.height) / 2).roundToInt(),
+                    ),
+                    dstSize = IntSize(shown.width.roundToInt(), shown.height.roundToInt()),
+                    filterQuality = if (!picture && scale >= 1f) FilterQuality.None else FilterQuality.Medium,
+                )
+            },
+    )
 }

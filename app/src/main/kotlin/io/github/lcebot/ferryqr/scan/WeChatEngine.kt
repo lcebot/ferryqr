@@ -16,6 +16,7 @@ import org.opencv.core.Core
 import org.opencv.core.CvType
 import org.opencv.core.Mat
 import org.opencv.core.MatOfByte
+import org.opencv.core.MatOfPoint2f
 import org.opencv.core.Scalar
 import org.opencv.core.Size
 import org.opencv.dnn.Dnn
@@ -58,14 +59,17 @@ class Survey(val read: List<Detection>, val located: List<MiniCode>, val regions
 }
 
 /**
- * Where [WeChatEngine.upright] turns frames, kept from one frame to the next by the one thread that
- * reads them, since a new luma plane for every look would keep the garbage collector busy on the
- * analysis thread just while a code waits to be read. It holds nothing until OpenCV is loaded.
+ * Where [WeChatEngine.upright] turns frames and the mini program check does its work, kept from one
+ * frame to the next by the one thread that reads them, since new buffers for every look would keep
+ * the garbage collector busy on the analysis thread just while a code waits to be read. It holds
+ * nothing until OpenCV is loaded.
  */
 class UprightBuffer {
     internal var mat: Mat? = null
 
     private var luma = ByteArray(0)
+    private var labels = IntArray(0)
+    private var points: MatOfPoint2f? = null
 
     /**
      * Room for [size] grey pixels, the frame's pixels copied out for the mini program code reader,
@@ -77,10 +81,24 @@ class UprightBuffer {
         return luma
     }
 
-    /** Gives the native image back at once rather than when the collector gets to it. */
+    /**
+     * Room for [size] component labels, which [MiniCodeCheck] reads out for every proposal it checks.
+     * Like [luma], it grows only with the region and may be longer than asked for.
+     */
+    internal fun labels(size: Int): IntArray {
+        if (labels.size < size) labels = IntArray(size)
+        return labels
+    }
+
+    /** The float points [MiniCodeCheck] turns each contour into for its enclosing circle. */
+    internal fun points(): MatOfPoint2f = points ?: MatOfPoint2f().also { points = it }
+
+    /** Gives the native memory back at once rather than when the collector gets to it. */
     fun release() {
         mat?.release()
         mat = null
+        points?.release()
+        points = null
     }
 }
 
@@ -194,28 +212,31 @@ class WeChatEngine(context: Context) {
 
     /**
      * [survey] on a grey image, such as one from [upright]; [gray] stays the caller's to release.
-     * With [buffer], the one [gray] was turned into, its pixels are read out into the buffer's room
-     * rather than a new array.
+     * With [buffer], the one [gray] was turned into, the mini program check and the read work in the
+     * buffer's room; without it, in room kept for this call only.
      */
     fun survey(gray: Mat, look: Look, buffer: UprightBuffer? = null): Survey {
         if (!ensureReady()) return Survey.NONE
+        val scratch = buffer ?: UprightBuffer()
         return try {
             val boxes = synchronized(lock) { proposals(gray, look.detectorArea) }
-            val proposed = boxes.mapNotNull { MiniCodeCheck.inRegion(gray, it.second) }.distinctBy(::cellOf)
-            val searched = if (look.wholeImageSearch) MiniCodeCheck.inImage(gray)?.takeIf { code -> proposed.none { it.overlaps(code) } } else null
+            val proposed = boxes.mapNotNull { MiniCodeCheck.inRegion(gray, it.second, scratch) }.distinctBy(::cellOf)
+            val searched = if (look.wholeImageSearch) MiniCodeCheck.inImage(gray, scratch)?.takeIf { code -> proposed.none { it.overlaps(code) } } else null
             val mini = proposed + listOfNotNull(searched)
             val regions = boxes
                 .filter { (score, box) -> score >= QR_REGION_SCORE && mini.none { it.covers(box) } }
                 .map { it.second }
             if (mini.isEmpty()) return Survey(emptyList(), emptyList(), regions)
             val size = gray.cols() * gray.rows()
-            val pixels = buffer?.luma(size) ?: ByteArray(size)
+            val pixels = scratch.luma(size)
             gray.get(0, 0, pixels)
             val frame = LumaImage(pixels, gray.cols(), gray.rows())
             val read = mini.associateWith { it.read(frame) }
             Survey(read.values.filterNotNull(), read.filterValues { it == null }.keys.toList(), regions)
         } catch (t: Throwable) {
             Survey.NONE
+        } finally {
+            if (buffer == null) scratch.release()
         }
     }
 
@@ -243,17 +264,24 @@ class WeChatEngine(context: Context) {
         val h = gray.rows()
         val scale = min(1.0, sqrt(area / (w.toDouble() * h)))
         val small = Mat()
-        Imgproc.resize(gray, small, Size((w * scale).toInt().toDouble(), (h * scale).toInt().toDouble()), 0.0, 0.0, Imgproc.INTER_CUBIC)
-        val blob = Dnn.blobFromImage(small, 1.0 / 255, Size(small.cols().toDouble(), small.rows().toDouble()), Scalar(0.0), false, false)
-        net.setInput(blob, "data")
-        val out = net.forward("detection_output")
+        var blob: Mat? = null
+        var out: Mat? = null
+        // The caller swallows a throwing net, so anything allocated here is released even then,
+        // or every survey on a device where the net misbehaves would leak native memory.
         try {
+            Imgproc.resize(gray, small, Size((w * scale).toInt().toDouble(), (h * scale).toInt().toDouble()), 0.0, 0.0, Imgproc.INTER_CUBIC)
+            blob = Dnn.blobFromImage(small, 1.0 / 255, Size(small.cols().toDouble(), small.rows().toDouble()), Scalar(0.0), false, false)
+            net.setInput(blob, "data")
+            out = net.forward("detection_output")
             val rows = (out.total() / 7).toInt()
             if (rows == 0) return emptyList()
             val values = FloatArray(rows * 7)
             val flat = out.reshape(1, rows)
-            flat.get(0, 0, values)
-            flat.release()
+            try {
+                flat.get(0, 0, values)
+            } finally {
+                flat.release()
+            }
             val boxes = ArrayList<Pair<Float, Rect>>()
             for (i in 0 until rows) {
                 val o = i * 7
@@ -268,8 +296,8 @@ class WeChatEngine(context: Context) {
             return boxes.sortedByDescending { it.first }.take(MAX_PROPOSALS)
         } finally {
             small.release()
-            blob.release()
-            out.release()
+            blob?.release()
+            out?.release()
         }
     }
 

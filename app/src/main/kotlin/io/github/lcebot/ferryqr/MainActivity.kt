@@ -5,7 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.ViewModelProvider
-import io.github.lcebot.ferryqr.dispatch.Launch
+import io.github.lcebot.ferryqr.dispatch.InstalledApps
 import io.github.lcebot.ferryqr.ui.FerryApp
 import io.github.lcebot.ferryqr.ui.FerryTheme
 
@@ -26,6 +26,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        Launch.forgetApps()
+        // Apps may have been installed or removed, or a default browser chosen, while FerryQR was away.
+        InstalledApps.invalidate()
     }
 }

@@ -112,18 +112,6 @@ object CodeGenerator {
         return Generated.Unfit(problem ?: CodeRules.unencodable(type), alternatives)
     }
 
-    /** [text] drawn as [type], upscaled for display and export; null when it does not fit. */
-    fun draw(text: String, type: CodeType, heightRatio: Float? = null): Bitmap? =
-        (generate(text, type, heightRatio) as? Generated.Code)?.bitmap?.let(::forExport)
-
-    /**
-     * Draws a read code again from its [text] so it can be scanned from the screen, upscaled for
-     * display. [format] is the reader's name for the original symbology; when FerryQR cannot write
-     * that one, or the content does not fit it, a QR code carries the same content instead.
-     */
-    fun redraw(text: String, format: String): Bitmap? =
-        CodeType.ofReaderName(format)?.let { draw(text, it) } ?: draw(text, CodeType.QR)
-
     /** Integer upscaling keeps module edges sharp. */
     fun forExport(code: Bitmap, target: Int = 1024): Bitmap {
         val factor = max(1, target / max(code.width, code.height))
@@ -168,5 +156,55 @@ object CodeGenerator {
             }
         }
         return Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
+    }
+}
+
+/**
+ * How many heights a [CodeDrawing] keeps drawings for: the area a code grows to, the whole window,
+ * and the last few an area passed through while it resized.
+ */
+private const val TALL_KEPT = 4
+
+/**
+ * [text] drawn as [type], one pixel per module in [base], which screens scale up unsmoothed and
+ * exports upscale by themselves. A long code shown in an area taller than [base] is drawn again by
+ * [tall], so its bars or rows grow rather than a scaled picture. Each height is drawn once and kept,
+ * so a code enlarged again, or shown again by a card built again, takes the drawing it had.
+ * Nothing recycles these bitmaps: a screen may still show one after the drawing has let it go.
+ */
+class CodeDrawing(val text: String, val type: CodeType, val base: Bitmap) {
+
+    /** The tall drawings by height ratio, the one used last at the end. */
+    private val talls = object : LinkedHashMap<Float, Bitmap>(TALL_KEPT, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Float, Bitmap>?): Boolean = size > TALL_KEPT
+    }
+
+    /** The drawing for [ratio] when it is drawn already, which is quick enough for the main thread. */
+    fun drawnTall(ratio: Float): Bitmap? = synchronized(talls) { talls[ratio] }
+
+    /**
+     * The code drawn with bars or rows [ratio] times as tall as it is wide, as [CodeGenerator.generate]
+     * takes its height ratio. A code as tall as a screen takes a while to draw, so this belongs off
+     * the main thread.
+     */
+    fun tall(ratio: Float): Bitmap? {
+        drawnTall(ratio)?.let { return it }
+        val drawn = (CodeGenerator.generate(text, type, ratio) as? Generated.Code)?.bitmap ?: return null
+        synchronized(talls) { talls[ratio] = drawn }
+        return drawn
+    }
+
+    companion object {
+        /** [text] drawn as [type], or null when it does not fit. */
+        fun of(text: String, type: CodeType): CodeDrawing? =
+            (CodeGenerator.generate(text, type) as? Generated.Code)?.let { CodeDrawing(text, type, it.bitmap) }
+
+        /**
+         * A read code drawn again from its [text] so it can be scanned from the screen. [format] is
+         * the reader's name for the original symbology; when FerryQR cannot write that one, or the
+         * content does not fit it, a QR code carries the same content instead.
+         */
+        fun redraw(text: String, format: String): CodeDrawing? =
+            CodeType.ofReaderName(format)?.let { of(text, it) } ?: of(text, CodeType.QR)
     }
 }

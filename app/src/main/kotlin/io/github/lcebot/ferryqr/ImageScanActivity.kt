@@ -12,22 +12,26 @@ import androidx.core.view.WindowCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import io.github.lcebot.ferryqr.dispatch.Launch
+import io.github.lcebot.ferryqr.dispatch.CardSource
+import io.github.lcebot.ferryqr.dispatch.InstalledApps
+import io.github.lcebot.ferryqr.dispatch.Origin
 import io.github.lcebot.ferryqr.dispatch.ReadContent
+import io.github.lcebot.ferryqr.dispatch.ResultCard
 import io.github.lcebot.ferryqr.history.HistoryStore
 import io.github.lcebot.ferryqr.openin.OpenInModule
-import io.github.lcebot.ferryqr.scan.Detection
 import io.github.lcebot.ferryqr.scan.Engines
+import io.github.lcebot.ferryqr.scan.Found
 import io.github.lcebot.ferryqr.scan.StillOutcome
-import io.github.lcebot.ferryqr.scan.isLocatedMiniCode
-import io.github.lcebot.ferryqr.scan.locatedCrop
 import io.github.lcebot.ferryqr.scan.readStillImage
 import io.github.lcebot.ferryqr.scan.thumbnail
 import io.github.lcebot.ferryqr.ui.FerryTheme
 import io.github.lcebot.ferryqr.ui.ImageScanSheet
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -56,7 +60,8 @@ class ImageScanActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        Launch.forgetApps()
+        // Apps may have been installed or removed, or a default browser chosen, while FerryQR was away.
+        InstalledApps.invalidate()
     }
 
     private fun imageUri(intent: Intent): Uri? = when (intent.action) {
@@ -73,40 +78,41 @@ class ImageScanActivity : ComponentActivity() {
 sealed interface ImageScan {
     data object Unreadable : ImageScan
 
-    /**
-     * The codes read, each with its [contents] entry, read once for its card, its tile and history,
-     * its [thumbnails] entry for the chooser and, for a mini program code only located, its
-     * [locatedCrops] entry for WeChat, null where there is none; [miniCrop] is the one mini program
-     * code located when nothing was read.
-     */
-    class Read(
-        val detections: List<Detection>,
-        val contents: List<ReadContent>,
-        val thumbnails: List<Bitmap?>,
-        val locatedCrops: List<Bitmap?>,
-        val miniCrop: Bitmap?,
-    ) : ImageScan
+    /** The [codes] found, or with none, [miniCrop], the one mini program code located when nothing was read. */
+    class Read(val codes: List<ImageCode>, val miniCrop: Bitmap?) : ImageScan
 
     companion object {
         fun of(outcome: StillOutcome): ImageScan = when (outcome) {
             StillOutcome.Unreadable -> Unreadable
-            StillOutcome.Empty -> Read(emptyList(), emptyList(), emptyList(), emptyList(), miniCrop = null)
-            is StillOutcome.LocatedMini -> Read(emptyList(), emptyList(), emptyList(), emptyList(), miniCrop = outcome.crop)
+            StillOutcome.Empty -> Read(emptyList(), miniCrop = null)
+            is StillOutcome.LocatedMini -> Read(emptyList(), miniCrop = outcome.crop)
             is StillOutcome.Codes -> {
                 val frame = outcome.frame
-                val detections = outcome.detections
-                val many = detections.size > 1
+                val kept = outcome.codes.mapNotNull { found ->
+                    // A located code that cannot be cut from the image would leave WeChat nothing to scan.
+                    val crop = (found as? Found.Located)?.let { it.crop(frame) ?: return@mapNotNull null }
+                    found to crop
+                }
+                // Thumbnails are cut only for the chooser, which shows only for more than one code.
+                val many = kept.size > 1
                 Read(
-                    detections = detections,
-                    contents = detections.map { ReadContent.of(it.text, it.format) },
-                    thumbnails = detections.map { if (many) it.thumbnail(frame) else null },
-                    locatedCrops = detections.map { if (it.isLocatedMiniCode) it.locatedCrop(frame) else null },
+                    codes = kept.map { (found, crop) ->
+                        val content = (found as? Found.Read)?.detection?.let { ReadContent.of(it.text, it.format) }
+                        ImageCode(found, content, if (many) found.thumbnail(frame) else null, crop)
+                    },
                     miniCrop = null,
                 ).also { outcome.release() }
             }
         }
     }
 }
+
+/**
+ * A code [found] in a shared or opened image, as its sheet shows it: a code that was read has its
+ * [content], read once for its card, its tile and history, and a mini program code only located has
+ * its [crop] for WeChat instead. [thumbnail] shows it in the chooser when the image holds several.
+ */
+class ImageCode(val found: Found, val content: ReadContent?, val thumbnail: Bitmap?, val crop: Bitmap?)
 
 class ImageScanViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -115,32 +121,69 @@ class ImageScanViewModel(app: Application) : AndroidViewModel(app) {
     private val history = HistoryStore.get(app)
     private var loaded = false
 
-    /** The code recorded last, which the activity shows again when it is recreated, as on rotation. */
+    /**
+     * The content of the code shown last, null for a mini program code only located, which a
+     * recreated activity shows again, as after a change of theme or language, without recording it twice.
+     */
     private var recorded: ReadContent? = null
+
+    /** The read image and the index of the code its sheet shows, null for its mini program code. */
+    private var shown: Pair<ImageScan.Read, Int?>? = null
 
     /** Null while the image is still being read. */
     private val _result = MutableStateFlow<ImageScan?>(null)
     val result = _result.asStateFlow()
 
-    /** The image is read once per activity, so a rotation shows the same result. */
+    private val _outcomes = Channel<ImageScan>(Channel.BUFFERED)
+
+    /**
+     * The image as it is read, once, for the sheet to let the user feel how the reading went. Kept
+     * until the sheet takes it, and never sent again, so a sheet made again, as after a change of theme or language, does
+     * not play it a second time.
+     */
+    val outcomes = _outcomes.receiveAsFlow()
+
+    private val cards = CardHolder(app, viewModelScope)
+
+    /** The card of the code the sheet shows. */
+    val card: StateFlow<ResultCard?> = cards.card
+
+    /** The image is read once per activity, so an activity made again shows the same result. */
     fun load(uri: Uri) {
         if (loaded) return
         loaded = true
         viewModelScope.launch {
             val outcome = readStillImage(getApplication<Application>(), uri, zxing, wechat)
             // Cutting the thumbnails and crops from the image takes a moment, so it stays off the main thread.
-            _result.value = withContext(Dispatchers.Default) { ImageScan.of(outcome) }
+            val read = withContext(Dispatchers.Default) { ImageScan.of(outcome) }
+            _result.value = read
+            _outcomes.send(read)
         }
         viewModelScope.launch { OpenInModule.refresh() }
     }
 
     /**
-     * Records [content] as the code the sheet shows. Switching to another code records that one,
-     * as opening it would; showing the same code again, as a recreated activity does, records nothing.
+     * Shows the card of the code at [index] among those [scan] read, or with no index, the card of
+     * the mini program code located when nothing was read. Showing the same code again, as a
+     * recreated activity does, neither builds its card again nor records it. Switching to another
+     * code records that one, as opening it would, and keeps the card shown until the next is built,
+     * so the sheet never empties. A mini program code that could not be read has no content to
+     * route; WeChat gets its picture.
      */
-    fun shown(content: ReadContent) {
-        if (content == recorded) return
-        recorded = content
-        history.record(content)
+    fun show(scan: ImageScan.Read, index: Int?) {
+        if (shown?.let { (read, at) -> read === scan && at == index } == true) return
+        shown = scan to index
+        val source = if (index != null) {
+            val code = scan.codes[index]
+            val content = code.content
+            if (content != recorded) {
+                recorded = content
+                if (content != null) history.record(content)
+            }
+            content?.let { CardSource.Read(it, Origin.IMAGE) } ?: code.crop?.let { CardSource.LocatedMini(it, Origin.IMAGE) }
+        } else {
+            scan.miniCrop?.let { CardSource.LocatedMini(it, Origin.IMAGE) }
+        }
+        cards.show(source, keep = true)
     }
 }

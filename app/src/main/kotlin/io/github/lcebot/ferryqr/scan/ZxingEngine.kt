@@ -66,9 +66,9 @@ class ZxingEngine {
      * Reads [region] with each deep reader in turn, at the full resolution the fast read loses once
      * it downscales. It costs a few milliseconds, far less than the WeChat decoder, so it is tried
      * first. Positions come back in the pixels of the frame [region] was cut from. The scanner and
-     * the image sheet share one engine and these readers with it, so one reads at a time.
+     * the image sheet may read with one engine at once: each read hands its options to a native call
+     * that keeps nothing between calls.
      */
-    @Synchronized
     fun readRegion(region: RegionCrop): List<Detection> {
         for (reader in deep) {
             val found = reader.read(region.image).mapNotNull { it.toDetection() }

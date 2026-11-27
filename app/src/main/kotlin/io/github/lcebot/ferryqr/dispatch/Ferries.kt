@@ -21,15 +21,15 @@ internal sealed interface Ferry {
     val pkg: String
 
     /**
-     * Whether handing content over opens it, rather than only the app's scanner, when [ready] holds
-     * the packages of the apps that take content through the module.
+     * Whether handing content over opens it, rather than only the app's scanner, by the apps that
+     * take content through the module in [env].
      */
-    fun isReady(ready: Set<String>): Boolean
+    fun isReady(env: FerryEnv): Boolean
 
     /** Whether the app's scanner can read a picture from the gallery, which without the module is the way in. */
     val album: Boolean
 
-    fun installed(context: Context) = Launch.isInstalled(context, pkg)
+    fun installed(env: FerryEnv): Boolean = env.installed(pkg)
 
     /**
      * What the app is called on buttons and in messages. Naming an app the system finds asks the
@@ -72,7 +72,7 @@ internal class ActiveFerry(
     val exclusive: Boolean = false,
     private val handoff: (Activity, String) -> Boolean,
 ) : Ferry {
-    override fun isReady(ready: Set<String>): Boolean = route != Route.MODULE || pkg in ready
+    override fun isReady(env: FerryEnv): Boolean = route != Route.MODULE || pkg in env.ready
 
     override fun label(context: Context): String = context.getString(name)
 
@@ -81,7 +81,7 @@ internal class ActiveFerry(
 
 /** An app the system opens a code in by itself, through the [intent] the app registered for. */
 internal class PassiveFerry(override val pkg: String, private val intent: Intent) : Ferry {
-    override fun isReady(ready: Set<String>): Boolean = true
+    override fun isReady(env: FerryEnv): Boolean = true
     override val album: Boolean get() = false
 
     override fun label(context: Context): String = Launch.appLabel(context, pkg) ?: pkg
@@ -136,14 +136,14 @@ internal object PassiveFerries {
      * for a web link, or the app that registers a link's scheme. Null when nothing registers it, or
      * when several apps do and the system would ask which to use.
      */
-    fun of(context: Context, payload: Payload): PassiveFerry? {
+    fun of(env: FerryEnv, payload: Payload): PassiveFerry? {
         val intent = when (payload) {
             is WebPayload -> Launch.linkIntent(payload.url)
             is SchemePayload -> Launch.schemeIntent(payload.uri, payload.scheme)
             is OtpPayload -> Launch.linkIntent(payload.raw)
             else -> null
         } ?: return null
-        return Launch.handler(context, intent)?.let { PassiveFerry(it, intent) }
+        return Launch.handler(env.context, intent, env.browsers)?.let { PassiveFerry(it, intent) }
     }
 }
 
@@ -157,14 +157,15 @@ internal object Ferries {
      * A general app's links are never left to the system: one on another app's domain, such as
      * WeChat's sign-in on a Meituan page, still belongs to it. A link that is no app's own but goes
      * to a general app by the system's choice goes that app's own way while it is ready, since that
-     * way opens any link. [ready] holds the packages of the apps that take content through the module.
+     * way opens any link. Readiness is the one [env] holds. Ranking asks the package manager, so it is
+     * asked through [FerryEnv.rank], which works it out once for a card or a plan.
      */
-    fun rank(context: Context, payload: Payload, ready: Set<String>): List<Ferry> {
+    fun rank(env: FerryEnv, payload: Payload): List<Ferry> {
         val owner = ActiveFerries.claimant(payload)
-        val ownerReady = owner?.isReady(ready) == true
-        val passive = if (payload is WebPayload && owner?.general == true) null else PassiveFerries.of(context, payload)
+        val ownerReady = owner?.isReady(env) == true
+        val passive = if (payload is WebPayload && owner?.general == true) null else PassiveFerries.of(env, payload)
         val found: Ferry? = passive?.let { p ->
-            ActiveFerries.of(p.pkg)?.takeIf { payload is WebPayload && it.general && it.isReady(ready) } ?: p
+            ActiveFerries.of(p.pkg)?.takeIf { payload is WebPayload && it.general && it.isReady(env) } ?: p
         }
         return listOfNotNull(
             owner?.takeIf { ownerReady },
@@ -186,6 +187,6 @@ internal object Ferries {
         }
 
     /** Every app offered for [payload]: the [rank]ed ones, then the [general] ones. */
-    fun offered(context: Context, payload: Payload, ready: Set<String>): List<Ferry> =
-        rank(context, payload, ready).let { it + general(payload, it) }
+    fun offered(env: FerryEnv, payload: Payload): List<Ferry> =
+        env.rank(payload).let { it + general(payload, it) }
 }

@@ -9,18 +9,14 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialTheme
@@ -35,24 +31,26 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.FilterQuality
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.constrainHeight
+import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.lcebot.ferryqr.AppSettings
 import io.github.lcebot.ferryqr.LongCodeEnlarge
 import io.github.lcebot.ferryqr.R
+import io.github.lcebot.ferryqr.generate.CodeDrawing
 import io.github.lcebot.ferryqr.generate.CodeType
 
 /** The code's height while small; a wide linear code grows sideways from it. */
@@ -74,7 +72,7 @@ private class Place {
 
 /**
  * The code a card shows and how it is drawn. [tall] is the code drawn again for a stretched area,
- * null while it is drawn or when the code is not stretched.
+ * null while it is drawn or when the code is not stretched. A [picture] is not drawn from content.
  */
 private data class CardDrawing(
     val format: CodeType,
@@ -82,6 +80,7 @@ private data class CardDrawing(
     val tall: Bitmap?,
     val tilted: Boolean,
     val stretched: Boolean,
+    val picture: Boolean,
 )
 
 /**
@@ -91,8 +90,10 @@ private data class CardDrawing(
  * outgrow the screen. A [long] code, a barcode or a PDF417, is tilted along the diagonal,
  * stretched taller, or shown level over the whole window, as the settings choose, and a tilted one
  * stays level when the area is wide anyway. [onChangeFormat], when given, is a long press.
- * [drawTall] draws the code again as tall as a stretched code has to be for every unit of width,
- * so it grows taller bars rather than a scaled picture; without it the picture is scaled.
+ * [drawing] is the code drawn from its content when [bitmap] is its base; a stretched code is drawn
+ * again from it as tall as it has to be for every unit of width, so it grows taller bars rather
+ * than a scaled picture. Without it, [bitmap] is a picture, such as a photographed code, scaled and
+ * smoothed like one.
  * [format] is what [bitmap] is drawn as: a drawing in another format crossfades in while the area
  * resizes to it, and one in the same format, as when the card is built again, simply replaces it.
  */
@@ -103,7 +104,7 @@ internal fun CodeImage(
     long: Boolean,
     onChangeFormat: (() -> Unit)?,
     modifier: Modifier = Modifier,
-    drawTall: ((Float) -> Bitmap?)? = null,
+    drawing: CodeDrawing? = null,
 ) {
     val context = LocalContext.current
     val haptics = rememberHaptics()
@@ -130,20 +131,20 @@ internal fun CodeImage(
             stretched -> minOf(room, maxWidth)
             else -> bigWidth / aspect
         }
-        // Drawn for the size the code grows to rather than each size on the way, and again for a new
-        // drawing, which changes with the format.
-        val tall = rememberTallCode(bitmap, tallRatio(bigHeight, bigWidth), drawTall.takeIf { stretched && enlarged })
+        val areaWidth = if (enlarged) bigWidth else small
+        val areaHeight = when {
+            enlarged -> bigHeight
+            tilted -> small / aspect + TILTED_FRAME
+            else -> small / aspect
+        }
+        // Drawn for the size the code grows to rather than each size on the way, and again for new
+        // content, which changes with the format. It is kept while the code is small, so enlarging
+        // it again shows the same drawing at once.
+        val tall = rememberTallCode(drawing, tallRatio(bigHeight, bigWidth), wanted = stretched && enlarged)
         val spatial = MaterialTheme.motionScheme.defaultSpatialSpec<Dp>()
-        val width by animateDpAsState(if (enlarged) bigWidth else small, spatial, label = "code-width")
-        val height by animateDpAsState(
-            targetValue = when {
-                enlarged -> bigHeight
-                tilted -> small / aspect + TILTED_FRAME
-                else -> small / aspect
-            },
-            animationSpec = spatial,
-            label = "code-height",
-        )
+        // Read only while the area is laid out, so the springs resize it without composing it again.
+        val width = animateDpAsState(areaWidth, spatial, label = "code-width")
+        val height = animateDpAsState(areaHeight, spatial, label = "code-height")
         val clickLabel = stringResource(if (enlarged) R.string.code_shrink else R.string.code_enlarge)
         val longClickLabel = stringResource(R.string.code_change_format)
         fun tap() {
@@ -164,12 +165,17 @@ internal fun CodeImage(
             // The area takes its size from the springs above, so the transition only crossfades
             // inside it and both pictures share the one resize.
             AnimatedContent(
-                targetState = CardDrawing(format, bitmap, tall, tilted, stretched),
+                targetState = CardDrawing(format, bitmap, tall, tilted, stretched, picture = drawing == null),
                 contentKey = { it.format },
                 transitionSpec = { fadeIn(codeFade) togetherWith fadeOut(codeFade) using null },
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .size(width, height)
+                    .layout { measurable, constraints ->
+                        val shownWidth = constraints.constrainWidth(width.value.roundToPx())
+                        val shownHeight = constraints.constrainHeight(height.value.roundToPx())
+                        val placeable = measurable.measure(Constraints.fixed(shownWidth, shownHeight))
+                        layout(shownWidth, shownHeight) { placeable.place(0, 0) }
+                    }
                     .onGloballyPositioned { place.coordinates = it },
                 label = "card-code",
             ) { drawn ->
@@ -177,6 +183,7 @@ internal fun CodeImage(
                     // The card turns inside its area, so a ripple on that area would not match its outline.
                     TiltedCode(
                         drawn.bitmap,
+                        DpSize(areaWidth, areaHeight),
                         Modifier.fillMaxSize().combinedClickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
@@ -187,31 +194,22 @@ internal fun CodeImage(
                         ),
                     )
                 } else {
-                    Box(
-                        modifier = Modifier
+                    PlainCode(
+                        drawn.tall ?: drawn.bitmap,
+                        Modifier
                             .fillMaxSize()
                             .clip(MaterialTheme.shapes.largeIncreased)
-                            .background(Color.White)
                             .combinedClickable(
                                 onClickLabel = clickLabel,
                                 onLongClickLabel = if (longPress != null) longClickLabel else null,
                                 onLongClick = longPress,
                                 onClick = ::tap,
                             ),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        val picture = drawn.tall ?: drawn.bitmap
-                        val shown = remember(picture) { picture.asImageBitmap() }
-                        Image(
-                            bitmap = shown,
-                            contentDescription = null,
-                            // Drawn at its new height, the stretched code fills the area exactly once it is there,
-                            // and its bars only grow or shrink in height on the way.
-                            contentScale = if (drawn.stretched) ContentScale.FillBounds else ContentScale.Fit,
-                            filterQuality = FilterQuality.Medium,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    }
+                        // Drawn at its new height, the stretched code fills the area exactly once it is
+                        // there, and its bars only grow or shrink in height on the way.
+                        stretch = drawn.stretched,
+                        picture = drawn.picture,
+                    )
                 }
             }
             val fade = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
@@ -237,5 +235,5 @@ internal fun CodeImage(
         }
     }
     if (brighten && enlarged) FullBrightness()
-    if (overlay) CodeOverlay(bitmap, brighten, source, onDismiss = { overlay = false }, drawTall = drawTall)
+    if (overlay) CodeOverlay(bitmap, brighten, source, onDismiss = { overlay = false }, drawing = drawing)
 }

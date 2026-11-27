@@ -64,14 +64,15 @@ private const val MUTE_KEEP_MS = 1500L
  * Once it has reported a result it reports nothing more until [resume] or [reset], so the frames
  * that arrive before the scanner takes the result up cannot report it a second time.
  *
- * Runs on a single analysis thread; only [paused], [reset] and [resume] are touched from elsewhere.
+ * Runs on a single analysis thread, and reports through its callbacks there; only [paused], [reset]
+ * and [resume] are touched from elsewhere.
  */
 class LiveAnalyzer(
     private val zxing: ZxingEngine,
     private val wechat: WeChatEngine,
     private val autoZoom: AutoZoom,
     private val onSighting: (Sighting?) -> Unit,
-    private val onHit: (frame: Bitmap, detections: List<Detection>, alreadyShown: Set<String>) -> Unit,
+    private val onHit: (frame: Bitmap, codes: List<Found>, alreadyShown: Set<String>) -> Unit,
     private val onMiniCode: (crop: Bitmap) -> Unit,
 ) : ImageAnalysis.Analyzer {
 
@@ -83,7 +84,7 @@ class LiveAnalyzer(
         var wechatAt = 0L
     }
 
-    /** Set by the scanner while it is doing anything but scanning, so frames are let go unread. */
+    /** Set by the scanner whenever it would not take what a frame shows, so frames are let go unread. */
     @Volatile
     var paused = false
 
@@ -432,18 +433,18 @@ class LiveAnalyzer(
     }
 
     /**
-     * Reports what was collected, with mini program codes located but still unread as located
-     * entries, and hands the frame on with it.
+     * Reports what was collected, with the mini program codes located but still unread, and hands
+     * the frame on with it.
      */
     private fun finish(frame: UprightFrame, shown: Set<String>) {
         val upright = frame.get()
-        val located = candidates.mapNotNull { it.mini?.asLocatedDetection(upright.width, upright.height) }
-        val detections = collected.values.toList() + located
+        val located = candidates.mapNotNull { it.mini?.locatedIn(upright.width, upright.height) }
+        val codes = collected.values.map(Found::Read) + located
         startOver()
         reported = true
         onSighting(null)
         frame.handedOn = true
-        onHit(upright, detections, shown)
+        onHit(upright, codes, shown)
     }
 }
 

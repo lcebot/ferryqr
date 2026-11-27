@@ -70,6 +70,8 @@ private val STILL_BLUR = 20.dp
 /**
  * The camera's picture over the whole of the bounds [modifier] gives it. [contentPadding] is the
  * part the page's bars cover, so the indicator a reset shows sits in the middle of what stays in view.
+ * [onSettled] hears whenever the bound camera's picture shows and whenever the camera fails to show
+ * one, so what waits for the camera a reset binds never waits on a camera that cannot run.
  */
 @Composable
 fun CameraPreview(
@@ -80,6 +82,7 @@ fun CameraPreview(
     torch: Torch,
     onZoom: (Float) -> Unit,
     onUnavailable: () -> Unit,
+    onSettled: () -> Unit,
     scanning: Boolean,
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
@@ -94,10 +97,15 @@ fun CameraPreview(
     // The veil spans the whole viewfinder and moves on the scheme's slow springs.
     val slowEffects = MaterialTheme.motionScheme.slowEffectsSpec<Float>()
     val currentSession by rememberUpdatedState(session)
+    // The session lives as long as the lifecycle owner, across compositions that pass new callbacks.
+    val zoomChanged by rememberUpdatedState(onZoom)
+    val unavailable by rememberUpdatedState(onUnavailable)
+    val settled by rememberUpdatedState(onSettled)
 
     LaunchedEffect(owner) {
         if (!cameraSession.connect(context)) {
-            onUnavailable()
+            unavailable()
+            settled()
             return@LaunchedEffect
         }
         try {
@@ -110,7 +118,8 @@ fun CameraPreview(
                     veil.freeze(still)
                 }
                 first = false
-                if (!cameraSession.bind(owner, onZoom, onUnavailable)) {
+                if (!cameraSession.bind(owner, { zoomChanged(it) }, { unavailable() })) {
+                    settled()
                     veil.fail()
                     return@collectLatest
                 }
@@ -119,11 +128,13 @@ fun CameraPreview(
                     // the reset as a failed binding does.
                     val opening = launch {
                         cameraSession.failed.first { it }
+                        settled()
                         veil.fail()
                     }
                     cameraSession.pictures(owner).collectLatest { shown ->
                         if (shown) {
                             opening.cancel()
+                            settled()
                             veil.reveal()
                         } else {
                             veil.close()

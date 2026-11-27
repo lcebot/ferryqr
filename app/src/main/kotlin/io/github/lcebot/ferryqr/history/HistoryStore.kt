@@ -5,10 +5,10 @@ import android.util.AtomicFile
 import io.github.lcebot.ferryqr.AppSettings
 import io.github.lcebot.ferryqr.dispatch.ContentNames
 import io.github.lcebot.ferryqr.dispatch.ReadContent
-import io.github.lcebot.ferryqr.scan.MINI_LOCATED_FORMAT
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.OutputStream
+import java.security.MessageDigest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -49,6 +49,32 @@ data class HistoryEntry(
 
     /** What the entry holds, read once for every place that shows, names or opens it. */
     val content: ReadContent get() = ReadContent.of(text, format)
+}
+
+/** Marks what is kept of an entry outside the app: its content itself, or only a digest of it. */
+private const val SAVED_TEXT = "text:"
+private const val SAVED_DIGEST = "sha256:"
+
+/** The SHA-256 digest of [text], in hexadecimal. */
+internal fun digestOf(text: String): String =
+    MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }
+
+/**
+ * What is kept of [entry] where the system holds it outside the app, as saved state while the
+ * process is gone and app shortcuts are: its content itself, unless it is of a sensitive kind, such
+ * as a two-factor key, that [settings] do not keep in history, when only a digest goes there. Either
+ * finds the entry again through [isSaved] once the history is read.
+ */
+fun savedForm(entry: HistoryEntry, settings: AppSettings): String {
+    val kind = entry.content.sensitiveKind
+    return if (kind == null || settings.keeps(kind).value) SAVED_TEXT + entry.text else SAVED_DIGEST + digestOf(entry.text)
+}
+
+/** Whether [entry] is the one kept as [saved], a [savedForm]. */
+fun isSaved(entry: HistoryEntry, saved: String): Boolean = when {
+    saved.startsWith(SAVED_TEXT) -> entry.text == saved.removePrefix(SAVED_TEXT)
+    saved.startsWith(SAVED_DIGEST) -> digestOf(entry.text) == saved.removePrefix(SAVED_DIGEST)
+    else -> false
 }
 
 /** What asking to make content a favorite, or to stop it being one, came to. */
@@ -154,10 +180,10 @@ class HistoryStore private constructor(private val context: Context) {
         }
     }
 
-    /** Waits for the file to be read, so a shortcut opened at launch still finds its entry. */
-    suspend fun find(text: String): HistoryEntry? = find { it.text == text }
-
-    /** The first entry [matching] takes, once the file is read. */
+    /**
+     * The first entry [matching] takes, once the file is read, so a shortcut opened at launch, or
+     * saved state brought back, still finds its entry.
+     */
     suspend fun find(matching: (HistoryEntry) -> Boolean): HistoryEntry? = entries.filterNotNull().first().find(matching)
 
     /**
@@ -170,12 +196,10 @@ class HistoryStore private constructor(private val context: Context) {
 
     /**
      * Records [content], read from a code that was shown or handed on, the one way scans enter
-     * history. A mini program code that was only located has no content to keep. Sensitive content
-     * is left out where the settings say so; an entry it already has stays as it was, and favoriting
-     * such content still keeps it, as the user asked for that.
+     * history. Sensitive content is left out where the settings say so; an entry it already has
+     * stays as it was, and favoriting such content still keeps it, as the user asked for that.
      */
     fun record(content: ReadContent) {
-        if (content.format == MINI_LOCATED_FORMAT) return
         val kind = content.sensitiveKind
         if (kind != null && !AppSettings.of(context).keeps(kind).value) return
         addEntry(content.text, content.format)

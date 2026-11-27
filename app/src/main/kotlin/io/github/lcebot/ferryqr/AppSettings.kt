@@ -121,6 +121,13 @@ class AppSettings private constructor(context: Context) {
     /** Whether history already suggested showing favorites as tiles, which it does once. */
     val tilesSuggested = flag(history, KEY_TILES_SUGGESTED)
 
+    /**
+     * Whether the camera permission was ever refused in the system's prompt. Android tells a refusal
+     * for good from a prompt merely dismissed only by a refusal coming before it, and that refusal
+     * may have been in an earlier run of the app.
+     */
+    val cameraRefused = flag(settings, KEY_CAMERA_REFUSED)
+
     private val keeps = ConcurrentHashMap<SensitiveKind, Setting<Boolean>>()
 
     /** Whether scans of [kind] go into history. */
@@ -150,6 +157,7 @@ class AppSettings private constructor(context: Context) {
         private const val KEY_FOLDED_ROWS = "folded_rows"
         private const val KEY_FAVORITES_FOLDED = "favorites_folded"
         private const val KEY_TILES_SUGGESTED = "tiles_suggested"
+        private const val KEY_CAMERA_REFUSED = "camera_refused"
         private const val CAMERA_FEED_KEY = "camera_feed:"
 
         /** How many rows folded favorites can show, and how many they show until set. */

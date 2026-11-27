@@ -64,30 +64,19 @@ internal object Launch {
         }
     }
 
-    /** The browsers as last asked, kept until [forgetApps], since every link card asks for them. */
-    @Volatile
-    private var knownBrowsers: Set<String>? = null
-
-    /** The apps that open any web link, which is what makes an app a browser. */
-    private fun browsers(context: Context): Set<String> = knownBrowsers
-        ?: query(context, browsable(ANY_WEB_LINK), PackageManager.MATCH_DEFAULT_ONLY)
-            .mapTo(HashSet()) { it.activityInfo.packageName }
-            .also { knownBrowsers = it }
-
     /**
-     * Forgets what was learned about the installed apps, for when FerryQR comes back to the screen,
-     * since apps may have been installed or removed, or a default browser chosen, in the meantime.
+     * The apps that open any web link, which is what makes an app a browser, asked afresh on each call. Every link
+     * card asks for them, so they are asked through [InstalledApps.browsers], which keeps them.
      */
-    fun forgetApps() {
-        knownBrowsers = null
-    }
+    fun findBrowsers(context: Context): Set<String> =
+        query(context, browsable(ANY_WEB_LINK), PackageManager.MATCH_DEFAULT_ONLY).mapTo(HashSet()) { it.activityInfo.packageName }
 
     /**
      * The default browser, or the only one. Without either, the system asks which app to use, and
      * a link with a verified App Link goes to its app instead.
      */
     private fun browserPackage(context: Context): String? {
-        val browsers = browsers(context)
+        val browsers = InstalledApps.browsers(context)
         val default = resolve(context, browsable(ANY_WEB_LINK), PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName
         return default?.takeIf { it in browsers } ?: browsers.singleOrNull()
     }
@@ -116,20 +105,21 @@ internal object Launch {
      * The app other than a browser that the system opens [intent] in without asking, such as one
      * with a verified App Link for a web link, which is where [nonBrowser] goes too. Null when it
      * goes to a browser, or when the system would ask, since no one app is chosen then. The
-     * manifest queries for every app with links, which is what lets the app be seen here.
+     * manifest queries for every app with links, which is what lets the app be seen here. [browsers]
+     * are the apps that open any web link.
      */
-    fun handler(context: Context, intent: Intent): String? {
+    fun handler(context: Context, intent: Intent, browsers: Set<String>): String? {
         val chosen = resolve(context, intent, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo ?: return null
         // The system's chooser resolves too, but is not among the activities that match the link.
         val matches = query(context, intent, PackageManager.MATCH_DEFAULT_ONLY)
             .any { it.activityInfo.packageName == chosen.packageName && it.activityInfo.name == chosen.name }
         val pkg = chosen.packageName
-        return pkg.takeIf { matches && it != context.packageName && it !in browsers(context) }
+        return pkg.takeIf { matches && it != context.packageName && it !in browsers }
     }
 
     /** Where [intent] goes: the app the system picks without asking, several it asks between, or none. */
     fun handling(context: Context, intent: Intent): Handling {
-        handler(context, intent)?.let { return Handling.App(it) }
+        handler(context, intent, InstalledApps.browsers(context))?.let { return Handling.App(it) }
         return if (query(context, intent, PackageManager.MATCH_DEFAULT_ONLY).isEmpty()) Handling.None else Handling.Asks
     }
 

@@ -41,8 +41,7 @@ import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.dispatch.CardAction
 import io.github.lcebot.ferryqr.dispatch.CardSection
 import io.github.lcebot.ferryqr.dispatch.ResultCard
-import io.github.lcebot.ferryqr.generate.CodeGenerator
-import io.github.lcebot.ferryqr.generate.CodeRules
+import io.github.lcebot.ferryqr.generate.CodeDrawing
 import io.github.lcebot.ferryqr.generate.CodeType
 import io.github.lcebot.ferryqr.scan.MINI_PROGRAM_FORMAT
 import kotlinx.coroutines.Dispatchers
@@ -67,8 +66,8 @@ fun ResultSheet(card: ResultCard, onClosed: (CloseReason) -> Unit) {
     }
 }
 
-/** A code's picture together with the format it is drawn in. */
-private data class Drawing(val bitmap: Bitmap, val type: CodeType)
+/** A code's picture together with the format it is drawn in, and the [code] it is the base of when drawn from content. */
+private data class Drawing(val bitmap: Bitmap, val type: CodeType, val code: CodeDrawing?)
 
 /**
  * The body of a result card, shared by the scanner's sheet and the image sheet. A code drawn again
@@ -90,18 +89,16 @@ fun ResultCardContent(
     // A mini program code means something only as one; its content drawn in another format would not.
     val switchable = card.exportable && card.raw.isNotEmpty() && card.format.isNotEmpty() && card.format != MINI_PROGRAM_FORMAT
     // What the card's own picture is drawn as: the original when the content fits it, as history
-    // redraws it, else the QR code it falls back to.
-    val drawnAs = remember(card.raw, original) {
-        original?.takeIf { CodeRules.problem(card.raw, it) == null } ?: CodeType.QR
-    }
+    // redraws it, else the QR code it falls back to. A picture not drawn from content counts as a
+    // QR code, which shows it square.
+    val drawnAs = card.drawing?.type ?: CodeType.QR
     // Drawn off the main thread. The picture and its format change together once the new drawing is
     // ready, so the code shown until then keeps the look of its own format.
-    val redrawn by produceState<Drawing?>(null, card.raw, shown) {
-        value = shown?.let { type ->
-            withContext(Dispatchers.Default) { CodeGenerator.draw(card.raw, type) }?.let { Drawing(it, type) }
-        }
+    val redrawn by produceState<CodeDrawing?>(null, card.raw, shown) {
+        value = shown?.let { type -> withContext(Dispatchers.Default) { CodeDrawing.of(card.raw, type) } }
     }
-    val drawing = redrawn?.takeIf { shown != null } ?: card.image?.let { Drawing(it, drawnAs) }
+    val drawing = redrawn?.takeIf { shown != null }?.let { Drawing(it.base, it.type, it) }
+        ?: card.image?.let { Drawing(it, drawnAs, card.drawing) }
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -120,16 +117,12 @@ fun ResultCardContent(
                 FavoriteToggle(card.raw, card.format, Modifier.offset(x = 12.dp))
             }
         }
-        drawing?.let { (bitmap, type) ->
+        drawing?.let { (bitmap, type, code) ->
             CodeImage(
                 bitmap = bitmap,
                 format = type,
                 long = type.long && bitmap.width > bitmap.height,
-                drawTall = if (switchable) {
-                    { ratio -> CodeGenerator.draw(card.raw, type, ratio) }
-                } else {
-                    null
-                },
+                drawing = code,
                 onChangeFormat = if (switchable) {
                     { picking = true }
                 } else {

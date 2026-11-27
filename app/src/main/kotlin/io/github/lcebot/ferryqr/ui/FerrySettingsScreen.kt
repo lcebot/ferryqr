@@ -58,7 +58,9 @@ import io.github.lcebot.ferryqr.dispatch.ActiveFerries
 import io.github.lcebot.ferryqr.dispatch.ActiveFerry
 import io.github.lcebot.ferryqr.dispatch.DefaultApp
 import io.github.lcebot.ferryqr.dispatch.DefaultApps
+import io.github.lcebot.ferryqr.dispatch.FerryEnv
 import io.github.lcebot.ferryqr.dispatch.Handling
+import io.github.lcebot.ferryqr.dispatch.InstalledApps
 import io.github.lcebot.ferryqr.dispatch.Launch
 import io.github.lcebot.ferryqr.dispatch.Route
 import io.github.lcebot.ferryqr.dispatch.SystemFeature
@@ -124,6 +126,7 @@ fun FerrySettingsScreen(onBack: () -> Unit) {
     var facts by remember { mutableStateOf(lastFacts) }
     LaunchedEffect(lifecycle) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            InstalledApps.invalidate()
             launch { OpenInModule.refresh() }
             val read = withContext(Dispatchers.IO) { readFacts(context) }
             lastFacts = read
@@ -374,8 +377,9 @@ private var lastFacts: SystemFacts? = null
 /** Asks everything the page shows in one pass, which belongs off the main thread as each question is a binder call. */
 private fun readFacts(context: Context): SystemFacts {
     val handling = DefaultApps.all.associateWith { it.handling(context) }
+    val env = FerryEnv(context)
     return SystemFacts(
-        installedPackages = ActiveFerries.all.filter { it.installed(context) }.mapTo(HashSet()) { it.pkg },
+        installedPackages = ActiveFerries.all.filter { it.installed(env) }.mapTo(HashSet()) { it.pkg },
         supported = SystemFeatures.all.filterTo(HashSet()) { it.supported(context) },
         handling = handling,
         labels = handling.values.filterIsInstance<Handling.App>()

@@ -10,22 +10,22 @@ import io.github.lcebot.ferryqr.content.Payload
 import io.github.lcebot.ferryqr.dispatch.CardFactory
 import io.github.lcebot.ferryqr.dispatch.CardSource
 import io.github.lcebot.ferryqr.dispatch.Dispatcher
+import io.github.lcebot.ferryqr.dispatch.FerryEnv
 import io.github.lcebot.ferryqr.dispatch.LaunchPlan
 import io.github.lcebot.ferryqr.dispatch.Origin
 import io.github.lcebot.ferryqr.dispatch.ReadContent
-import io.github.lcebot.ferryqr.dispatch.ResultCard
 import io.github.lcebot.ferryqr.history.HistoryStore
 import io.github.lcebot.ferryqr.openin.OpenInModule
 import io.github.lcebot.ferryqr.scan.AutoZoom
 import io.github.lcebot.ferryqr.scan.Detection
 import io.github.lcebot.ferryqr.scan.Engines
+import io.github.lcebot.ferryqr.scan.Found
 import io.github.lcebot.ferryqr.scan.FrozenFrame
 import io.github.lcebot.ferryqr.scan.LiveAnalyzer
 import io.github.lcebot.ferryqr.scan.Sighting
 import io.github.lcebot.ferryqr.scan.StillOutcome
-import io.github.lcebot.ferryqr.scan.isLocatedMiniCode
-import io.github.lcebot.ferryqr.scan.locatedCrop
 import io.github.lcebot.ferryqr.scan.readStillImage
+import io.github.lcebot.ferryqr.scan.soleRead
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlinx.coroutines.Dispatchers
@@ -33,9 +33,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.launchIn
-import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -51,7 +48,7 @@ sealed interface Phase {
     /** [alreadyShown] holds codes whose markers were on screen before the frame froze. */
     data class Picking(
         val frame: FrozenFrame,
-        val detections: List<Detection>,
+        val codes: List<Found>,
         val alreadyShown: Set<String> = emptySet(),
         val origin: Origin = Origin.CAMERA,
     ) : Phase
@@ -60,15 +57,11 @@ sealed interface Phase {
     data object Routing : Phase
 
     /**
-     * The card for [source] shows, and the screen builds it again whenever an app's readiness
-     * changes. [card], when set, is the one built first, for the readiness [builtFor]; a mini
-     * program code located but not read comes without one, its card built as it shows.
+     * The card for [source] shows, as [ScanViewModel.card] holds it. A code that was routed has its
+     * card there as the phase turns; a mini program code located but not read has its card built as
+     * it shows.
      */
-    data class Showing(
-        val source: CardSource,
-        val card: ResultCard? = null,
-        val builtFor: Set<String>? = null,
-    ) : Phase
+    data class Showing(val source: CardSource) : Phase
 }
 
 /**
@@ -86,19 +79,45 @@ data class Confirmation(
 
 /**
  * A code that may go straight to its app, which only an activity can start: the screen tries
- * [plan] on its way, and shows [card], built for [source], when no app takes the code. [id] tells
- * it from the codes routed before it, which the user may have moved on from.
+ * [plan] on its way, and shows the card for [source] when no app takes the code. [id] tells it from
+ * the codes routed before it, which the user may have moved on from.
  */
 class RouteEffect(
     val id: Long,
     val payload: Payload,
     val origin: Origin,
     val plan: LaunchPlan,
-    val card: ResultCard,
     val source: CardSource,
 )
 
+/**
+ * Something that happened once, for the screen to show or to let the user feel as it takes it up,
+ * so a screen made again never plays it a second time.
+ */
+sealed interface ScanEvent {
+    class Message(@StringRes val text: Int) : ScanEvent
+
+    /** A mini program code was located but not read, and its card shows. */
+    data object MiniCodeFound : ScanEvent
+}
+
 class ScanViewModel(app: Application) : AndroidViewModel(app) {
+
+    /** What the analyzer reports from its own thread, for the main thread to take up. */
+    private sealed interface Report {
+        /** Lets go of what the report holds, once the scanner has moved on from it. */
+        fun release() {}
+
+        class Sighted(val sighting: Sighting?) : Report
+
+        class Hit(val frame: Bitmap, val codes: List<Found>, val alreadyShown: Set<String>) : Report {
+            override fun release() = frame.recycle()
+        }
+
+        class MiniCode(val crop: Bitmap) : Report {
+            override fun release() = crop.recycle()
+        }
+    }
 
     private val zxing = Engines.zxing
     private val wechat = Engines.wechat(app)
@@ -106,6 +125,11 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _phase = MutableStateFlow<Phase>(Phase.Scanning)
     val phase = _phase.asStateFlow()
+
+    private val cards = CardHolder(app, viewModelScope)
+
+    /** The card of the code [Phase.Showing] shows. */
+    val card = cards.card
 
     /**
      * The confirmation on screen. Until it hands its code on, the phase stays [Phase.Scanning] and
@@ -120,90 +144,117 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     private val _sighting = MutableStateFlow<Sighting?>(null)
     val sighting = _sighting.asStateFlow()
 
-    private val _messages = Channel<Int>(Channel.BUFFERED)
+    private val _events = Channel<ScanEvent>(Channel.BUFFERED)
 
     /**
-     * Messages for the screen to show, each once. Kept until the screen takes them, so a message
-     * sent while the activity is made again, as when an image finishes decoding, still shows.
+     * Events for the screen, each taken up once. Kept until the screen takes them, so an event sent
+     * while the activity is made again, as when an image finishes decoding, still shows.
      */
-    val messages = _messages.receiveAsFlow()
+    val events = _events.receiveAsFlow()
 
     /** Bumped by [manualReset] so the camera is bound again from scratch. */
     private val _cameraSession = MutableStateFlow(0)
     val cameraSession = _cameraSession.asStateFlow()
 
+    /**
+     * Set by [manualReset] until the camera it binds again shows its picture or fails, while the
+     * frames of the camera on its way out would still show the codes the reset forgets.
+     */
+    private var awaitingCamera = false
+
+    /**
+     * The analyzer's reports, taken up in order on the main thread, which alone changes the phase
+     * and the confirmation. Unlimited, so no report that holds a frame is turned away unreleased.
+     */
+    private val reports = Channel<Report>(Channel.UNLIMITED)
+
     val analysisExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     val autoZoom = AutoZoom()
     val analyzer = LiveAnalyzer(
         zxing, wechat, autoZoom,
-        onSighting = { _sighting.value = it },
-        onHit = ::onLiveHit,
-        onMiniCode = { crop ->
-            val taken = _confirmation.value == null &&
-                _phase.compareAndSet(Phase.Scanning, miniCodeFound(crop, live = true))
-            if (!taken) crop.recycle()
-        },
+        onSighting = { report(Report.Sighted(it)) },
+        onHit = { frame, codes, alreadyShown -> report(Report.Hit(frame, codes, alreadyShown)) },
+        onMiniCode = { report(Report.MiniCode(it)) },
     )
 
     init {
         viewModelScope.launch { OpenInModule.refresh() }
-        // Frames are read only while scanning and no confirmation waits to hand its code on. Both
-        // reach this collector a moment after they change, so from a hit until then the analyzer
-        // holds back by itself.
-        combine(_phase, _confirmation) { phase, confirmation ->
-            phase != Phase.Scanning || confirmation?.handedOn == false
-        }.onEach { analyzer.paused = it }.launchIn(viewModelScope)
+        viewModelScope.launch {
+            for (report in reports) take(report)
+        }
+    }
+
+    /** Sent from the analysis thread; a report turned away once the scanner is gone lets go of its frame. */
+    private fun report(report: Report) {
+        if (reports.trySend(report).isFailure) report.release()
+    }
+
+    /** Whether the scanner takes what the camera reads: scanning, with nothing confirmed and no reset under way. */
+    private val reading: Boolean
+        get() = _phase.value == Phase.Scanning && _confirmation.value == null && !awaitingCamera
+
+    /**
+     * Every change of the phase or the confirmation, made on the main thread. The analyzer is paused
+     * or let read in the same step, so it reads no frame the scanner would not take.
+     */
+    private fun move(phase: Phase = _phase.value, confirmation: Confirmation? = _confirmation.value) {
+        _phase.value = phase
+        _confirmation.value = confirmation
+        analyzer.paused = !reading
     }
 
     /**
-     * Takes a live hit only while the scanner is still scanning: a frame read just as an image from
-     * the gallery started decoding, or as anything else took over, is dropped with its frame.
+     * Takes up a report while the scanner reads. One read from a frame the analyzer had already
+     * started on as the scanner moved on, to a reset, a gallery image or the picker, is let go.
      */
-    private fun onLiveHit(frame: Bitmap, detections: List<Detection>, alreadyShown: Set<String>) {
-        if (detections.size == 1) {
-            val single = detections.single()
-            val next = Confirmation(single, frame.width, frame.height, single.text in alreadyShown)
-            // The confirmation keeps only the frame's size.
-            frame.recycle()
-            if (_phase.value == Phase.Scanning && _confirmation.compareAndSet(null, next)) {
-                // The main thread may have moved the scanner on between the check and the write.
-                // It turns the phase before it clears the confirmation, so a move made meanwhile
-                // shows here, and the confirmation is taken back before it plays over what came next.
-                if (_phase.value != Phase.Scanning) _confirmation.compareAndSet(next, null)
-            }
+    private fun take(report: Report) {
+        if (!reading) {
+            report.release()
             return
         }
-        val taken = _confirmation.value == null &&
-            _phase.compareAndSet(Phase.Scanning, Phase.Picking(FrozenFrame(frame), detections, alreadyShown))
-        if (!taken) frame.recycle()
+        when (report) {
+            is Report.Sighted -> _sighting.value = report.sighting
+            is Report.Hit -> onLiveHit(report.frame, report.codes, report.alreadyShown)
+            is Report.MiniCode -> showMiniCode(report.crop, Origin.CAMERA)
+        }
+    }
+
+    /** A single code read is confirmed on screen before it goes on; several are offered to pick from. */
+    private fun onLiveHit(frame: Bitmap, codes: List<Found>, alreadyShown: Set<String>) {
+        val single = codes.soleRead()
+        if (single == null) {
+            move(Phase.Picking(FrozenFrame(frame), codes, alreadyShown))
+            return
+        }
+        // The confirmation keeps only the frame's size.
+        val confirmation = Confirmation(single, frame.width, frame.height, single.text in alreadyShown)
+        frame.recycle()
+        move(confirmation = confirmation)
     }
 
     /**
-     * The screen has confirmed [detection] and hands it on. A confirmation still leaving the screen
-     * as the next code is confirmed is not the one in view, and only ends; one whose scanner went on
-     * to a gallery image meanwhile leaves without handing its code on.
+     * The screen has confirmed [detection] and hands it on. A confirmation the scanner has let go of
+     * meanwhile, as for a gallery image, or one still leaving the screen as the next code is
+     * confirmed, hands nothing on.
      */
     fun confirmed(detection: Detection) {
         val confirming = _confirmation.value ?: return
         if (confirming.detection != detection || confirming.handedOn) return
-        if (_phase.value != Phase.Scanning) {
-            _confirmation.compareAndSet(confirming, null)
-            return
-        }
-        _confirmation.value = confirming.copy(handedOn = true)
+        move(confirmation = confirming.copy(handedOn = true))
         route(detection, Origin.CAMERA)
     }
 
     /** A tap on a picker already leaving, after a pick or a close, goes nowhere. */
-    fun pick(detection: Detection) {
+    fun pick(code: Found) {
         val picking = _phase.value as? Phase.Picking ?: return
-        if (detection.isLocatedMiniCode) {
+        when (code) {
+            is Found.Read -> route(code.detection, picking.origin)
             // A mini program code that could not be read is offered to WeChat as its picture.
-            val crop = detection.locatedCrop(picking.frame.bitmap)
-            if (crop != null) _phase.value = miniCodeFound(crop, live = picking.origin == Origin.CAMERA) else resume()
-            return
+            is Found.Located -> {
+                val crop = code.crop(picking.frame.bitmap)
+                if (crop != null) showMiniCode(crop, picking.origin) else resume()
+            }
         }
-        route(detection, picking.origin)
     }
 
     /** Back to scanning from the picker, unless the picker is already leaving after a pick. */
@@ -233,24 +284,29 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * Takes a code that was read where it goes: its content is read once and kept in history at
      * once, and the same reading gives, off the main thread, its way to its app and its card, which
-     * both ask the package manager. Both are then handed to the screen to try.
+     * both ask the package manager. The way is handed to the screen to try, and the card is kept for
+     * when no app takes the code. The card is built at once all the same, so it shows the moment
+     * the code goes nowhere.
      */
     private fun route(detection: Detection, origin: Origin) {
         val id = ++lastRoute
-        _phase.value = Phase.Routing
+        move(Phase.Routing)
         val app = getApplication<Application>()
         // Kept in history at once, so a scan leaving the scanner straight away is kept all the same.
         val content = ReadContent.of(detection.text, detection.format)
         history.record(content)
         viewModelScope.launch {
-            // Read once, so the way the code goes and the card shown if it goes nowhere agree.
-            val ready = OpenInModule.readyApps.value
-            val effect = withContext(Dispatchers.Default) {
-                val source = CardSource.Read(content, origin)
-                val plan = Dispatcher.plan(app, content.payload, ready)
-                RouteEffect(id, content.payload, origin, plan, CardFactory.build(app, source, ready), source)
+            // One env for both, so the way the code goes and the card shown if it goes nowhere agree,
+            // and the apps are ranked and looked up once.
+            val env = FerryEnv(app)
+            val source = CardSource.Read(content, origin)
+            val (plan, built) = withContext(Dispatchers.Default) {
+                Dispatcher.plan(env, content.payload) to CardFactory.build(env, source)
             }
-            _routes.send(effect)
+            // The holder takes the card at once, though the sheet shows it only once the phase
+            // turns, so the sheet has it from its first frame.
+            if (id == lastRoute && _phase.value == Phase.Routing) cards.show(source, built, env)
+            _routes.send(RouteEffect(id, content.payload, origin, plan, source))
         }
     }
 
@@ -260,8 +316,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
      * is made again while the card shows.
      */
     fun releaseConfirmation(detection: Detection) {
-        val shown = _confirmation.value ?: return
-        if (shown.detection == detection) _confirmation.compareAndSet(shown, null)
+        if (_confirmation.value?.detection == detection) move(confirmation = null)
     }
 
     /**
@@ -270,17 +325,26 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun isCurrent(effect: RouteEffect): Boolean = effect.id == lastRoute && _phase.value is Phase.Routing
 
-    /** No app took the routed code, so its card shows. */
+    /** No app took the routed code, so its card shows, unless the scanner has moved on from it. */
     fun show(effect: RouteEffect) {
-        if (effect.id != lastRoute) return
-        _phase.compareAndSet(Phase.Routing, Phase.Showing(effect.source, effect.card, effect.plan.ready))
+        if (isCurrent(effect)) move(Phase.Showing(effect.source))
     }
 
     /**
-     * A mini program code located but not read, shown as [crop]. [live] is set when the camera saw
-     * it, so WeChat's own scanner can still see it too.
+     * Shows a mini program code located but not read, as [crop], from [origin], and tells the screen,
+     * which lets the user feel it.
      */
-    private fun miniCodeFound(crop: Bitmap, live: Boolean) = Phase.Showing(CardSource.LocatedMini(crop, live))
+    private fun showMiniCode(crop: Bitmap, origin: Origin) {
+        val source = CardSource.LocatedMini(crop, origin)
+        cards.show(source)
+        move(Phase.Showing(source))
+        _events.trySend(ScanEvent.MiniCodeFound)
+    }
+
+    /** Lets go of the cards of the codes left behind, so none of them shows for the next code. */
+    private fun forgetCards() {
+        cards.show(null)
+    }
 
     /**
      * Back to scanning, muting what the phase left showed: the codes of a card or of the picker,
@@ -291,47 +355,57 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         val shown = (left as? Phase.Showing)?.source
         val dismissed = when {
             shown is CardSource.Read -> setOf(shown.content.text)
-            left is Phase.Picking -> left.detections.mapTo(HashSet()) { it.text }
+            left is Phase.Picking -> left.codes.filterIsInstance<Found.Read>().mapTo(HashSet()) { it.detection.text }
             else -> emptySet()
         }
-        val miniCode = shown is CardSource.LocatedMini && shown.live
+        val miniCode = shown is CardSource.LocatedMini && shown.origin == Origin.CAMERA
         autoZoom.reset()
         decoding?.cancel()
-        _confirmation.value = null
-        // The phase turns before the analyzer resumes: a result reported in between would find the
-        // scanner not scanning and be dropped, and the analyzer would then hold back for good.
-        _phase.value = Phase.Scanning
+        forgetCards()
         analyzer.resume(dismissed, miniCode)
+        move(Phase.Scanning, null)
     }
 
     /**
      * For a scanner that keeps failing: back to the base zoom even if the user zoomed, forget the
-     * codes that were just dismissed, and bind the camera again.
+     * codes that were just dismissed, and bind the camera again. No frame is read until the new
+     * camera's picture shows, as [cameraSettled] tells, since the camera on its way out would still
+     * show the codes forgotten; the first frame read after that starts the analyzer over.
      */
     fun manualReset() {
         autoZoom.forceReset()
         wechat.retryIfFailed()
         _sighting.value = null
         decoding?.cancel()
-        _confirmation.value = null
-        // The phase turns before the analyzer starts over, as in [resume].
-        _phase.value = Phase.Scanning
-        analyzer.reset()
+        forgetCards()
+        awaitingCamera = true
+        move(Phase.Scanning, null)
         _cameraSession.value++
         message(R.string.reset_done)
     }
 
+    /**
+     * The camera's picture shows, or the camera failed to show one. A reset waiting for it starts the
+     * analyzer over from here, which also clears a result the camera on its way out still reported,
+     * and frames are read again.
+     */
+    fun cameraSettled() {
+        if (!awaitingCamera) return
+        awaitingCamera = false
+        analyzer.reset()
+        move()
+    }
+
     fun message(@StringRes text: Int) {
-        _messages.trySend(text)
+        _events.trySend(ScanEvent.Message(text))
     }
 
     fun decodeImage(uri: Uri) {
         if (_phase.value == Phase.Decoding) return
         // A confirmation not yet handed on would route its code from under the image, and one
-        // already handed on was held for the scanner the image replaces. The phase turns first, so a
-        // live hit confirmed in between finds the scanner decoding and takes its own back.
-        _phase.value = Phase.Decoding
-        _confirmation.value = null
+        // already handed on was held for the scanner the image replaces.
+        move(Phase.Decoding, null)
+        forgetCards()
         decoding = viewModelScope.launch {
             val outcome = readStillImage(getApplication<Application>(), uri, zxing, wechat)
             // The scanner went on to something else while the image was read, which leaves it unused.
@@ -348,15 +422,18 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
                     message(R.string.no_code_found)
                     resume()
                 }
-                is StillOutcome.LocatedMini -> _phase.value = miniCodeFound(outcome.crop, live = false)
+                is StillOutcome.LocatedMini -> showMiniCode(outcome.crop, Origin.IMAGE)
                 // The image is decoded at up to 3000 pixels a side and is shown only by the picker,
                 // so for a single code it goes at once rather than whenever garbage collection comes
                 // round to it.
-                is StillOutcome.Codes -> if (outcome.detections.size == 1) {
-                    outcome.release()
-                    route(outcome.detections.single(), Origin.IMAGE)
-                } else {
-                    _phase.value = Phase.Picking(FrozenFrame(outcome.frame), outcome.detections, origin = Origin.IMAGE)
+                is StillOutcome.Codes -> {
+                    val single = outcome.codes.soleRead()
+                    if (single != null) {
+                        outcome.release()
+                        route(single, Origin.IMAGE)
+                    } else {
+                        move(Phase.Picking(FrozenFrame(outcome.frame), outcome.codes, origin = Origin.IMAGE))
+                    }
                 }
             }
         }
@@ -365,6 +442,10 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     override fun onCleared() {
         // The picker leaving with the activity never reports that it has left.
         (_phase.value as? Phase.Picking)?.frame?.release()
+        // Nothing takes up reports any longer: those waiting let go of their frames here, and those
+        // the analyzer still sends are turned away and let go as they come.
+        reports.close()
+        generateSequence { reports.tryReceive().getOrNull() }.forEach { it.release() }
         // Queued behind the frame being analysed, so the buffer goes only once nothing reads it.
         analysisExecutor.execute { analyzer.release() }
         analysisExecutor.shutdown()

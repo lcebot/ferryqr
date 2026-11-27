@@ -54,24 +54,24 @@ abstract class PageActivity : ComponentActivity() {
 }
 
 /**
- * Scan history. A favorite's app shortcut opens it on top of the scanner, with the favorite's
- * content to show, so going back still leads to the scanner.
+ * Scan history. A favorite's app shortcut opens it on top of the scanner, with the favorite to
+ * show, so going back still leads to the scanner.
  */
 class HistoryActivity : PageActivity() {
     private val vm by lazy { ViewModelProvider(this)[HistoryViewModel::class.java] }
 
     /** Shown once; after a configuration change it has already been handled. */
-    private var openText: String? = null
+    private var openSaved: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         if (savedInstanceState == null && intent?.action == FavoriteShortcuts.ACTION_SHOW) {
-            openText = intent.getStringExtra(FavoriteShortcuts.EXTRA_TEXT)
+            openSaved = intent.getStringExtra(FavoriteShortcuts.EXTRA_ENTRY)
         }
         super.onCreate(savedInstanceState)
     }
 
     @Composable
-    override fun Page() = HistoryScreen(vm, onBack = ::finish, openText = openText, onOpened = { openText = null })
+    override fun Page() = HistoryScreen(vm, onBack = ::finish, openSaved = openSaved, onOpened = { openSaved = null })
 }
 
 class GeneratorActivity : PageActivity() {
