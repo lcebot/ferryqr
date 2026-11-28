@@ -42,9 +42,9 @@ internal sealed class HistoryItem(val key: Any, val contentType: Any) {
  * a day keeps it too, and slides from its old place to its new one, when its old place was in view
  * as the move came and the list will lay its new place out in view. Otherwise it takes a key of its
  * own in its new place, so the move shows as the row fading out where it was and fading in where it
- * goes: the list would lay a row sliding to or from a place out of view just past the edge of the
- * view for as long as it slides, where a quick scroll shows it flashing by. A key once changed stays
- * with the row until its next move.
+ * goes: the list would start a row sliding in from out of view at a spot by the edge of the view,
+ * and hold one sliding out of view at such a spot, fixed to the view rather than among the rows,
+ * until it settles. A key once changed stays with the row until its next move.
  */
 internal class HistoryItems(private val listState: LazyListState) {
     /** The key each row listed goes by. */

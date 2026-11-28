@@ -53,6 +53,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
@@ -247,7 +248,18 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openSaved: String? =
                         listReorder = listReorder,
                     )
 
-                    ReorderAutoScroll(listState, section.reorder, padding.calculateBottomPadding())
+                    // The list holds an item that leaves the view while still sliding to its new place
+                    // at a spot fixed to the edge of the view until the slide settles, so a scroll would
+                    // leave it hanging at the top while the rows around it go on. Items therefore move only
+                    // while the list is not being scrolled, and a scroll lands those on their way at
+                    // once. A favorite held keeps them moving, as the list scrolls under it and the
+                    // favorites it passes make way.
+                    val reorder = section.reorder
+                    val itemsMove by remember(listState, reorder) {
+                        derivedStateOf { !listState.isScrollInProgress || reorder.held != null }
+                    }
+
+                    ReorderAutoScroll(listState, reorder, padding.calculateBottomPadding())
                     FollowDropZone(listReorder.zone, listReorder.zoneShown) { listReorder.landing }
 
                     val hasFavorites = favorites.isNotEmpty()
@@ -288,7 +300,7 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openSaved: String? =
                                         haptics.tap()
                                         if (listReorder.active) listReorder.finish() else listReorder.start(favorites)
                                     },
-                                    modifier = animateRow(),
+                                    modifier = animateRow(itemsMove),
                                 )
                                 HistoryItem.Tiles -> FavoriteTiles(
                                     board = board,
@@ -303,10 +315,10 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openSaved: String? =
                                     onLift = { if (section.foldable && section.folded) vm.setFolded(false) },
                                     // Above the rows around it, so a tile dragged or swiped past the
                                     // favorites stays in sight over them.
-                                    modifier = animateRow().zIndex(1f),
+                                    modifier = animateRow(itemsMove).zIndex(1f),
                                 )
                                 is HistoryItem.DayHeader ->
-                                    DayHeader(item.day, item.entries.first().time, onClear = { clearDay(item.entries) }, animateRow())
+                                    DayHeader(item.day, item.entries.first().time, onClear = { clearDay(item.entries) }, animateRow(itemsMove))
                                 // Favorites and the other entries are rows of one kind, composed in one
                                 // place, so a row that becomes a favorite or stops being one keeps its
                                 // composition as it moves and changes its look on its own motion.
@@ -326,9 +338,9 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openSaved: String? =
                                         list = magnetic,
                                         actions = actions,
                                         modifier = if (!item.favorite) {
-                                            animateRow(flyingBack = back)
+                                            animateRow(itemsMove, flyingBack = back)
                                         } else {
-                                            (if (dragged) Modifier else animateRow(flyingBack = back))
+                                            (if (dragged) Modifier else animateRow(itemsMove, flyingBack = back))
                                                 .zIndex(if (dragged) 1f else 0f)
                                                 .graphicsLayer { if (dragged) translationY = listReorder.dragOffset }
                                                 // Without a finger to drag with, the order changes a row at a time.
@@ -407,16 +419,24 @@ private fun HistoryCount(count: Int, fade: FiniteAnimationSpec<Float>) {
 }
 
 /**
- * Rows and headers fade in and out and slide to their new places with the theme's motion. A row
- * [flyingBack] into its place, brought back by undo after it was swiped away, is in view as it comes
- * rather than fading in.
+ * Rows and headers fade in and out and slide to their new places with the theme's motion while
+ * they [move]; otherwise they take their places at once. A row [flyingBack] into its place, brought
+ * back by undo after it was swiped away, is in view as it comes rather than fading in.
+ *
+ * An item that stops moving loses the whole modifier rather than only its placement spec: the list
+ * carries a slide under way on with the spec it started with, and ends it only for an item left
+ * with no motion at all, which also ends any fading in under way.
  */
 @Composable
-private fun LazyItemScope.animateRow(flyingBack: Boolean = false): Modifier = Modifier.animateItem(
-    fadeInSpec = if (flyingBack) null else MaterialTheme.motionScheme.defaultEffectsSpec(),
-    placementSpec = MaterialTheme.motionScheme.defaultSpatialSpec(),
-    fadeOutSpec = MaterialTheme.motionScheme.defaultEffectsSpec(),
-)
+private fun LazyItemScope.animateRow(move: Boolean, flyingBack: Boolean = false): Modifier = if (!move) {
+    Modifier
+} else {
+    Modifier.animateItem(
+        fadeInSpec = if (flyingBack) null else MaterialTheme.motionScheme.defaultEffectsSpec(),
+        placementSpec = MaterialTheme.motionScheme.defaultSpatialSpec(),
+        fadeOutSpec = MaterialTheme.motionScheme.defaultEffectsSpec(),
+    )
+}
 
 /**
  * The favorites' title, spaced from the list as a day's is, with its buttons at the end. The buttons
