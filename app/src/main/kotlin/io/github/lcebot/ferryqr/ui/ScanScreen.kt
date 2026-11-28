@@ -59,7 +59,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -109,10 +108,8 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
     val context = LocalContext.current
     val phase by vm.phase.collectAsStateWithLifecycle()
     val confirmation by vm.confirmation.collectAsStateWithLifecycle()
-    val session by vm.cameraSession.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
-    val torch = remember { Torch() }
-    var zoom by remember { mutableFloatStateOf(1f) }
+    val torch = vm.camera.torch
 
     val haptics = rememberHaptics()
     // Outcomes are felt as the scanner tells of them, once each, so a page made again never plays
@@ -134,12 +131,15 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
             }
         }
     }
+    // Codes are routed by what is installed and which apps the module serves, either of which may
+    // change while the scanner is out of sight, so both are asked again each time it appears.
+    RefreshAppFactsOnResume()
     // A code goes to its app from here, the only place with an activity to start it; each is tried
     // once, and only while the user has not moved on from it.
     LaunchedEffect(vm) {
         vm.routes.collect { effect ->
             if (!vm.isCurrent(effect)) return@collect
-            if (Dispatcher.autoLaunch(activity, effect.payload, effect.plan)) activity.finish() else vm.show(effect)
+            if (Dispatcher.autoLaunch(activity, effect.routing)) activity.finish() else vm.show(effect)
         }
     }
     // The sighting changes with nearly every frame while a code is in view; only the overlay that
@@ -153,7 +153,7 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
     val lookingCloser = rememberSteady(deep, showAfterMs = LOOKING_CLOSER_AFTER_MS, holdMs = LOOKING_CLOSER_HOLD_MS)
     // The zoom changes with every pinch event; the page reads only whether it is off the base, and
     // the pill alone reads the figure.
-    val zoomed by remember { derivedStateOf { abs(zoom - 1f) >= 0.05f } }
+    val zoomed by remember { derivedStateOf { abs(vm.camera.zoom - 1f) >= 0.05f } }
     // Back at the base zoom, the pill shows it for a moment before it leaves, so a zoom that comes
     // back to where it started is seen to arrive there.
     val zoomShown = rememberSteady(zoomed, showAfterMs = 0L, holdMs = ZOOM_HOLD_MS)
@@ -216,10 +216,13 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
                             modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 20.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
+                            // A code confirmed and on its way was held steady, which the hint keeps
+                            // saying while the badge plays on it and while it is routed, though the
+                            // scanner has let go of the sighting by then.
                             StatusPill(
                                 when {
                                     sighted && lookingCloser -> R.string.hint_looking
-                                    sighted -> R.string.hint_hold
+                                    sighted || confirmation != null || phase == Phase.Routing -> R.string.hint_hold
                                     else -> R.string.hint_aim
                                 },
                                 Modifier.weight(1f, fill = false),
@@ -231,7 +234,7 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
                                 exit = fadeOut(effects) + scaleOut(spatial) +
                                     shrinkHorizontally(resize, shrinkTowards = Alignment.Start, clip = false),
                             ) {
-                                ZoomPill({ zoom }, Modifier.padding(start = 8.dp))
+                                ZoomPill({ vm.camera.zoom }, Modifier.padding(start = 8.dp))
                             }
                         }
                     }
@@ -282,15 +285,7 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
                     Box(Modifier.fillMaxSize()) {
                         if (granted) {
                             CameraPreview(
-                                analyzer = vm.analyzer,
-                                executor = vm.analysisExecutor,
-                                autoZoom = vm.autoZoom,
-                                session = session,
-                                torch = torch,
-                                onZoom = { zoom = it },
-                                onUnavailable = { vm.message(R.string.no_camera) },
-                                onSettled = vm::cameraSettled,
-                                onStopped = vm::cameraStopped,
+                                camera = vm.camera,
                                 // A code being confirmed has its outcome, so tapping to focus ends with it.
                                 scanning = phase == Phase.Scanning && confirmation == null,
                                 contentPadding = padding,
@@ -315,7 +310,10 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
                     }
                 }
 
-                PageLoadingIndicator(phase == Phase.Decoding, Modifier.align(Alignment.Center))
+                // Centred in what the bars leave in view, as the indicator of a reset is.
+                Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                    PageLoadingIndicator(phase == Phase.Decoding)
+                }
             }
         }
 
@@ -338,6 +336,7 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
                     picking.frame.bitmap,
                     picking.codes,
                     picking.alreadyShown,
+                    picking::contentOf,
                     active = phase == picking,
                     onPick = vm::pick,
                     onClose = vm::closePicker,
@@ -517,7 +516,6 @@ private fun rememberCameraPermission(activity: Activity): CameraPermissionState 
         PackageManager.PERMISSION_GRANTED
 
     var granted by remember { mutableStateOf(check()) }
-    var asked by rememberSaveable { mutableStateOf(false) }
     // Set as the request goes out rather than when it is answered, so a page made again while the
     // system asks, as after a rotation, does not ask a second time.
     var requested by rememberSaveable { mutableStateOf(false) }
@@ -538,7 +536,6 @@ private fun rememberCameraPermission(activity: Activity): CameraPermissionState 
     }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         granted = it
-        asked = true
         if (it) forgetRefusals() else refusedForGood = !rationale() && refused.value
         noteRefusal()
     }
@@ -547,7 +544,7 @@ private fun rememberCameraPermission(activity: Activity): CameraPermissionState 
         launcher.launch(Manifest.permission.CAMERA)
     }
     LaunchedEffect(Unit) {
-        if (!granted && !asked && !requested) {
+        if (!granted && !requested) {
             requested = true
             request()
         }

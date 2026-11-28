@@ -6,9 +6,12 @@ import androidx.core.content.edit
 import io.github.lcebot.ferryqr.content.SensitiveKind
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 
 /** How long codes, barcodes and PDF417, grow when enlarged. */
 enum class LongCodeEnlarge { TILT, STRETCH, FULL_SCREEN }
@@ -133,6 +136,10 @@ class AppSettings private constructor(context: Context) {
     /** Whether scans of [kind] go into history. */
     fun keeps(kind: SensitiveKind): Setting<Boolean> =
         keeps.computeIfAbsent(kind) { flag(settings, "keep_" + it.name.lowercase(), it.keptByDefault) }
+
+    /** Whether scans of each sensitive kind go into history, following a change to any of them. */
+    val kept: Flow<Map<SensitiveKind, Boolean>>
+        get() = combine(SensitiveKind.entries.map { kind -> keeps(kind).flow.map { kind to it } }) { it.toMap() }
 
     private val cameraFeeds = ConcurrentHashMap<String, Setting<Boolean>>()
 

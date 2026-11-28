@@ -44,6 +44,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.boundsInWindow
@@ -59,13 +60,19 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import io.github.lcebot.ferryqr.R
-import io.github.lcebot.ferryqr.generate.CodeDrawing
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
 /** Space kept clear around a code shown over the whole window, as its quiet zone and more. */
 private val OVERLAY_MARGIN = 24.dp
+
+/**
+ * The white kept around a code on a card of its own: around the create page's code, around a tilted
+ * code, and around a long code stretched taller than its own shape, where it takes the place of the
+ * margin above and below the bars, which would otherwise stretch with them.
+ */
+internal val CODE_BORDER = 8.dp
 
 /**
  * The smallest width, in dp, of the screens on which the system ignores an app's orientation
@@ -139,9 +146,8 @@ internal fun KeepScreenOn() {
  * when it closes, even when the activity was recreated for the turn. A screen about to turn fades
  * the code in and out instead, since the card's code is where it was only in the window's earlier
  * shape. A large screen, where the system does not turn for the app, grows the code as it stays.
- * [drawing], the code drawn from its content, is drawn again for a long code as tall as the window
- * lets it be, so its bars or rows grow rather than a scaled picture. Any other code keeps its own
- * shape and the screen its orientation.
+ * A long code is stretched as tall as the window lets it be, as [PlainCode] stretches one. Any other
+ * code keeps its own shape and the screen its orientation.
  */
 @Composable
 fun CodeOverlay(
@@ -149,7 +155,6 @@ fun CodeOverlay(
     brighten: Boolean,
     source: Rect?,
     onDismiss: () -> Unit,
-    drawing: CodeDrawing? = null,
     long: Boolean = true,
 ) {
     Dialog(
@@ -215,12 +220,16 @@ fun CodeOverlay(
                 onDismiss()
             }
         }
-        PredictiveBackHandler { events ->
+        // Off while the overlay closes, since a gesture would take the code from the animation
+        // carrying it back to its source.
+        PredictiveBackHandler(enabled = !closing) { events ->
             try {
                 events.collect { event -> growth.snapTo(1f - BACK_SHRINK * event.progress) }
                 close()
             } catch (e: CancellationException) {
-                scope.launch { growth.animateTo(1f, spatial) }
+                // A tap that closes the overlay during a gesture ends the gesture too, and the code
+                // goes on back to its source rather than springing back to full size.
+                if (!closing) scope.launch { growth.animateTo(1f, spatial) }
                 throw e
             }
         }
@@ -252,12 +261,12 @@ fun CodeOverlay(
                     }
                 if (long) {
                     // Bars taller than the code is wide add nothing a reader needs.
-                    FilledTallCode(code, drawing, codeModifier.size(maxWidth, minOf(maxHeight, maxWidth)))
+                    PlainCode(code, codeModifier.size(maxWidth, minOf(maxHeight, maxWidth)), tall = true)
                 } else {
                     // Sized to the code's own shape, so it grows from and back into the code it came from.
                     val aspect = code.width.toFloat() / code.height
                     val width = minOf(maxWidth, maxHeight * aspect)
-                    PlainCode(code, codeModifier.size(width, width / aspect), stretch = true)
+                    PlainCode(code, codeModifier.size(width, width / aspect))
                 }
             }
             Text(
@@ -276,28 +285,47 @@ fun CodeOverlay(
 }
 
 /**
- * A code drawn on white, in the middle of the area [modifier] gives it; [stretch] fills the area
- * exactly, for a code drawn at the area's own shape. Drawn larger than its pixels, a code keeps the
- * edges of its modules sharp only unsmoothed, since smoothing a few pixels per module across a whole
- * screen blurs every edge; drawn smaller, smoothing keeps thin modules from dropping out. A
- * [picture], a photographed code or one drawn with curves at a size of its own, has no modules a
- * pixel wide to keep sharp, so it is smoothed at any size.
+ * A code drawn on white in the area [modifier] gives it, with corners rounded to [shape]: in the
+ * middle at the largest size its own shape fits, or, [tall], filling the area inside a white
+ * [CODE_BORDER]. A tall code is stretched from the rows holding the code, so the white above and
+ * below it in the drawing does not grow with its bars or rows. Drawn larger than its pixels, a code
+ * keeps the edges of its modules sharp only unsmoothed, since smoothing a few pixels per module
+ * across a whole screen blurs every edge; drawn smaller, smoothing keeps thin modules from dropping
+ * out. A [picture], a photographed code or one drawn with curves at a size of its own, has no
+ * modules a pixel wide to keep sharp, so it is smoothed at any size.
  *
  * The size is read only while drawing, so an area that resizes on every frame draws the code again
  * without composing it again.
  */
 @Composable
-internal fun PlainCode(code: Bitmap, modifier: Modifier, stretch: Boolean, picture: Boolean = false) {
+internal fun PlainCode(
+    code: Bitmap,
+    modifier: Modifier,
+    shape: Shape = MaterialTheme.shapes.medium,
+    tall: Boolean = false,
+    picture: Boolean = false,
+) {
     val image = remember(code) { code.asImageBitmap() }
+    val rows = remember(code, tall) { if (tall) inkedRows(code) else 0 until code.height }
     Spacer(
         modifier
-            .clip(MaterialTheme.shapes.medium)
+            .clip(shape)
             .background(Color.White)
             .drawBehind {
-                val scale = minOf(size.width / image.width, size.height / image.height)
-                val shown = if (stretch) size else Size(image.width * scale, image.height * scale)
+                val shown = if (tall) {
+                    val border = CODE_BORDER.toPx()
+                    Size((size.width - 2 * border).coerceAtLeast(0f), (size.height - 2 * border).coerceAtLeast(0f))
+                } else {
+                    val fit = minOf(size.width / image.width, size.height / image.height)
+                    Size(image.width * fit, image.height * fit)
+                }
+                // Whether a code is smoothed follows how wide its modules are drawn, which for a
+                // tall code is its scale across, as it is stretched only in height.
+                val scale = shown.width / image.width
                 drawImage(
                     image = image,
+                    srcOffset = IntOffset(0, rows.first),
+                    srcSize = IntSize(image.width, rows.last - rows.first + 1),
                     dstOffset = IntOffset(
                         ((size.width - shown.width) / 2).roundToInt(),
                         ((size.height - shown.height) / 2).roundToInt(),
@@ -307,4 +335,18 @@ internal fun PlainCode(code: Bitmap, modifier: Modifier, stretch: Boolean, pictu
                 )
             },
     )
+}
+
+/**
+ * The rows of [code] from the first to the last that hold any of the code, leaving out the white
+ * above and below it; all of them when none does.
+ */
+private fun inkedRows(code: Bitmap): IntRange {
+    val row = IntArray(code.width)
+    fun inked(y: Int): Boolean {
+        code.getPixels(row, 0, code.width, 0, y, code.width, 1)
+        return row.any { it != android.graphics.Color.WHITE }
+    }
+    val first = (0 until code.height).firstOrNull { inked(it) } ?: return 0 until code.height
+    return first..(code.height - 1 downTo first).first { inked(it) }
 }

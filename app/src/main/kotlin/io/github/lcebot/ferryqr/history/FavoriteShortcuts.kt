@@ -5,6 +5,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.os.Build
+import android.util.LruCache
 import androidx.core.content.ContextCompat
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
@@ -31,10 +32,13 @@ private const val LONG_LABEL = 25
 private const val FALLBACK_CONTAINER = 0xFFEADDFF.toInt()
 private const val FALLBACK_ON_CONTAINER = 0xFF21005D.toInt()
 
+/** Room for the icons of every kind the shortcuts and pinned favorites show at once. */
+private const val ICONS_KEPT = 16
+
 /**
  * Offers the favorites the user chose as app shortcuts, in the order of the favorites. Shortcuts
- * the user dragged onto the home screen cannot be removed by the app, so those of entries that are
- * no longer favorites are disabled, and the system explains why when one is tapped.
+ * the user dragged onto the home screen cannot be removed by the app, so pinned shortcuts to entries
+ * that are not favorites are disabled, and the system explains why when one is tapped.
  */
 object FavoriteShortcuts {
 
@@ -102,6 +106,15 @@ object FavoriteShortcuts {
         return builder.build()
     }
 
+    /** An icon as it is drawn: the glyph, its colours, and the size in pixels it is drawn at. */
+    private data class IconKey(val glyphRes: Int, val container: Int, val onContainer: Int, val size: Int)
+
+    /**
+     * Icons already drawn, so bringing the shortcuts in line draws only those of new kinds, or of
+     * new colours as the wallpaper changes them, rather than every icon again.
+     */
+    private val icons = LruCache<IconKey, IconCompat>(ICONS_KEPT)
+
     /** The kind's glyph on a tonal container, the way the system draws its own shortcut icons. */
     private fun icon(context: Context, glyphRes: Int): IconCompat {
         val (container, onContainer) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -111,7 +124,12 @@ object FavoriteShortcuts {
         }
         val density = context.resources.displayMetrics.density
         val size = (ICON_DP * density).roundToInt()
-        val glyphSize = (GLYPH_DP * density).roundToInt()
+        val key = IconKey(glyphRes, container, onContainer, size)
+        return icons.get(key) ?: draw(context, key, (GLYPH_DP * density).roundToInt()).also { icons.put(key, it) }
+    }
+
+    private fun draw(context: Context, key: IconKey, glyphSize: Int): IconCompat {
+        val (glyphRes, container, onContainer, size) = key
         val bitmap = createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         canvas.drawColor(container)

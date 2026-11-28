@@ -320,9 +320,9 @@
     <string name="code_save_failed">Could not save the image</string>
     <string name="code_share">Share image</string>
     <string name="code_share_failed">Could not share the image</string>
-    <string name="generate_too_long">Too long for %1$s. %2$s can hold it.</string>
+    <string name="generate_too_long">Too long for %1$s. Formats that fit: %2$s</string>
     <string name="generate_too_long_all">Too long for any code type</string>
-    <string name="generate_unfit">%1$s: %2$s. %3$s can hold it.</string>
+    <string name="generate_unfit">%1$s: %2$s. Formats that fit: %3$s</string>
     <string name="generate_unfit_all">%1$s: %2$s</string>
     <string name="format_auto">Auto: %1$s</string>
     <string name="format_auto_desc">Picks a format from the content</string>
@@ -354,7 +354,7 @@
     <string name="format_characters">Has characters this format cannot hold</string>
     <string name="format_rules">Does not follow the rules of this format</string>
     <string name="format_check_digit">The check digit should be %1$s</string>
-    <string name="generate_clip_label">Barcode</string>
+    <string name="generate_clip_label">Code</string>
     <string name="type_qr">QR Code</string>
     <string name="type_aztec" translatable="false">Aztec</string>
     <string name="type_data_matrix" translatable="false">Data Matrix</string>

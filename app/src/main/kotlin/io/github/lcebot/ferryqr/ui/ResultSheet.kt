@@ -4,11 +4,7 @@ package io.github.lcebot.ferryqr.ui
 
 import android.graphics.Bitmap
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -130,7 +126,7 @@ fun ResultCardContent(
                 bitmap = bitmap,
                 format = type,
                 long = type.long && bitmap.width > bitmap.height,
-                drawing = code,
+                picture = code == null,
                 onChangeFormat = if (switchable) {
                     { picking = true }
                 } else {
@@ -191,7 +187,7 @@ fun ResultCardContent(
 /**
  * A card's [text], selectable, which crossfades when a card built again says it another way, as one
  * does once an app becomes ready, while the card resizes for it on the spring its notes and actions
- * move on. It is left unclipped, so text keeps its edges while the spring undershoots its new size.
+ * move on.
  */
 @Composable
 private fun CardText(text: String, label: String, content: @Composable (String) -> Unit) {
@@ -199,7 +195,7 @@ private fun CardText(text: String, label: String, content: @Composable (String) 
     val resize = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
     AnimatedContent(
         targetState = text,
-        transitionSpec = { (fadeIn(fade) togetherWith fadeOut(fade)) using SizeTransform(clip = false) { _, _ -> resize } },
+        transitionSpec = { crossfadeResizing(fade, resize) },
         label = label,
     ) { shown ->
         SelectionContainer { content(shown) }

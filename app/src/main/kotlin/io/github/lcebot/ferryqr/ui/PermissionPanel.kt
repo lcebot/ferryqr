@@ -2,6 +2,10 @@
 
 package io.github.lcebot.ferryqr.ui
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
@@ -18,6 +22,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
@@ -54,12 +59,21 @@ fun PermissionPanel(openSettings: Boolean, onRequest: () -> Unit, modifier: Modi
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
+            val fade = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
+            val resize = MaterialTheme.motionScheme.fastSpatialSpec<Size>()
             Button(onClick = { haptics.tap(); onRequest() }, shapes = ButtonDefaults.shapes()) {
-                Text(
-                    stringResource(
-                        if (openSettings) R.string.camera_permission_settings else R.string.camera_permission_grant
-                    )
-                )
+                // Once a refusal leaves only the system's settings, the new label fades in over the
+                // old as the button springs to its width, both centred in it, as the scanner's hint
+                // does in its pill.
+                AnimatedContent(
+                    targetState = openSettings,
+                    modifier = Modifier.animateSize(resize, Alignment.Center),
+                    transitionSpec = { (fadeIn(fade) togetherWith fadeOut(fade)) using null },
+                    contentAlignment = Alignment.Center,
+                    label = "permission-action",
+                ) { settings ->
+                    Text(stringResource(if (settings) R.string.camera_permission_settings else R.string.camera_permission_grant))
+                }
             }
         }
     }

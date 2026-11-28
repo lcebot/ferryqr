@@ -16,8 +16,9 @@ import kotlinx.coroutines.launch
  * Asks again what decides where content can go each time the screen comes back: what is known of
  * the installed apps is let go, and the framework is asked about the module, since coming back from
  * LSPosed, or from an app that restarted, the scope may have changed, and an app may have been
- * installed or removed meanwhile. [alsoRead] runs on each of those returns as well, after the
- * installed apps are let go and alongside the framework's answer, for what else the screen reads.
+ * installed or removed, or a default browser chosen, meanwhile. [alsoRead] runs on each of those
+ * returns as well, after the installed apps are let go and alongside the framework's answer, for
+ * what else the screen reads.
  */
 @Composable
 internal fun RefreshAppFactsOnResume(alsoRead: suspend () -> Unit = {}) {

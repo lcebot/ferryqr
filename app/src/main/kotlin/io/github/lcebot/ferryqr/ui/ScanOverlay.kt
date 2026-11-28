@@ -19,12 +19,10 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ContainedLoadingIndicator
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
@@ -45,7 +43,6 @@ import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
@@ -116,7 +113,14 @@ fun ScanOverlay(
     val spatial = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
     var viewSize by remember { mutableStateOf(IntSize.Zero) }
     val placement = remember(viewSize, density) {
-        with(density) { Placement(viewSize, MARKER_PADDING.toPx(), MIN_MARKER.toPx()) }
+        with(density) {
+            Placement(
+                viewSize,
+                padding = MARKER_PADDING.toPx(),
+                minSide = MIN_MARKER.toPx(),
+                markerHalf = CameraOverlayStyle.markerSize.width.toPx() / 2,
+            )
+        }
     }
     val placing by rememberUpdatedState(placement)
 
@@ -224,7 +228,7 @@ fun ScanOverlay(
         shownSpots.forEach { text ->
             key(text) {
                 FoundMarker(
-                    target = { sightingNow()?.let { placing.center(it, text) } },
+                    target = { sightingNow()?.let { placing.marker(it, text) } },
                     visible = spots != null || visible,
                 )
             }
@@ -301,9 +305,15 @@ private class Last<T>(var value: T)
 /**
  * Places what the overlay draws on a view of [size] from the pixels of the upright frame a code was
  * read in: the square of the brackets around a code, [padding] clear of it and at least [minSide]
- * across, and the centers of decoded codes. Nothing has a place before the view has a size.
+ * across, and the markers of decoded codes, reaching [markerHalf] from their centres, which stay
+ * whole in view as the picker keeps them. Nothing has a place before the view has a size.
  */
-private class Placement(size: IntSize, private val padding: Float, private val minSide: Float) {
+private class Placement(
+    size: IntSize,
+    private val padding: Float,
+    private val minSide: Float,
+    private val markerHalf: Float,
+) {
     private val width = size.width.toFloat()
     private val height = size.height.toFloat()
     private val view = Size(width, height)
@@ -330,11 +340,11 @@ private class Placement(size: IntSize, private val padding: Float, private val m
             .squarePadded(padding, minSide)
     }
 
-    /** The center of the decoded code [text] of [sighting], or null while it has no place in the frame. */
-    fun center(sighting: Sighting, text: String): Offset? {
+    /** The center of the marker of the decoded code [text] of [sighting], or null while it has no place in the frame. */
+    fun marker(sighting: Sighting, text: String): Offset? {
         if (!laidOut) return null
         val code = sighting.found.firstOrNull { it.text == text && it.corners.isNotEmpty() } ?: return null
-        return crop(sighting.frameWidth, sighting.frameHeight).toView(code.center.x, code.center.y)
+        return crop(sighting.frameWidth, sighting.frameHeight).toViewWithin(code.center.x, code.center.y, markerHalf)
     }
 
     /** Where on the view, as a fraction of it, the brackets of [confirmation] have their center. */
@@ -372,20 +382,7 @@ private fun FoundMarker(target: () -> Offset?, visible: Boolean) {
     ) {
         val haptics = rememberHaptics()
         LaunchedEffect(Unit) { haptics.found() }
-        Box(
-            modifier = Modifier
-                .size(CameraOverlayStyle.markerSize)
-                .clip(CircleShape)
-                .background(CameraOverlayStyle.accent),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                painterResource(R.drawable.ic_check),
-                contentDescription = null,
-                tint = CameraOverlayStyle.onAccent,
-                modifier = Modifier.size(28.dp),
-            )
-        }
+        CodeMarker(R.drawable.ic_check)
     }
 }
 

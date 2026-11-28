@@ -1,6 +1,13 @@
 package io.github.lcebot.ferryqr.openin
 
-/** How content reaches one app's scanner. */
+import androidx.annotation.StringRes
+import io.github.lcebot.ferryqr.R
+
+/**
+ * How content reaches one app's scanner. A strategy that leaves the app only one of the two methods
+ * the ferry page names, handing content over directly or through the camera, carries the [reason]
+ * the page gives for it.
+ */
 internal sealed interface Strategy {
 
     /**
@@ -8,12 +15,13 @@ internal sealed interface Strategy {
      * [extras] to the screen that opened it, as if it had read a code. Only screens opened for a
      * result by one of [callers] are closed, so a camera the app opens for anything else is left
      * alone. [TEXT] in a value stands for the content. Pictures cannot be returned this way and are
-     * declined.
+     * declined. Content only ever reaches the app directly, and [reason] says why for the app.
      */
     data class FinishWithResult(
         val activities: Set<String>,
         val callers: Set<String>,
         val extras: Map<String, String>,
+        @StringRes val reason: Int,
     ) : Strategy
 
     /**
@@ -35,9 +43,10 @@ internal sealed interface Strategy {
 
     /**
      * The scanner's camera is shown a QR code of the content, or the picture. It relies on framework
-     * camera APIs only, so it suits apps whose decoder classes are renamed with every version.
+     * camera APIs only, so it suits apps whose decoder classes are renamed with every version. Content
+     * only ever reaches the app through its camera, and [reason] says why for the app.
      */
-    data object FeedCamera : Strategy
+    data class FeedCamera(@StringRes val reason: Int) : Strategy
 
     companion object {
         const val TEXT = "\$text"
@@ -64,47 +73,50 @@ internal object OpenInApps {
     /** The key for WeChat mini program codes, whose content means nothing as a QR code. */
     const val MINI_PROGRAM_TYPE = "wxcode"
 
-    val all = listOf(
-        // The QBar SDK keeps its names across WeChat versions; the rest of WeChat is obfuscated.
-        OpenInApp(
-            WECHAT,
-            Strategy.ReplaceResult(
-                className = "com.tencent.qbar.WxQBarResult",
-                params = listOf("int", "String", "String", "byte[]", "String", "int"),
-                typeIdArg = 0,
-                typeNameArg = 1,
-                textArg = 2,
-                dataArg = 3,
-                charsetArg = 4,
-                types = mapOf(
-                    "qr" to TypeMapping(19, "QR_CODE"),
-                    // WeChat's own decoder reports mini program codes as type 18; its handler takes
-                    // the code type, 22, from the name.
-                    MINI_PROGRAM_TYPE to TypeMapping(18, "WX_CODE"),
-                ),
-            ),
-        ),
-        // Didi's scanner works out which business a code belongs to before returning it, and its
-        // decoder classes are obfuscated, so only its camera can be handed the code.
-        OpenInApp(DIDI, Strategy.FeedCamera),
-        // ScanQRInMeituanActivity opens one of these camera screens for a result and handles the
-        // code itself once it returns, the same way as after a real scan.
-        OpenInApp(
-            MEITUAN,
-            Strategy.FinishWithResult(
-                activities = setOf(
-                    "com.meituan.android.scan.ArSupportCaptureActivity",
-                    "com.meituan.android.scan.NewArActivity",
-                ),
-                callers = setOf("com.meituan.android.scan.ScanQRInMeituanActivity"),
-                extras = mapOf(
-                    "result_type" to "qr",
-                    "result_url" to Strategy.TEXT,
-                    "barcode_format" to "QR_CODE",
-                ),
+    // The QBar SDK keeps its names across WeChat versions; the rest of WeChat is obfuscated.
+    val WECHAT_APP = OpenInApp(
+        WECHAT,
+        Strategy.ReplaceResult(
+            className = "com.tencent.qbar.WxQBarResult",
+            params = listOf("int", "String", "String", "byte[]", "String", "int"),
+            typeIdArg = 0,
+            typeNameArg = 1,
+            textArg = 2,
+            dataArg = 3,
+            charsetArg = 4,
+            types = mapOf(
+                "qr" to TypeMapping(19, "QR_CODE"),
+                // WeChat's own decoder reports mini program codes as type 18; its handler takes
+                // the code type, 22, from the name.
+                MINI_PROGRAM_TYPE to TypeMapping(18, "WX_CODE"),
             ),
         ),
     )
+
+    // Didi's scanner works out which business a code belongs to before returning it, and its
+    // decoder classes are obfuscated, so only its camera can be handed the code.
+    val DIDI_APP = OpenInApp(DIDI, Strategy.FeedCamera(reason = R.string.method_didi_reason))
+
+    // ScanQRInMeituanActivity opens one of these camera screens for a result and handles the
+    // code itself once it returns, the same way as after a real scan.
+    val MEITUAN_APP = OpenInApp(
+        MEITUAN,
+        Strategy.FinishWithResult(
+            activities = setOf(
+                "com.meituan.android.scan.ArSupportCaptureActivity",
+                "com.meituan.android.scan.NewArActivity",
+            ),
+            callers = setOf("com.meituan.android.scan.ScanQRInMeituanActivity"),
+            extras = mapOf(
+                "result_type" to "qr",
+                "result_url" to Strategy.TEXT,
+                "barcode_format" to "QR_CODE",
+            ),
+            reason = R.string.method_meituan_reason,
+        ),
+    )
+
+    val all = listOf(WECHAT_APP, DIDI_APP, MEITUAN_APP)
 
     private val byPackage = all.associateBy { it.pkg }
 

@@ -22,11 +22,11 @@ import kotlinx.coroutines.withContext
 /**
  * The icon of the installed app [packageName], so an action that hands off to it shows that app.
  * Its themed layer, the one Android tints for themed launcher icons, follows the content colour
- * like any other icon; without one, the full-colour icon is shown as it is. [fallback] covers an
- * app that is not visible or not installed.
+ * like any other icon; without one, the full-colour icon is shown as it is, with [fullColor] added
+ * to it. [fallback] covers an app that is not visible or not installed.
  */
 @Composable
-fun AppIcon(packageName: String, @DrawableRes fallback: Int, modifier: Modifier = Modifier) {
+fun AppIcon(packageName: String, @DrawableRes fallback: Int, modifier: Modifier = Modifier, fullColor: Modifier = Modifier) {
     val context = LocalContext.current
     // Asking the package manager and drawing the icon happen off the main thread, once per app until
     // a page refreshes itself; an icon never drawn takes its place empty and fades in, and one drawn
@@ -47,7 +47,7 @@ fun AppIcon(packageName: String, @DrawableRes fallback: Int, modifier: Modifier 
             is IconLoad.Found -> {
                 val image = remember(shown.glyph) { shown.glyph.image.asImageBitmap() }
                 if (shown.glyph.themed) Icon(image, contentDescription = null, modifier = modifier)
-                else Image(image, contentDescription = null, modifier = modifier)
+                else Image(image, contentDescription = null, modifier = modifier.then(fullColor))
             }
         }
     }

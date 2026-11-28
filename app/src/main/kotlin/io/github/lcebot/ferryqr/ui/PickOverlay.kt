@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
@@ -38,6 +37,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -46,6 +47,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import io.github.lcebot.ferryqr.R
+import io.github.lcebot.ferryqr.dispatch.ReadContent
 import io.github.lcebot.ferryqr.scan.Found
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.roundToInt
@@ -59,12 +61,14 @@ private const val STAGGER_MS = 70L
  * while [active] does it take taps and the back gesture, so the copy fading out after a pick or a
  * close stays inert. While active it also holds every touch that lands on it, so a tap beside the
  * markers or a pinch never reaches the scanner's controls or the camera's zoom beneath.
+ * [contentOf] gives the content of a code read, which its marker describes.
  */
 @Composable
 fun PickOverlay(
     frame: Bitmap,
     codes: List<Found>,
     alreadyShown: Set<String>,
+    contentOf: (Found.Read) -> ReadContent,
     active: Boolean,
     onPick: (Found) -> Unit,
     onClose: () -> Unit,
@@ -125,9 +129,7 @@ fun PickOverlay(
         fun Found.wasShown() = this is Found.Read && detection.text in alreadyShown
         val fresh = codes.filterNot { it.wasShown() }
         codes.forEach { code ->
-            val center = crop.toView(code.center.x, code.center.y)
-            val x = center.x.coerceIn(half, viewWidth - half)
-            val y = center.y.coerceIn(half, viewHeight - half)
+            val at = crop.toViewWithin(code.center.x, code.center.y, half)
             // A code that already had a marker while the camera ran keeps it without popping again;
             // codes that arrived with the frozen frame pop in one after another.
             val wasShown = code.wasShown()
@@ -140,31 +142,16 @@ fun PickOverlay(
             AnimatedVisibility(
                 visibleState = pop,
                 enter = scaleIn(popSpec),
-                modifier = Modifier.absoluteOffset { IntOffset((x - half).roundToInt(), (y - half).roundToInt()) },
+                modifier = Modifier.absoluteOffset { IntOffset((at.x - half).roundToInt(), (at.y - half).roundToInt()) },
             ) {
-                // The copy fading out is disabled in the same colours, so it fades out as it was
-                // rather than greying first.
-                FilledIconButton(
-                    onClick = { haptics.tap(); onPick(code) },
+                val content = remember(code) { (code as? Found.Read)?.let(contentOf) }
+                CodeMarker(
+                    R.drawable.ic_arrow_forward,
+                    contentDescription = codeDescription(content),
+                    // The copy fading out after a pick or a close takes no taps.
                     enabled = active,
-                    shapes = IconButtonDefaults.shapes(pressedShape = IconButtonDefaults.mediumPressedShape),
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = CameraOverlayStyle.accent,
-                        contentColor = CameraOverlayStyle.onAccent,
-                        disabledContainerColor = CameraOverlayStyle.accent,
-                        disabledContentColor = CameraOverlayStyle.onAccent,
-                    ),
-                    modifier = Modifier.size(markerSize),
-                ) {
-                    Icon(
-                        painterResource(R.drawable.ic_arrow_forward),
-                        contentDescription = when (code) {
-                            is Found.Read -> code.detection.text
-                            is Found.Located -> stringResource(R.string.mini_headline)
-                        },
-                        modifier = Modifier.size(IconButtonDefaults.mediumIconSize),
-                    )
-                }
+                    onClick = { haptics.tap(); onPick(code) },
+                )
             }
         }
 
@@ -182,7 +169,7 @@ fun PickOverlay(
             onClick = { haptics.tap(); onClose() },
             enabled = active,
             shapes = IconButtonDefaults.shapes(pressedShape = IconButtonDefaults.mediumPressedShape),
-            // Disabled in its enabled colours, as the markers are.
+            // Disabled in its enabled colours, as the code markers are.
             colors = IconButtonDefaults.filledTonalIconButtonColors().let {
                 it.copy(disabledContainerColor = it.containerColor, disabledContentColor = it.contentColor)
             },
@@ -198,5 +185,23 @@ fun PickOverlay(
                 modifier = Modifier.size(IconButtonDefaults.mediumIconSize),
             )
         }
+    }
+}
+
+/**
+ * What a screen reader calls a code found in a picture, [content] when it was read: the title its tile
+ * shows, which names a two-factor key by its issuer and account and is cut to a bounded length, so
+ * kilobytes of content are never read out. Sensitive content that carries no name of its own, as an
+ * eSIM code naming no server, would be titled by its secret, so it is called by its kind. A mini
+ * program code only located has no content and is called what its card calls it.
+ */
+@Composable
+internal fun codeDescription(content: ReadContent?): String {
+    if (content == null) return stringResource(R.string.mini_headline)
+    val context = LocalContext.current
+    val languages = LocalConfiguration.current.locales
+    return remember(content, languages) {
+        val names = content.names(context, null)
+        if (content.sensitiveKind != null && names.carried.name == null) context.getString(content.kind.label) else names.tileTitle
     }
 }

@@ -86,7 +86,8 @@ val Payload.sensitiveKind: SensitiveKind?
         is EsimPayload -> SensitiveKind.ESIM
         is FidoPayload -> SensitiveKind.PASSKEY
         is OtpPayload -> SensitiveKind.OTP
-        else -> null
+        is WebPayload, is SchemePayload, is DppPayload, is ContactPayload, is EventPayload, is TextPayload,
+        is MiniProgramPayload -> null
     }
 
 enum class WifiSecurity { OPEN, WEP, WPA, SAE, EAP }

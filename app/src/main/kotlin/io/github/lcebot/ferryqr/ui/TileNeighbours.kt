@@ -99,6 +99,6 @@ internal fun tileNeighbours(pulled: String, arrangement: TileArrangement, rowsSh
         } else {
             0
         }
-        Relation(towardEnd[key] ?: 0f, towardStart[key] ?: 0f, NEIGHBOUR_ROUNDNESS[0], touching, touching)
+        Relation(towardEnd[key] ?: 0f, towardStart[key] ?: 0f, NEIGHBOUR_ROUNDNESS, touching, touching)
     }
 }

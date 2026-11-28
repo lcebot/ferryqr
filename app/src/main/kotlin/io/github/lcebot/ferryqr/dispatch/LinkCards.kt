@@ -17,7 +17,7 @@ internal fun Cards.scheme(env: FerryEnv, payload: SchemePayload, names: ContentN
     val context = env.context
     val owner = ActiveFerries.claimant(payload)
     val ranked = env.rank(payload)
-    val opens = Launch.schemeIntent(payload.uri, payload.scheme)?.let { env.resolved(it).matches.isNotEmpty() } == true
+    val opens = Intents.scheme(payload.uri, payload.scheme)?.let { env.resolved(it).matches.isNotEmpty() } == true
     val notes = listOfNotNull(
         context.getString(R.string.scheme_unhandled).takeUnless { opens },
         owner?.takeIf { it in ranked }?.let { targetNote(env, it, origin) },

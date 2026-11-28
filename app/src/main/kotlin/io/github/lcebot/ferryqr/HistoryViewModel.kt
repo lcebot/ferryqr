@@ -135,6 +135,29 @@ class HistoryViewModel(app: Application, private val saved: SavedStateHandle) : 
     /** The card of the entry [showing] shows, with its code drawn again. */
     val card: StateFlow<ResultCard?> = cards.card
 
+    private var sessions = 0L
+    private val _undo = MutableStateFlow<UndoSession?>(null)
+
+    /**
+     * The deletions one undo can still bring back, or null. It outlives the page's composition, so
+     * a page composed again offers the undo again. A tile or row swiped away waits out of sight
+     * where it flew to until its session lets its deletions go, as [dropped] tells, so undoing flies
+     * it back into its place.
+     */
+    val undo: StateFlow<UndoSession?> = _undo.asStateFlow()
+
+    private val _dropped = MutableStateFlow(0L)
+
+    /**
+     * The id of the latest undo session whose deletions were let go for good, or 0 before any. Only
+     * letting them go moves it, never undoing them, so what waits on a session to end can tell the
+     * two apart.
+     */
+    val dropped: StateFlow<Long> = _dropped.asStateFlow()
+
+    /** Whether a history file that could not be read in full waits to be exported or let go. */
+    val damaged: StateFlow<Boolean> = store.damaged
+
     init {
         // A view model made again after the process was let go finds the card and the dialog it
         // kept. Those showing an entry wait for the history to be read and stay closed when the
@@ -157,20 +180,7 @@ class HistoryViewModel(app: Application, private val saved: SavedStateHandle) : 
         }
     }
 
-    private var sessions = 0L
-    private val _undo = MutableStateFlow<UndoSession?>(null)
-
-    /**
-     * The deletions one undo can still bring back, or null. It outlives the page's composition, so
-     * a page composed again offers the undo again. A tile or row swiped away waits out of sight
-     * where it flew to until it ends, so undoing flies it back into its place.
-     */
-    val undo: StateFlow<UndoSession?> = _undo.asStateFlow()
-
-    /** Whether a history file that could not be read in full waits to be exported or let go. */
-    val damaged: StateFlow<Boolean> = store.damaged
-
-    /** Writes that file to [out]; false when that fails. Kept until [forgetDamaged]. */
+    /** Writes the history file that could not be read in full to [out]; false when that fails. Kept until [forgetDamaged]. */
     fun exportDamaged(out: OutputStream): Boolean = store.exportDamaged(out)
 
     fun forgetDamaged() = store.forgetDamaged()
@@ -200,12 +210,17 @@ class HistoryViewModel(app: Application, private val saved: SavedStateHandle) : 
         store.find { isSaved(it, saved) }?.let(::open)
     }
 
-    /** Deletes [entries], which join the deletions the current undo would bring back. */
-    fun delete(entries: List<HistoryEntry>) {
-        if (entries.isEmpty()) return
-        store.delete(entries)
+    /**
+     * Deletes [entries], which join the deletions the current undo would bring back, and returns the
+     * id of that undo session, or 0 when there is nothing to delete and no session.
+     */
+    fun delete(entries: List<HistoryEntry>): Long {
         val session = _undo.value
-        _undo.value = session?.copy(entries = session.entries + entries) ?: UndoSession(++sessions, entries)
+        if (entries.isEmpty()) return session?.id ?: 0L
+        store.delete(entries)
+        val joined = session?.copy(entries = session.entries + entries) ?: UndoSession(++sessions, entries)
+        _undo.value = joined
+        return joined.id
     }
 
     /**
@@ -221,7 +236,9 @@ class HistoryViewModel(app: Application, private val saved: SavedStateHandle) : 
 
     /** The chance to undo the deletions so far has passed. */
     fun deletesDone() {
+        val session = _undo.value ?: return
         _undo.value = null
+        _dropped.value = session.id
     }
 
     fun rename(entry: HistoryEntry, name: String) {

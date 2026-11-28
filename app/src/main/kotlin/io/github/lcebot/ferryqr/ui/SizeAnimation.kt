@@ -1,9 +1,13 @@
 package io.github.lcebot.ferryqr.ui
 
+import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationVector2D
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.VectorConverter
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Size
@@ -21,6 +25,16 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+
+/**
+ * An AnimatedContent transition that fades the old content out and the new in on [fade] while the
+ * container springs to the new content's size on [resize].
+ *
+ * The container is left unclipped, so content keeps its edges while the spring undershoots a smaller
+ * size on its way there.
+ */
+internal fun crossfadeResizing(fade: FiniteAnimationSpec<Float>, resize: FiniteAnimationSpec<IntSize>): ContentTransform =
+    ContentTransform(fadeIn(fade), fadeOut(fade), sizeTransform = SizeTransform(clip = false) { _, _ -> resize })
 
 /**
  * Reports the size of what it holds as it changes on [spec], which may be one of the theme's

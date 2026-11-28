@@ -5,11 +5,7 @@ package io.github.lcebot.ferryqr.ui
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -60,10 +56,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import io.github.lcebot.ferryqr.ImageCode
 import io.github.lcebot.ferryqr.ImageScan
 import io.github.lcebot.ferryqr.ImageScanViewModel
 import io.github.lcebot.ferryqr.R
+import io.github.lcebot.ferryqr.StillCode
 import io.github.lcebot.ferryqr.dispatch.CardAction
 import io.github.lcebot.ferryqr.dispatch.Cards
 import io.github.lcebot.ferryqr.dispatch.ResultCard
@@ -80,6 +76,9 @@ private val THUMBNAIL_SIZE = 80.dp
 fun ImageScanSheet(vm: ImageScanViewModel, onClose: () -> Unit) {
     val haptics = rememberHaptics()
     val result by vm.result.collectAsStateWithLifecycle()
+    // The card offers apps by what is installed and which apps the module serves, either of which may
+    // change while the sheet is out of sight, so both are asked again each time it appears.
+    RefreshAppFactsOnResume()
 
     // Felt as the image is read, which the view model tells once, rather than whenever the sheet
     // is composed with its result, as it is again when the activity is made again.
@@ -113,7 +112,7 @@ fun ImageScanSheet(vm: ImageScanViewModel, onClose: () -> Unit) {
                     else -> "none"
                 }
             },
-            transitionSpec = { (fadeIn(fade) togetherWith fadeOut(fade)) using SizeTransform(clip = false) { _, _ -> resize } },
+            transitionSpec = { crossfadeResizing(fade, resize) },
             label = "image-sheet",
         ) { read ->
             when {
@@ -271,7 +270,7 @@ private fun CardCrossfade(
     AnimatedContent(
         targetState = card,
         contentKey = { it.raw to it.format },
-        transitionSpec = { (fadeIn(fade) togetherWith fadeOut(fade)) using SizeTransform(clip = false) { _, _ -> resize } },
+        transitionSpec = { crossfadeResizing(fade, resize) },
         label = "image-card",
     ) { shown ->
         ResultCardContent(card = shown, onAction = onAction, onMessage = onMessage, modifier = cardModifier)
@@ -280,13 +279,13 @@ private fun CardCrossfade(
 
 /** Shown above the card only when the image holds several codes. */
 @Composable
-private fun CodeChooser(codes: List<ImageCode>, selected: Int, onSelect: (Int) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(
+private fun CodeChooser(codes: List<StillCode>, selected: Int, onSelect: (Int) -> Unit) {
+    Column {
+        // The header's own inset counts toward the 24dp the sheet's content keeps from its edges.
+        SectionHeader(
             pluralStringResource(R.plurals.image_code_count, codes.size, codes.size),
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(horizontal = 24.dp),
+            Modifier.padding(horizontal = 24.dp - LIST_TEXT_INSET),
+            top = 0.dp,
         )
         LazyRow(
             contentPadding = PaddingValues(horizontal = 24.dp),
@@ -300,12 +299,12 @@ private fun CodeChooser(codes: List<ImageCode>, selected: Int, onSelect: (Int) -
 }
 
 @Composable
-private fun CodeTile(code: ImageCode, selected: Boolean, onClick: () -> Unit) {
+private fun CodeTile(code: StillCode, selected: Boolean, onClick: () -> Unit) {
     val thumbnail = remember(code.thumbnail) { code.thumbnail?.asImageBitmap() }
     // Only a mini program code located but not read comes without content.
     val content = code.content
     val kind = content?.kind ?: Cards.MINI_PROGRAM_KIND
-    val description = content?.text ?: stringResource(R.string.mini_headline)
+    val description = codeDescription(content)
     val effects = MaterialTheme.motionScheme.fastEffectsSpec<Color>()
     val container by animateColorAsState(
         if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,

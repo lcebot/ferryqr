@@ -162,7 +162,8 @@ internal fun rememberLiftedInteraction(lifted: Boolean): MutableInteractionSourc
 /**
  * [topFavorite] is the content of the favorite at the top, which has nowhere higher to move.
  * [onNameAndFavorite] names an entry as it becomes a favorite, offered only while [namesFavorites]
- * is off, since favoriting asks for the name by itself while it is on.
+ * is off, since favoriting asks for the name by itself while it is on. [onDelete] returns the id of
+ * the undo session the entry joins.
  */
 internal class EntryActions(
     val onOpen: (HistoryEntry) -> Unit,
@@ -172,7 +173,7 @@ internal class EntryActions(
     val onShortcut: (HistoryEntry, Boolean) -> Unit,
     val shortcutsFull: Boolean,
     val onRename: (HistoryEntry) -> Unit,
-    val onDelete: (HistoryEntry) -> Unit,
+    val onDelete: (HistoryEntry) -> Long,
     val topFavorite: String?,
     val onMoveToTop: (HistoryEntry) -> Unit,
 )
@@ -258,9 +259,7 @@ internal fun EntryRow(
     )
     // What a swipe shows behind the row takes the row's own shape, rounding with it as it is pulled
     // and comes loose, so it matches the corners of the neighbours that round toward it.
-    val roundTop by rememberRounding(magnet.topStart)
-    val roundBottom by rememberRounding(magnet.bottomStart)
-    val shape = segmentShape(index, count, roundTop, roundBottom)
+    val shape = rememberSegmentShape(SegmentCorners(top = index == 0, bottom = index == count - 1), magnet)
     SwipeableEntry(
         entry = entry,
         swipe = swipe,

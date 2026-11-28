@@ -67,6 +67,9 @@ import kotlinx.coroutines.withContext
  */
 private const val PREVIEWS_AT_ONCE = 3
 
+/** The space between tiles, and between the family headers and the tiles around them. */
+private val TILE_GAP = 8.dp
+
 /** How tall each format's preview is; wide enough tiles show a barcode at a readable size. */
 private val PREVIEW_HEIGHT = 72.dp
 
@@ -134,17 +137,14 @@ fun FormatPickerSheet(
             columns = GridCells.Fixed(2),
             modifier = Modifier.selectableGroup(),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(TILE_GAP),
+            verticalArrangement = Arrangement.spacedBy(TILE_GAP),
         ) {
             CodeFamily.entries.forEach { family ->
                 item(key = "family:$family", span = { GridItemSpan(maxLineSpan) }) {
-                    Text(
-                        stringResource(family.label),
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(start = 8.dp, top = 12.dp, bottom = 4.dp),
-                    )
+                    // The grid adds its gap under the header, so the header keeps that much less of
+                    // its own, and its tiles sit as far below it as a list's rows below theirs.
+                    SectionHeader(stringResource(family.label), top = 12.dp, bottom = SECTION_GAP - TILE_GAP)
                 }
                 items(CodeType.entries.filter { it.family == family }, key = { it.name }) { type ->
                     FormatTile(

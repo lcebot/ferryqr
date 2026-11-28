@@ -53,17 +53,17 @@ enum class ActionResult {
     Unavailable,
 }
 
-/** An app an action can go to, called [name], which [run] hands the content to. */
-data class AppChoice(val pkg: String, val name: String, val run: (Activity) -> ActionResult)
-
 /**
- * [app] is the package the action hands off to; its own icon then replaces [icon]. [appName] is the
- * app's name formatted into [label], for the labels that name the app. [opens] marks an action that
- * opens the content elsewhere, as every app action does and the browser too, rather than acting on it.
- * [labeled] keeps the label on the button rather than showing only a round icon: every action that
- * opens the content keeps it, and so do actions that would look alike as icons. [choices] are the
- * apps the action may go to when several take it and none is the default; its button then offers
- * them in a menu, and [run] is not used.
+ * Something done with content, as a result card and the create page offer it. [app] is the package
+ * the action hands off to; its own icon then replaces [icon]. [appName] is the app's name formatted
+ * into [label], for the labels that name the app. [opens] marks an action that opens the content
+ * elsewhere, as every app action does and the browser too, rather than acting on it. [labeled] keeps
+ * the label on a card's button rather than showing only a round icon: every action that opens the
+ * content keeps it, and so do actions that would look alike as icons. [choices] are the apps the
+ * action may go to when several take it and none is the default, each an action of its own that
+ * hands the content to that app; its button then offers them in a menu, and [run] is not used.
+ * [blocked] says why the action cannot run, as for an app waiting for the module: a card leaves such
+ * an action out, and the create page shows it disabled and says why when it is tapped.
  */
 data class CardAction(
     @param:StringRes val label: Int,
@@ -72,7 +72,8 @@ data class CardAction(
     val appName: String? = null,
     val opens: Boolean = app != null,
     val labeled: Boolean = opens,
-    val choices: List<AppChoice> = emptyList(),
+    val choices: List<CardAction> = emptyList(),
+    val blocked: String? = null,
     val run: (Activity) -> ActionResult,
 )
 
@@ -207,10 +208,7 @@ object Cards {
      */
     private val miniDrawings = LastDrawing<String, Bitmap> { raw -> MiniCodeArt.draw(raw) }
 
-    /**
-     * A history card built again keeps its code's drawing, and with it the taller drawings made for
-     * its enlarged code, rather than drawing it anew.
-     */
+    /** A history card built again keeps its code's drawing rather than drawing it anew. */
     private val codeDrawings = LastDrawing<Pair<String, String>, CodeDrawing> { (text, format) -> CodeDrawing.redraw(text, format) }
 
     /** The mini program code holding [raw], drawn as WeChat draws its codes, or null when none can hold it. */
@@ -222,11 +220,12 @@ object Cards {
     /**
      * The card for [content], led by the content's own name as [ContentNames.headline] gives it, so
      * the card calls the content what its row and tile do. [scannedAt] is when the code was read,
-     * which dates what a code leaves undated.
+     * which dates what a code leaves undated. [routing] holds the apps that take content of a kind
+     * only they handle, and whether one was tried before the card shows.
      */
-    fun build(env: FerryEnv, content: ReadContent, origin: Origin, scannedAt: Long = System.currentTimeMillis()): ResultCard {
+    fun build(env: FerryEnv, content: ReadContent, origin: Origin, scannedAt: Long, routing: Routing): ResultCard {
         val names = content.names(env.context, null)
-        return body(env, content.payload, names, content.format, origin, scannedAt)
+        return body(env, content.payload, names, content.format, origin, scannedAt, routing)
             .toCard(content.payload.raw, content.kind, names.headline, content.format)
     }
 
@@ -241,7 +240,8 @@ object Cards {
 
     /**
      * The card this body makes of content [raw] of [kind], read in [format], led by [headline] unless
-     * the body leads with a headline of its own. Every card is put together here.
+     * the body leads with a headline of its own. Every card is put together here, and leaves out the
+     * actions that are blocked, as those of an app waiting for the module, since a note says why.
      */
     private fun CardBody.toCard(raw: String, kind: Kind, headline: String, format: String = ""): ResultCard = ResultCard(
         raw = raw,
@@ -250,7 +250,7 @@ object Cards {
         headline = this.headline ?: headline,
         body = body,
         notes = notes,
-        actions = actions,
+        actions = actions.filter { it.blocked == null },
         image = image,
         format = format,
         sections = sections,
@@ -263,14 +263,15 @@ object Cards {
         format: String,
         origin: Origin,
         scannedAt: Long,
+        routing: Routing,
     ): CardBody = when (payload) {
         is WebPayload -> web(env, payload, origin)
         is SchemePayload -> scheme(env, payload, names, origin)
-        is FidoPayload -> passkey(env, payload, origin, scannedAt)
+        is FidoPayload -> passkey(env.context, payload, scannedAt, routing)
         is BoardingPassPayload -> boardingPass(env.context, payload, scannedAt)
         is OtpPayload -> otp(env, payload, origin)
-        is EsimPayload -> esim(env, payload, names, origin)
-        is DppPayload -> dpp(env.context, payload, origin)
+        is EsimPayload -> esim(env, payload, names, routing)
+        is DppPayload -> dpp(env.context, payload, routing)
         is WifiPayload -> wifi(env.context, payload)
         is ContactPayload -> contact(payload, names)
         is EventPayload -> event(env.context, payload, names)
@@ -311,21 +312,24 @@ object Cards {
      * The action that hands content to [target], which [open] does, named for how the app takes it.
      * An app that opens the content does so wherever it came from. An app waiting for the module only
      * opens its scanner, which can still see a code in front of the camera, or pick an image from its
-     * album if it has one; otherwise there is no action.
+     * album if it has one; otherwise its action is blocked, saying the app needs the module. An app
+     * that is not installed has no action.
      */
     internal fun targetAction(env: FerryEnv, target: Ferry, origin: Origin, open: (Activity) -> Boolean): CardAction? {
-        val label = when (target.reach(env, origin)) {
-            Reach.Opens -> R.string.open_in_app
+        val reach = target.reach(env, origin)
+        val label = when (reach) {
+            Reach.Opens, Reach.NeedsModule -> R.string.open_in_app
             Reach.Scanner -> R.string.scan_again_in_app
             Reach.Album -> R.string.open_app_scanner
-            Reach.NeedsModule, Reach.NotInstalled -> return null
+            Reach.NotInstalled -> return null
         }
-        return CardAction(label, R.drawable.ic_open_in_new, target.pkg, target.label(env.context)) {
+        val blocked = if (reach == Reach.NeedsModule) targetNote(env, target, origin) else null
+        return CardAction(label, R.drawable.ic_open_in_new, target.pkg, target.label(env.context), blocked = blocked) {
             if (open(it)) ActionResult.Handoff else ActionResult.Unavailable
         }
     }
 
-    /** The actions that hand [text] to each of [ferries], in their order. */
+    /** The actions that hand [text] to each of [ferries], in their order, blocked ones among them. */
     internal fun ferryActions(env: FerryEnv, ferries: List<Ferry>, origin: Origin, text: String): List<CardAction> =
         ferries.mapNotNull { ferry -> targetAction(env, ferry, origin) { ferry.open(it, text) } }
 
@@ -367,11 +371,13 @@ object Cards {
         }
         val only = apps.singleOrNull()
         val none: (Activity) -> ActionResult = { ActionResult.Unavailable }
+        // Each app in the menu shows its own icon, or where it has none, the icon any app falls back to.
+        fun choice(app: AppCandidate) = CardAction(label, R.drawable.ic_open_in_new, app.pkg, app.name, opens = opens, run = launch(app))
         return CardAction(
             label,
             icon,
             opens = opens,
-            choices = if (apps.size > 1) apps.map { AppChoice(it.pkg, it.name, launch(it)) } else emptyList(),
+            choices = if (apps.size > 1) apps.map(::choice) else emptyList(),
             run = if (only != null) launch(only) else none,
         )
     }

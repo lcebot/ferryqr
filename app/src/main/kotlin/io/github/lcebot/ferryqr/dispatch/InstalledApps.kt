@@ -1,7 +1,6 @@
 package io.github.lcebot.ferryqr.dispatch
 
 import android.content.Context
-import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.AdaptiveIconDrawable
@@ -18,7 +17,7 @@ private const val LAYER_UNITS = 108f
 private const val VISIBLE_UNITS = 72f
 
 /** Enough for every app the result cards, the create page and the ferry page offer. */
-private const val GLYPH_CACHE = 32
+private const val APP_CACHE = 32
 
 /**
  * An app's icon as a button shows it. A [themed] one is the layer Android tints for themed launcher
@@ -28,22 +27,47 @@ internal class AppGlyph(val image: Bitmap, val themed: Boolean)
 
 /**
  * What FerryQR keeps for the whole process about the apps installed: the browsers, which every link
- * card asks for, and the icons drawn of apps. It only has to be current when a page refreshes
- * itself, which calls [invalidate], since apps may have been installed, removed or updated, or a
- * default browser chosen, while FerryQR was away.
+ * card asks for, and what apps are called and the icons drawn of them, which every card, the create
+ * page and the ferry page show. It only has to be current when a page refreshes itself, which calls
+ * [invalidate], since apps may have been installed, removed or updated, or a default browser chosen,
+ * while FerryQR was away.
  */
 internal object InstalledApps {
 
-    @Volatile
-    private var browsers: Set<String>? = null
+    /** The browsers and the one links open in, as last asked. */
+    private class Browsers(val all: Set<String>, val chosen: String?)
 
-    /** The browsers as last asked. */
-    fun browsers(context: Context): Set<String> = browsers ?: Launch.findBrowsers(context).also { browsers = it }
+    @Volatile
+    private var browsers: Browsers? = null
+
+    private fun browsersOf(context: Context): Browsers = browsers ?: run {
+        val all = PackageQueries.browsers(context)
+        // Without a default browser or an only one, the system asks which app to use, and a link
+        // with a verified App Link goes to its app instead.
+        val chosen = PackageQueries.defaultForWebLinks(context)?.takeIf { it in all } ?: all.singleOrNull()
+        Browsers(all, chosen)
+    }.also { browsers = it }
+
+    /** The apps that open any web link. */
+    fun browsers(context: Context): Set<String> = browsersOf(context).all
+
+    /** The default browser, or the only one; null when the system would ask. */
+    fun browser(context: Context): String? = browsersOf(context).chosen
+
+    /** What apps call themselves, by package; an app that is missing is asked again, as it may be installed meanwhile. */
+    private val labels = LruCache<String, String>(APP_CACHE)
+
+    /** What the installed app [pkg] calls itself, in the phone's language, or null for an app that is not visible or not installed. */
+    fun label(context: Context, pkg: String): String? =
+        labels.get(pkg) ?: PackageQueries.appLabel(context, pkg)?.also { labels.put(pkg, it) }
+
+    /** What the app [pkg] is called, or the package itself for one that cannot be seen. */
+    fun labelOrPackage(context: Context, pkg: String): String = label(context, pkg) ?: pkg
 
     private class Drawn(val glyph: AppGlyph, val generation: Int)
 
     /** Glyphs drawn so far, by package; an app that is missing is asked again, as it may be installed meanwhile. */
-    private val glyphs = LruCache<String, Drawn>(GLYPH_CACHE)
+    private val glyphs = LruCache<String, Drawn>(APP_CACHE)
 
     /** Counts the calls to [invalidate], which tells a glyph drawn since the last one from an older one. */
     private val generation = AtomicInteger()
@@ -77,17 +101,14 @@ internal object InstalledApps {
     /** Lets go of what was learned about the installed apps, for a page that refreshes itself. */
     fun invalidate() {
         browsers = null
+        labels.evictAll()
         // The glyphs stay to be shown until each is drawn again, so a page refreshing itself never
         // empties the icons it shows.
         generation.incrementAndGet()
     }
 
     private fun draw(context: Context, pkg: String): AppGlyph? {
-        val icon = try {
-            context.packageManager.getApplicationIcon(pkg)
-        } catch (e: PackageManager.NameNotFoundException) {
-            return null
-        }
+        val icon = PackageQueries.appIcon(context, pkg) ?: return null
         if (icon is AdaptiveIconDrawable) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 icon.monochrome?.let { return AppGlyph(layer(it), themed = true) }

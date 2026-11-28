@@ -7,7 +7,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.BoundsTransform
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
-import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateBounds
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.MutableTransitionState
@@ -15,7 +14,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,6 +32,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -52,7 +51,6 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import io.github.lcebot.ferryqr.R
@@ -71,7 +69,7 @@ internal fun CardNotes(notes: List<String>) {
         Modifier.clipToBounds().animateSize(MaterialTheme.motionScheme.defaultSpatialSpec()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        AppearingItems(notes, keyOf = { it }, enter = fadeIn(fade), exit = fadeOut(fade)) { note ->
+        AppearingItems(notes, keyOf = { it }, enter = fadeIn(fade), exit = fadeOut(fade)) { note, _ ->
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     painterResource(R.drawable.ic_warning),
@@ -95,7 +93,8 @@ internal fun CardNotes(notes: List<String>) {
  * on their way out, each where it was among the rest. An item that comes after the first
  * composition enters on [enter], and one that leaves exits on [exit] before it gives up its place;
  * the items there from the start are shown from the start. Each item is one element of the layout
- * it is emitted in, with [itemModifier], and one that is leaving shows as it last was.
+ * it is emitted in, with [itemModifier]. One that is leaving shows as it last was, and [content] is
+ * told it is leaving, so whatever it draws from the items still there can stay as it was too.
  */
 @Composable
 private fun <T> AppearingItems(
@@ -104,7 +103,7 @@ private fun <T> AppearingItems(
     enter: EnterTransition,
     exit: ExitTransition,
     itemModifier: Modifier = Modifier,
-    content: @Composable (T) -> Unit,
+    content: @Composable (item: T, leaving: Boolean) -> Unit,
 ) {
     val current = items.associateBy(keyOf)
     // Every item in sight, those still leaving included, each where it was among the rest.
@@ -124,7 +123,8 @@ private fun <T> AppearingItems(
             val visible = remember { MutableTransitionState(itemKey in opening) }
             visible.targetState = itemKey in current
             AnimatedVisibility(visibleState = visible, modifier = itemModifier, enter = enter, exit = exit) {
-                content(current[itemKey] ?: item)
+                val present = current[itemKey]
+                content(present ?: item, present == null)
             }
             if (visible.isIdle && !visible.currentState) {
                 LaunchedEffect(Unit) {
@@ -167,11 +167,11 @@ internal fun CardActions(actions: List<CardAction>, onAction: (CardAction) -> Un
             val moving = Modifier.animateBounds(this, boundsTransform = bounds)
             ActionLines(
                 tools = {
-                    AppearingItems(tools, ::actionKey, enter, exit, moving) { action -> ToolButton(action, onAction) }
+                    AppearingItems(tools, ::actionKey, enter, exit, moving) { action, _ -> ToolButton(action, onAction) }
                 },
                 main = {
-                    AppearingItems(listOf(primary) + labeled, ::actionKey, enter, exit, moving) { action ->
-                        ActionButton(action, primary = actionKey(action) == actionKey(primary), onAction)
+                    AppearingItems(listOf(primary) + labeled, ::actionKey, enter, exit, moving) { action, leaving ->
+                        ActionButton(action, primary = actionKey(action) == actionKey(primary), leaving, onAction)
                     }
                 },
             )
@@ -194,19 +194,24 @@ private const val APPEARING_SCALE = 0.8f
  * A button opening the content somewhere, filled for the [primary] action and tonal for the rest.
  * One button for both, its colours changing on the fast effects spring, so an action that becomes
  * the primary one moves to the front as itself rather than leaving one place and appearing in another.
+ * A button [leaving] keeps the look it had while it was offered, so a former primary fades out filled
+ * beside the one taking its place rather than turning tonal on its way out.
  */
 @Composable
-private fun ActionButton(action: CardAction, primary: Boolean, onAction: (CardAction) -> Unit) {
+private fun ActionButton(action: CardAction, primary: Boolean, leaving: Boolean, onAction: (CardAction) -> Unit) {
+    val offered = remember { OfferedLook(primary) }
+    if (!leaving) SideEffect { offered.primary = primary }
+    val filledLook = if (leaving) offered.primary else primary
     val filled = ButtonDefaults.buttonColors()
     val tonal = ButtonDefaults.filledTonalButtonColors()
     val spec = MaterialTheme.motionScheme.fastEffectsSpec<Color>()
     val container by animateColorAsState(
-        if (primary) filled.containerColor else tonal.containerColor,
+        if (filledLook) filled.containerColor else tonal.containerColor,
         spec,
         label = "action-container",
     )
     val content by animateColorAsState(
-        if (primary) filled.contentColor else tonal.contentColor,
+        if (filledLook) filled.contentColor else tonal.contentColor,
         spec,
         label = "action-content",
     )
@@ -216,17 +221,20 @@ private fun ActionButton(action: CardAction, primary: Boolean, onAction: (CardAc
             shapes = ButtonDefaults.shapes(),
             colors = ButtonDefaults.buttonColors(containerColor = container, contentColor = content),
         ) {
-            ActionIcon(action, ButtonDefaults.IconSize)
+            ActionIcon(action, Modifier.size(ButtonDefaults.IconSize))
             Spacer(Modifier.width(ButtonDefaults.IconSpacing))
             ActionLabel(action)
         }
     }
 }
 
+/** Whether an action's button was the primary one the last time it was offered. */
+private class OfferedLook(var primary: Boolean)
+
 /**
  * The [button] of [action], given what its tap does: run the action, or, for one that several apps
- * take, open a menu of them at the button, which runs it in the app picked. Opening the menu runs
- * nothing. The menu takes focus, so back closes it rather than the card.
+ * take, open a menu of them at the button, each called by its app's name, which runs the choice
+ * picked. Opening the menu runs nothing. The menu takes focus, so back closes it rather than the card.
  */
 @Composable
 private fun ActionTarget(action: CardAction, onAction: (CardAction) -> Unit, button: @Composable (onClick: () -> Unit) -> Unit) {
@@ -243,11 +251,8 @@ private fun ActionTarget(action: CardAction, onAction: (CardAction) -> Unit, but
             AppMenu(
                 expanded = open,
                 onDismiss = { open = false },
-                apps = action.choices.map { choice ->
-                    SendApp(choice.name, choice.pkg, looksEnabled = true) {
-                        onAction(action.copy(choices = emptyList(), run = choice.run))
-                    }
-                },
+                apps = action.choices.map { choice -> SendApp(choice, choice.appName ?: labelOf(choice)) },
+                onAction = onAction,
                 focusable = true,
             )
         }
@@ -336,7 +341,7 @@ private fun ToolButton(action: CardAction, onAction: (CardAction) -> Unit) {
                 shapes = IconButtonDefaults.shapes(),
                 modifier = Modifier.semantics { contentDescription = label },
             ) {
-                ActionIcon(action, ACTION_ICON_SIZE)
+                ActionIcon(action, Modifier.size(ACTION_ICON_SIZE))
             }
         }
     }
@@ -344,32 +349,34 @@ private fun ToolButton(action: CardAction, onAction: (CardAction) -> Unit) {
 
 private val ACTION_ICON_SIZE = 24.dp
 
-/**
- * An action's label, which crossfades when a card built again names the action another way. It is
- * left unclipped, so a shorter label keeps its edges while the spring undershoots its new width.
- */
+/** An action's label, which crossfades when a card built again names the action another way. */
 @Composable
 private fun ActionLabel(action: CardAction) {
     val fade = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
     val resize = MaterialTheme.motionScheme.fastSpatialSpec<IntSize>()
     AnimatedContent(
         targetState = labelOf(action),
-        transitionSpec = { (fadeIn(fade) togetherWith fadeOut(fade)) using SizeTransform(clip = false) { _, _ -> resize } },
+        transitionSpec = { crossfadeResizing(fade, resize) },
         label = "action-label",
     ) { label ->
         Text(label)
     }
 }
 
+/** What [action] is called, with its app's name in it for the labels that name the app. */
 @Composable
-private fun labelOf(action: CardAction): String = when (val app = action.appName) {
+internal fun labelOf(action: CardAction): String = when (val app = action.appName) {
     null -> stringResource(action.label)
     else -> stringResource(action.label, app)
 }
 
+/**
+ * The icon of [action]: its app's own for an action that hands off to an app, else its own.
+ * [fullColor] is added only to an app's full-colour icon, which the content colour does not reach.
+ */
 @Composable
-private fun ActionIcon(action: CardAction, size: Dp) {
+internal fun ActionIcon(action: CardAction, modifier: Modifier, fullColor: Modifier = Modifier) {
     val app = action.app
-    if (app != null) AppIcon(app, action.icon, Modifier.size(size))
-    else Icon(painterResource(action.icon), contentDescription = null, modifier = Modifier.size(size))
+    if (app != null) AppIcon(app, action.icon, modifier, fullColor)
+    else Icon(painterResource(action.icon), contentDescription = null, modifier = modifier)
 }

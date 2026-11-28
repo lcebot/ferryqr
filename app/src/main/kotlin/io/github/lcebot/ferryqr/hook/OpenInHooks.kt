@@ -71,7 +71,7 @@ internal object OpenInHooks {
             when (val strategy = app.strategy) {
                 is Strategy.FinishWithResult -> FinishWithResult(xposed, app.pkg, strategy)
                 is Strategy.ReplaceResult -> ReplaceResult(xposed, app.pkg, strategy, classLoader)
-                Strategy.FeedCamera -> feedCamera(xposed)
+                is Strategy.FeedCamera -> feedCamera(xposed)
             }
         } catch (t: Throwable) {
             // Without its hooks a handoff would be accepted and then do nothing; declining at once

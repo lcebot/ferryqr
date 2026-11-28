@@ -35,6 +35,13 @@ private const val CODABAR_BODY = "0123456789-$:/.+"
 private const val CODABAR_GUARDS = "ABCD"
 
 /**
+ * The characters Code 39 holds in its standard form. Any other character would take its extended
+ * form, which writes it as a pair of these, and readers in standard mode, as most handheld and till
+ * scanners are, show that pair rather than the character.
+ */
+private const val CODE_39_CHARACTERS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ -.\$/+%"
+
+/**
  * What each format accepts, checked before encoding so that the reason a text does not fit can be
  * named. Matrix codes take any text up to their capacity, which only encoding tells.
  */
@@ -62,7 +69,8 @@ object CodeRules {
                 else -> null
             }
             CodeType.CODABAR -> if (codabar(text)) null else CodeProblem.Characters
-            CodeType.CODE_128, CodeType.CODE_39, CodeType.CODE_93 ->
+            CodeType.CODE_39 -> if (text.all { it in CODE_39_CHARACTERS }) null else CodeProblem.Characters
+            CodeType.CODE_128, CodeType.CODE_93 ->
                 if (text.all { it.code < 128 }) null else CodeProblem.Characters
             CodeType.QR, CodeType.DATA_MATRIX, CodeType.AZTEC, CodeType.PDF417 -> null
         }

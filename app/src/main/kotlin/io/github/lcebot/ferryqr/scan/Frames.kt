@@ -8,10 +8,14 @@ import android.graphics.PointF
 import android.graphics.Rect
 import android.net.Uri
 import androidx.camera.core.ImageProxy
+import io.github.lcebot.wxcode.LumaImage
 import kotlin.math.max
 import kotlin.math.roundToInt
 import org.opencv.android.Utils
+import org.opencv.core.Core
+import org.opencv.core.CvType
 import org.opencv.core.Mat
+import org.opencv.core.MatOfPoint2f
 import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
 
@@ -30,6 +34,146 @@ private const val MIN_REGION_READ = 8
  */
 class FrozenFrame(val bitmap: Bitmap) {
     fun release() = bitmap.recycle()
+}
+
+/**
+ * Where [uprightGray] turns frames and the mini program check does its work, kept from one frame to
+ * the next by the one thread that reads them, since new buffers for every look would keep the
+ * garbage collector busy on the analysis thread just while a code waits to be read. It holds
+ * nothing until OpenCV is loaded.
+ */
+class UprightBuffer {
+    internal var mat: Mat? = null
+
+    private var luma = ByteArray(0)
+    private var labels = IntArray(0)
+    private var points: MatOfPoint2f? = null
+
+    /**
+     * Room for [size] grey pixels, the frame's pixels copied out for the mini program code reader.
+     * It grows only with the frame and may be longer than asked for.
+     */
+    internal fun luma(size: Int): ByteArray {
+        if (luma.size < size) luma = ByteArray(size)
+        return luma
+    }
+
+    /**
+     * Room for [size] component labels, which [MiniCodeCheck] reads out for every proposal it checks.
+     * Like [luma], it grows only with the region and may be longer than asked for.
+     */
+    internal fun labels(size: Int): IntArray {
+        if (labels.size < size) labels = IntArray(size)
+        return labels
+    }
+
+    /** The float points [MiniCodeCheck] turns each contour into for its enclosing circle. */
+    internal fun points(): MatOfPoint2f = points ?: MatOfPoint2f().also { points = it }
+
+    /** Gives the native memory back at once rather than when the collector gets to it. */
+    fun release() {
+        mat?.release()
+        mat = null
+        points?.release()
+        points = null
+    }
+}
+
+/**
+ * The luma plane of this image, cropped and turned upright the way zxing-cpp reads the frame, so
+ * positions in it match the upright frame; null for a plane OpenCV cannot read in place. Read
+ * straight from the camera's plane, it saves turning the frame into colour and back into grey.
+ * Call it only once OpenCV is loaded, while the image is still open. What this returns belongs to
+ * [into] and holds until the next frame is turned there.
+ */
+internal fun ImageProxy.uprightGray(into: UprightBuffer): Mat? = try {
+    val plane = planes[0]
+    // OpenCV reads a direct buffer in place, where the camera wrote it.
+    val buffer = plane.buffer.takeIf { it.isDirect }
+    if (buffer == null) {
+        null
+    } else {
+        val crop = cropRect
+        val turn = when (imageInfo.rotationDegrees) {
+            90 -> Core.ROTATE_90_CLOCKWISE
+            180 -> Core.ROTATE_180
+            270 -> Core.ROTATE_90_COUNTERCLOCKWISE
+            else -> null
+        }
+        // The luma plane always has a pixel stride of one, but its rows may be padded, which the
+        // step skips. Neither header copies a pixel, so the frame is copied only as it is turned.
+        val whole = Mat(crop.bottom, crop.right, CvType.CV_8UC1, buffer, plane.rowStride.toLong())
+        val cropped = whole.submat(crop.top, crop.bottom, crop.left, crop.right)
+        val upright = into.mat ?: Mat().also { into.mat = it }
+        try {
+            if (turn == null) cropped.copyTo(upright) else Core.rotate(cropped, upright, turn)
+        } finally {
+            cropped.release()
+            whole.release()
+        }
+        upright
+    }
+} catch (t: Throwable) {
+    null
+}
+
+/** The pixels of this grey image copied into [buffer]'s room, as the mini program code reader reads them. */
+internal fun Mat.toLuma(buffer: UprightBuffer): LumaImage {
+    val pixels = buffer.luma(cols() * rows())
+    get(0, 0, pixels)
+    return LumaImage(pixels, cols(), rows())
+}
+
+/**
+ * A camera frame upright, as [width] by [height] pixels. Its grey image for the detector and for
+ * deep reads is read straight from the camera's luma plane, and the colour bitmap, which costs
+ * several conversions of the whole frame, is made only for the steps that need colour: the frame
+ * handed on with a result and the crop of a mini program code. Each is made at most once, as are
+ * the grey pixels the mini program code reader reads, and the grey image lives in [buffer], which
+ * the next frame reuses. Only once the WeChat engine is [ready] does the frame touch OpenCV.
+ */
+internal class UprightFrame(private val image: ImageProxy, val buffer: UprightBuffer, val ready: Boolean) {
+    private val turned = image.imageInfo.rotationDegrees % 180 != 0
+    val width = if (turned) image.cropRect.height() else image.cropRect.width()
+    val height = if (turned) image.cropRect.width() else image.cropRect.height()
+
+    private var bitmap: Bitmap? = null
+    private var grayMat: Mat? = null
+    private var grayTried = false
+    private var lumaImage: LumaImage? = null
+
+    /** Set once [bitmap] is handed on with a result, which then owns it. */
+    var handedOn = false
+
+    /**
+     * The mini program codes already read or tried on this frame, so a deep pass that looks over the
+     * frame again after relocating some of them does not decode those a second time.
+     */
+    val minisTried = ArrayList<MiniCode>()
+
+    fun bitmap(): Bitmap = bitmap ?: image.toUprightBitmap().also { bitmap = it }
+
+    /** Null until OpenCV is loaded; the colour bitmap stands in for it until then. */
+    fun gray(): Mat? {
+        if (!grayTried) {
+            grayTried = true
+            grayMat = if (ready) image.uprightGray(buffer) else null
+        }
+        return grayMat
+    }
+
+    /** The grey pixels for the mini program code reader, copied once; only asked for once [gray] has an image. */
+    fun luma(): LumaImage = lumaImage ?: checkNotNull(gray()).toLuma(buffer).also { lumaImage = it }
+
+    /** [region] of the frame on its own, as [regionCrop] cuts it. */
+    fun region(region: Rect, enlarged: Boolean): RegionCrop? {
+        val gray = gray()
+        return if (gray != null) gray.regionCrop(region, enlarged) else bitmap().regionCrop(region, enlarged)
+    }
+
+    fun recycle() {
+        if (!handedOn) bitmap?.recycle()
+    }
 }
 
 /**

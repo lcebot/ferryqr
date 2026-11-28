@@ -6,13 +6,6 @@ package io.github.lcebot.ferryqr.ui
 
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.SizeTransform
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -20,10 +13,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -42,6 +33,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -58,7 +50,9 @@ import kotlin.math.roundToInt
 @Composable
 fun SettingsScreen(onBack: () -> Unit, onOpenFerry: () -> Unit) {
     SettingsPage(title = R.string.settings_title, onBack = onBack) {
-        item(key = "ferry") { SettingsSection(R.string.settings_ferry_title, first = true) { FerryEntry(onOpenFerry) } }
+        item(key = "ferry") {
+            SettingsSection(R.string.settings_ferry_title, first = true) { row { shape -> FerryEntry(onOpenFerry, shape) } }
+        }
         item(key = "history") { HistorySettings() }
         item(key = "favorites") { FavoriteSettings() }
         item(key = "display") { DisplaySettings() }
@@ -71,7 +65,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenFerry: () -> Unit) {
  * second tap while the page opens does nothing, so it never opens twice.
  */
 @Composable
-private fun FerryEntry(onOpen: () -> Unit) {
+private fun FerryEntry(onOpen: () -> Unit, shape: Shape) {
     val haptics = rememberHaptics()
     val once = rememberOpenOnce()
     SegmentedListItem(
@@ -81,7 +75,7 @@ private fun FerryEntry(onOpen: () -> Unit) {
                 onOpen()
             }
         },
-        shapes = ListItemDefaults.shapes(shape = segmentShape(0, 1)),
+        shapes = ListItemDefaults.shapes(shape = shape),
         colors = settingColors(),
         contentPadding = SETTING_ROW_PADDING,
         // Deliberately centred, as the switch rows are, against the list's rule that top-aligns the
@@ -102,21 +96,22 @@ private fun FerryEntry(onOpen: () -> Unit) {
 private fun HistorySettings() {
     val context = LocalContext.current
     val haptics = rememberHaptics()
-    val kinds = SensitiveKind.entries
     // Named for what the switches do, so on reads as kept.
     SettingsSection(R.string.settings_keep_title, intro = R.string.settings_keep_intro) {
-        kinds.forEachIndexed { index, kind ->
-            val setting = remember(kind) { AppSettings.of(context).keeps(kind) }
-            val keep by setting.flow.collectAsStateWithLifecycle()
-            SwitchItem(
-                title = keptLabel(kind),
-                checked = keep,
-                shape = segmentShape(index, kinds.size),
-                onChange = { on ->
-                    haptics.toggle(on)
-                    setting.value = on
-                },
-            )
+        SensitiveKind.entries.forEach { kind ->
+            row { shape ->
+                val setting = remember(kind) { AppSettings.of(context).keeps(kind) }
+                val keep by setting.flow.collectAsStateWithLifecycle()
+                SwitchItem(
+                    title = keptLabel(kind),
+                    checked = keep,
+                    shape = shape,
+                    onChange = { on ->
+                        haptics.toggle(on)
+                        setting.value = on
+                    },
+                )
+            }
         }
     }
 }
@@ -135,25 +130,21 @@ private fun FavoriteSettings() {
     val grid by settings.tileGrid.flow.collectAsStateWithLifecycle()
     val naming by settings.namesFavorites.flow.collectAsStateWithLifecycle()
     val rows by settings.foldedRows.flow.collectAsStateWithLifecycle()
-    val count = if (tiles) 4 else 3
-    val spatial = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
-    val effects = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
     SettingsSection(R.string.favorites_title) {
-        SwitchItem(
-            title = R.string.settings_name_favorites,
-            checked = naming,
-            shape = segmentShape(0, count),
-            onChange = { on ->
-                haptics.toggle(on)
-                settings.namesFavorites.value = on
-            },
-        )
-        // The layout and the grid choice under it are one item of the section, and the grid choice
-        // brings its own gap above it, so the gap opens and closes with it rather than staying
-        // behind, doubled around an empty item, until the choice has left.
-        Column {
+        row { shape ->
+            SwitchItem(
+                title = R.string.settings_name_favorites,
+                checked = naming,
+                shape = shape,
+                onChange = { on ->
+                    haptics.toggle(on)
+                    settings.namesFavorites.value = on
+                },
+            )
+        }
+        row { shape ->
             SegmentedListItem(
-                shapes = ListItemDefaults.shapes(shape = segmentShape(1, count)),
+                shapes = ListItemDefaults.shapes(shape = shape),
                 colors = settingColors(),
                 contentPadding = SETTING_ROW_PADDING,
                 supportingContent = {
@@ -174,89 +165,82 @@ private fun FavoriteSettings() {
             ) {
                 Text(stringResource(R.string.settings_favorite_layout))
             }
-            AnimatedVisibility(
-                visible = tiles,
-                enter = fadeIn(effects) + expandVertically(spatial),
-                exit = fadeOut(effects) + shrinkVertically(spatial),
-            ) {
-                Column {
-                    Spacer(Modifier.height(ListItemDefaults.SegmentedGap))
-                    // Fixed to its place among four rows, the only arrangement it is shown in, so it
-                    // keeps its small bottom corners while it leaves rather than rounding as the last.
-                    SwitchItem(
-                        title = R.string.settings_tile_grid,
-                        description = R.string.settings_tile_grid_desc,
-                        checked = grid,
-                        shape = segmentShape(2, 4),
-                        onChange = { on ->
-                            haptics.toggle(on)
-                            settings.tileGrid.value = on
+        }
+        conditionalRow(visible = tiles) { shape ->
+            SwitchItem(
+                title = R.string.settings_tile_grid,
+                description = R.string.settings_tile_grid_desc,
+                checked = grid,
+                shape = shape,
+                onChange = { on ->
+                    haptics.toggle(on)
+                    settings.tileGrid.value = on
+                },
+            )
+        }
+        row { shape ->
+            SegmentedListItem(
+                shapes = ListItemDefaults.shapes(shape = shape),
+                colors = settingColors(),
+                contentPadding = SETTING_ROW_PADDING,
+                supportingContent = {
+                    // The slider runs from 0 to 1, a stop for each value between the ends. While held, its
+                    // value indicator shows the value above the handle: a pill in the inverse surface
+                    // colours with the value centred in it, padded as Material's own slider label is.
+                    val first = AppSettings.FOLDED_ROWS.first
+                    val span = AppSettings.FOLDED_ROWS.last - first
+                    val slider = remember { SliderState(value = (rows - first).toFloat() / span, steps = span - 1) }
+                    val interactions = remember { MutableInteractionSource() }
+                    Slider(
+                        state = slider,
+                        onValueChange = { value ->
+                            slider.value = value
+                            val picked = first + (value * span).roundToInt()
+                            if (picked != rows) {
+                                haptics.step()
+                                settings.foldedRows.value = picked
+                            }
                         },
+                        interactionSource = interactions,
+                        thumb = {
+                            Label(
+                                label = {
+                                    Box(
+                                        modifier = Modifier
+                                            .defaultMinSize(minWidth = VALUE_INDICATOR_MIN_WIDTH, minHeight = VALUE_INDICATOR_MIN_HEIGHT)
+                                            .background(MaterialTheme.colorScheme.inverseSurface, CircleShape)
+                                            .padding(VALUE_INDICATOR_PADDING),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Text(
+                                            rows.toString(),
+                                            style = MaterialTheme.typography.labelLarge.withTabularFigures(),
+                                            color = MaterialTheme.colorScheme.inverseOnSurface,
+                                            textAlign = TextAlign.Center,
+                                        )
+                                    }
+                                },
+                                interactionSource = interactions,
+                            ) {
+                                SliderDefaults.Thumb(interactionSource = interactions)
+                            }
+                        },
+                        modifier = Modifier.padding(top = SETTING_CONTROL_GAP),
+                    )
+                },
+            ) {
+                // At rest the value sits on the title's line as a list item's trailing supporting text,
+                // rather than in the trailing slot beside the slider, so the slider runs the row's full
+                // width. Figures of one width keep the title still as the value changes.
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(stringResource(R.string.settings_folded_rows), modifier = Modifier.weight(1f))
+                    Text(
+                        rows.toString(),
+                        style = MaterialTheme.typography.labelSmall.withTabularFigures(),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = SETTING_CONTROL_GAP),
                     )
                 }
-            }
-        }
-        SegmentedListItem(
-            shapes = ListItemDefaults.shapes(shape = segmentShape(count - 1, count)),
-            colors = settingColors(),
-            contentPadding = SETTING_ROW_PADDING,
-            supportingContent = {
-                // The slider runs from 0 to 1, a stop for each value between the ends. While held, its
-                // value indicator shows the value above the handle: a pill in the inverse surface
-                // colours with the value centred in it, padded as Material's own slider label is.
-                val first = AppSettings.FOLDED_ROWS.first
-                val span = AppSettings.FOLDED_ROWS.last - first
-                val slider = remember { SliderState(value = (rows - first).toFloat() / span, steps = span - 1) }
-                val interactions = remember { MutableInteractionSource() }
-                Slider(
-                    state = slider,
-                    onValueChange = { value ->
-                        slider.value = value
-                        val picked = first + (value * span).roundToInt()
-                        if (picked != rows) {
-                            haptics.step()
-                            settings.foldedRows.value = picked
-                        }
-                    },
-                    interactionSource = interactions,
-                    thumb = {
-                        Label(
-                            label = {
-                                Box(
-                                    modifier = Modifier
-                                        .defaultMinSize(minWidth = VALUE_INDICATOR_MIN_WIDTH, minHeight = VALUE_INDICATOR_MIN_HEIGHT)
-                                        .background(MaterialTheme.colorScheme.inverseSurface, CircleShape)
-                                        .padding(VALUE_INDICATOR_PADDING),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Text(
-                                        rows.toString(),
-                                        style = MaterialTheme.typography.labelLarge.withTabularFigures(),
-                                        color = MaterialTheme.colorScheme.inverseOnSurface,
-                                        textAlign = TextAlign.Center,
-                                    )
-                                }
-                            },
-                            interactionSource = interactions,
-                        ) {
-                            SliderDefaults.Thumb(interactionSource = interactions)
-                        }
-                    },
-                    modifier = Modifier.padding(top = SETTING_CONTROL_GAP),
-                )
-            },
-        ) {
-            // At rest the value sits on the title's line as a list item's trailing supporting text,
-            // rather than in the trailing slot beside the slider, so the slider runs the row's full
-            // width. Figures of one width keep the title still as the value changes.
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(stringResource(R.string.settings_folded_rows), modifier = Modifier.weight(1f))
-                Text(
-                    rows.toString(),
-                    style = MaterialTheme.typography.labelSmall.withTabularFigures(),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = SETTING_CONTROL_GAP),
-                )
             }
         }
     }
@@ -271,44 +255,46 @@ private fun DisplaySettings() {
     val mode by settings.longCodeEnlarge.flow.collectAsStateWithLifecycle()
     val bright by settings.fullBrightness.flow.collectAsStateWithLifecycle()
     SettingsSection(R.string.settings_display_title) {
-        SegmentedListItem(
-            shapes = ListItemDefaults.shapes(shape = segmentShape(0, 2)),
-            colors = settingColors(),
-            contentPadding = SETTING_ROW_PADDING,
-            supportingContent = {
-                Column(verticalArrangement = Arrangement.spacedBy(SETTING_CONTROL_GAP)) {
-                    Text(stringResource(R.string.settings_long_codes_desc))
-                    ConnectedChoice(
-                        options = LongCodeEnlarge.entries,
-                        selected = mode,
-                        label = ::enlargeLabel,
-                        onSelect = { settings.longCodeEnlarge.value = it },
-                    )
-                    ChoiceDescription(enlargeDescription(mode))
-                }
-            },
-        ) {
-            Text(stringResource(R.string.settings_long_codes))
+        row { shape ->
+            SegmentedListItem(
+                shapes = ListItemDefaults.shapes(shape = shape),
+                colors = settingColors(),
+                contentPadding = SETTING_ROW_PADDING,
+                supportingContent = {
+                    Column(verticalArrangement = Arrangement.spacedBy(SETTING_CONTROL_GAP)) {
+                        Text(stringResource(R.string.settings_long_codes_desc))
+                        ConnectedChoice(
+                            options = LongCodeEnlarge.entries,
+                            selected = mode,
+                            label = ::enlargeLabel,
+                            onSelect = { settings.longCodeEnlarge.value = it },
+                        )
+                        ChoiceDescription(enlargeDescription(mode))
+                    }
+                },
+            ) {
+                Text(stringResource(R.string.settings_long_codes))
+            }
         }
-        SwitchItem(
-            title = R.string.settings_full_brightness,
-            description = R.string.settings_full_brightness_desc,
-            checked = bright,
-            shape = segmentShape(1, 2),
-            onChange = { on ->
-                haptics.toggle(on)
-                settings.fullBrightness.value = on
-            },
-        )
+        row { shape ->
+            SwitchItem(
+                title = R.string.settings_full_brightness,
+                description = R.string.settings_full_brightness_desc,
+                checked = bright,
+                shape = shape,
+                onChange = { on ->
+                    haptics.toggle(on)
+                    settings.fullBrightness.value = on
+                },
+            )
+        }
     }
 }
 
 /**
  * The description of the option chosen in the row above it. Another option's description fades in
  * over it while the row resizes to the new text on the section's own spring, so the rows below
- * move to their places rather than jump. The resize does not clip, since the spring settles a
- * little below a shorter description before it comes to rest, which would cut off its last line;
- * the row's padding below has room for it.
+ * move to their places rather than jump.
  */
 @Composable
 private fun ChoiceDescription(@StringRes description: Int) {
@@ -316,7 +302,7 @@ private fun ChoiceDescription(@StringRes description: Int) {
     val spatial = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
     AnimatedContent(
         targetState = description,
-        transitionSpec = { (fadeIn(effects) togetherWith fadeOut(effects)) using SizeTransform(clip = false) { _, _ -> spatial } },
+        transitionSpec = { crossfadeResizing(effects, spatial) },
         modifier = Modifier.fillMaxWidth(),
         label = "choice-description",
     ) { shown ->
@@ -332,16 +318,18 @@ private fun CreateSettings() {
     val setting = remember { AppSettings.of(context).rememberFormat }
     val keepFormat by setting.flow.collectAsStateWithLifecycle()
     SettingsSection(R.string.generate_title) {
-        SwitchItem(
-            title = R.string.settings_remember_format,
-            description = R.string.settings_remember_format_desc,
-            checked = keepFormat,
-            shape = segmentShape(0, 1),
-            onChange = { on ->
-                haptics.toggle(on)
-                setting.value = on
-            },
-        )
+        row { shape ->
+            SwitchItem(
+                title = R.string.settings_remember_format,
+                description = R.string.settings_remember_format_desc,
+                checked = keepFormat,
+                shape = shape,
+                onChange = { on ->
+                    haptics.toggle(on)
+                    setting.value = on
+                },
+            )
+        }
     }
 }
 

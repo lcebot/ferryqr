@@ -6,7 +6,6 @@ import android.text.format.DateUtils
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandHorizontally
@@ -62,6 +61,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -103,7 +103,6 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openSaved: String? =
     val dialog by vm.dialog.collectAsStateWithLifecycle()
     val showing by vm.showing.collectAsStateWithLifecycle()
     val card by vm.card.collectAsStateWithLifecycle()
-    val undo by vm.undo.collectAsStateWithLifecycle()
     val settings = vm.settings
     val folded by settings.favoritesFolded.flow.collectAsStateWithLifecycle()
     val tiles by settings.favoriteTiles.flow.collectAsStateWithLifecycle()
@@ -120,14 +119,14 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openSaved: String? =
     val favoritesByKey = lists?.favoritesByKey.orEmpty()
     val recent = lists?.recent.orEmpty()
     val count = lists?.all?.size ?: 0
-    val keeper = remember(vm) { FavoriteOrderKeeper { vm.setOrder(it) } }
-    val board = remember(haptics, keeper) { TileBoard(haptics, keeper) }
+    val favoriteDrag = remember(scope, haptics, vm) { FavoriteDragSession(scope, haptics) { vm.setOrder(it) } }
+    val board = remember { TileBoard() }
     val listState = rememberLazyListState()
     val historyItems = remember(listState) { HistoryItems(listState) }
-    val listReorder = remember(listState, historyItems, haptics, scope, keeper) {
-        ListReorderState(listState, haptics, scope, historyItems::rowKey, FAVORITES_HEADER_KEY, keeper)
+    val listDrag = remember(listState, favoriteDrag, haptics, historyItems) {
+        ListDragLayout(listState, favoriteDrag, haptics, historyItems::rowKey, FAVORITES_HEADER_KEY)
     }
-    val settleSpec = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
+    val settleSpec = MaterialTheme.motionScheme.fastSpatialSpec<Rect>()
     // The count and the clear button are small parts of the bar, while what shows below it is the
     // whole page.
     val barFade = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
@@ -135,10 +134,10 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openSaved: String? =
     val pageFade = MaterialTheme.motionScheme.slowEffectsSpec<Float>()
     val magnetic = remember(scope) { MagneticList(scope) }
     val favoriting = rememberFavoriteRequester()
-    val messages = rememberHistoryMessages(vm, snackbar) { restored -> magnetic.undone(restored.map { it.text }) }
+    val messages = rememberHistoryMessages(vm, snackbar, magnetic)
 
     // Back leaves reordering before it leaves the page, as Done does; each move was kept as it was made.
-    BackHandler(enabled = listReorder.active) { listReorder.finish() }
+    BackHandler(enabled = favoriteDrag.active) { favoriteDrag.finish() }
 
     LaunchedEffect(openSaved) {
         if (openSaved == null) return@LaunchedEffect
@@ -146,15 +145,11 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openSaved: String? =
         onOpened()
     }
 
-    // Entries swiped away and deleted keep their swipes, to fly back with, only while undoing can
-    // bring them back, which ends with the view model's undo session.
-    LaunchedEffect(undo == null) {
-        if (undo == null) magnetic.undoEnded()
-    }
-
-    fun delete(entry: HistoryEntry) {
+    // Gives the undo session the entry joins, which a swipe that took the entry away waits on to fly
+    // it back.
+    fun delete(entry: HistoryEntry): Long {
         haptics.confirm()
-        messages.delete(listOf(entry))
+        return messages.delete(listOf(entry))
     }
 
     // A day's entries go together, as one undoable deletion, so nothing asks first.
@@ -244,8 +239,8 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openSaved: String? =
                         foldedRows = foldedRows,
                         tilesSuggested = tilesSuggested,
                         available = available,
+                        session = favoriteDrag,
                         board = board,
-                        listReorder = listReorder,
                     )
 
                     // The list holds an item that leaves the view while still sliding to its new place
@@ -254,13 +249,12 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openSaved: String? =
                     // while the list is not being scrolled, and a scroll lands those on their way at
                     // once. A favorite held keeps them moving, as the list scrolls under it and the
                     // favorites it passes make way.
-                    val reorder = section.reorder
-                    val itemsMove by remember(listState, reorder) {
-                        derivedStateOf { !listState.isScrollInProgress || reorder.held != null }
+                    val itemsMove by remember(listState, favoriteDrag) {
+                        derivedStateOf { !listState.isScrollInProgress || favoriteDrag.held != null }
                     }
 
-                    ReorderAutoScroll(listState, reorder, padding.calculateBottomPadding())
-                    FollowDropZone(listReorder.zone, listReorder.zoneShown) { listReorder.landing }
+                    ReorderAutoScroll(listState, favoriteDrag, padding.calculateBottomPadding())
+                    FollowDropZone(listDrag.zone, listDrag.zoneShown) { listDrag.landing }
 
                     val hasFavorites = favorites.isNotEmpty()
                     val pageItems = remember(historyItems, hasFavorites, section, groups) { historyItems.build(hasFavorites, section, groups) }
@@ -275,8 +269,8 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openSaved: String? =
                         state = listState,
                         // Drawn behind every row, as the tiles' zone is behind every tile, so the rows
                         // opening their gap pass over it as it glides the other way.
-                        modifier = Modifier.dropZone(listReorder.zone) {
-                            val span = listReorder.zoneSpan() ?: return@dropZone null
+                        modifier = Modifier.dropZone(listDrag.zone) {
+                            val span = listDrag.zoneSpan() ?: return@dropZone null
                             val left = listPadding.calculateLeftPadding(layoutDirection).toPx()
                             val right = size.width - listPadding.calculateRightPadding(layoutDirection).toPx()
                             Rect(left, span.start, right, span.endInclusive)
@@ -298,12 +292,14 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openSaved: String? =
                                     reordering = section.reordering,
                                     onReorder = {
                                         haptics.tap()
-                                        if (listReorder.active) listReorder.finish() else listReorder.start(favorites)
+                                        if (favoriteDrag.active) favoriteDrag.finish() else listDrag.start()
                                     },
                                     modifier = animateRow(itemsMove),
                                 )
                                 HistoryItem.Tiles -> FavoriteTiles(
                                     board = board,
+                                    session = favoriteDrag,
+                                    settleSpec = settleSpec,
                                     favorites = favoritesByKey,
                                     namesOf = { lists?.namesOf(it) },
                                     inputs = section.tiles,
@@ -324,9 +320,11 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openSaved: String? =
                                 // composition as it moves and changes its look on its own motion.
                                 is HistoryItem.Row -> {
                                     val entry = item.entry
-                                    val reordering = item.favorite && listReorder.active
-                                    val dragged = reordering && listReorder.dragging == entry.text
-                                    val back = magnetic.returning(entry.text) != null
+                                    val reordering = item.favorite && favoriteDrag.active
+                                    // In hand or gliding into its place, the row is drawn apart from its
+                                    // place rather than sliding with the list.
+                                    val dragged = reordering && favoriteDrag.isMoving(entry.text)
+                                    val back = magnetic.departures.returning(entry.text) != null
                                     val moveUp = stringResource(R.string.favorite_move_up)
                                     val moveDown = stringResource(R.string.favorite_move_down)
                                     EntryRow(
@@ -342,7 +340,7 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openSaved: String? =
                                         } else {
                                             (if (dragged) Modifier else animateRow(itemsMove, flyingBack = back))
                                                 .zIndex(if (dragged) 1f else 0f)
-                                                .graphicsLayer { if (dragged) translationY = listReorder.dragOffset }
+                                                .graphicsLayer { if (dragged) translationY = favoriteDrag.positionOf(entry.text)?.top ?: 0f }
                                                 // Without a finger to drag with, the order changes a row at a time.
                                                 .then(
                                                     if (!reordering) {
@@ -350,9 +348,9 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openSaved: String? =
                                                     } else {
                                                         Modifier.semantics {
                                                             customActions = listOfNotNull(
-                                                                CustomAccessibilityAction(moveUp) { listReorder.move(entry.text, item.index - 1); true }
+                                                                CustomAccessibilityAction(moveUp) { favoriteDrag.move(entry.text, -1); true }
                                                                     .takeIf { item.index > 0 },
-                                                                CustomAccessibilityAction(moveDown) { listReorder.move(entry.text, item.index + 1); true }
+                                                                CustomAccessibilityAction(moveDown) { favoriteDrag.move(entry.text, 1); true }
                                                                     .takeIf { item.index < item.count - 1 },
                                                             )
                                                         }
@@ -364,10 +362,10 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openSaved: String? =
                                         } else {
                                             RowReorder(
                                                 active = reordering,
-                                                lifted = dragged && listReorder.settling == null,
-                                                onDragStart = { listReorder.startDrag(entry.text) },
-                                                onDrag = listReorder::drag,
-                                                onDragEnd = { listReorder.endDrag(settleSpec) },
+                                                lifted = reordering && favoriteDrag.hand == entry.text,
+                                                onDragStart = { listDrag.pickUp(entry.text) },
+                                                onDrag = { favoriteDrag.drag(Offset(0f, it)) },
+                                                onDragEnd = { favoriteDrag.drop(entry.text, settleSpec) },
                                             )
                                         },
                                     )
@@ -444,8 +442,7 @@ private fun LazyItemScope.animateRow(move: Boolean, flyingBack: Boolean = false)
  * rather than pushing the favorites further away than the entries of a day are from theirs. Each
  * button comes and goes growing and fading in place while the other slides aside, on the fast
  * springs, as small parts of the page. A label that changes fades into the next while its button
- * resizes, without clipping, since the spring settles a little below a shorter label before it
- * comes to rest, which would cut off its end; the button's padding has room for it.
+ * resizes.
  */
 @Composable
 private fun FavoritesHeader(
@@ -474,7 +471,7 @@ private fun FavoritesHeader(
             TextButton(onClick = onToggle, shapes = ButtonDefaults.shapes()) {
                 AnimatedContent(
                     targetState = folded,
-                    transitionSpec = { (fadeIn(effects) togetherWith fadeOut(effects)) using SizeTransform(clip = false) { _, _ -> resize } },
+                    transitionSpec = { crossfadeResizing(effects, resize) },
                     label = "favorites-toggle",
                 ) { isFolded ->
                     Text(
@@ -495,7 +492,7 @@ private fun FavoritesHeader(
             TextButton(onClick = onReorder, shapes = ButtonDefaults.shapes()) {
                 AnimatedContent(
                     targetState = reordering,
-                    transitionSpec = { (fadeIn(effects) togetherWith fadeOut(effects)) using SizeTransform(clip = false) { _, _ -> resize } },
+                    transitionSpec = { crossfadeResizing(effects, resize) },
                     label = "favorites-reorder",
                 ) { isReordering ->
                     Text(stringResource(if (isReordering) R.string.favorites_reorder_done else R.string.favorites_reorder))

@@ -13,16 +13,11 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import io.github.lcebot.ferryqr.dispatch.CardSource
-import io.github.lcebot.ferryqr.dispatch.InstalledApps
 import io.github.lcebot.ferryqr.dispatch.Origin
 import io.github.lcebot.ferryqr.dispatch.ReadContent
 import io.github.lcebot.ferryqr.dispatch.ResultCard
 import io.github.lcebot.ferryqr.history.HistoryStore
-import io.github.lcebot.ferryqr.openin.OpenInModule
-import io.github.lcebot.ferryqr.scan.Engines
 import io.github.lcebot.ferryqr.scan.Found
-import io.github.lcebot.ferryqr.scan.StillOutcome
-import io.github.lcebot.ferryqr.scan.readStillImage
 import io.github.lcebot.ferryqr.scan.thumbnail
 import io.github.lcebot.ferryqr.ui.FerryTheme
 import io.github.lcebot.ferryqr.ui.ImageScanSheet
@@ -58,12 +53,6 @@ class ImageScanActivity : ComponentActivity() {
         }
     }
 
-    override fun onResume() {
-        super.onResume()
-        // Apps may have been installed or removed, or a default browser chosen, while FerryQR was away.
-        InstalledApps.invalidate()
-    }
-
     private fun imageUri(intent: Intent): Uri? = when (intent.action) {
         Intent.ACTION_SEND -> IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)
         Intent.ACTION_VIEW -> intent.data
@@ -78,46 +67,40 @@ class ImageScanActivity : ComponentActivity() {
 sealed interface ImageScan {
     data object Unreadable : ImageScan
 
-    /** The [codes] found, or with none, [miniCrop], the one mini program code located when nothing was read. */
-    class Read(val codes: List<ImageCode>, val miniCrop: Bitmap?) : ImageScan
+    /**
+     * The [codes] found, each with its crop when it was only located and, when there are several, its
+     * thumbnail; or with none, [miniCrop], the one mini program code located when nothing was read.
+     */
+    class Read(val codes: List<StillCode>, val miniCrop: Bitmap?) : ImageScan
 
     companion object {
-        fun of(outcome: StillOutcome): ImageScan = when (outcome) {
-            StillOutcome.Unreadable -> Unreadable
-            StillOutcome.Empty -> Read(emptyList(), miniCrop = null)
-            is StillOutcome.LocatedMini -> Read(emptyList(), miniCrop = outcome.crop)
-            is StillOutcome.Codes -> {
-                val frame = outcome.frame
-                val kept = outcome.codes.mapNotNull { found ->
+        fun of(scan: StillScan): ImageScan = when (scan) {
+            StillScan.Unreadable -> Unreadable
+            StillScan.Empty -> Read(emptyList(), miniCrop = null)
+            is StillScan.LocatedMini -> Read(emptyList(), miniCrop = scan.crop)
+            is StillScan.Codes -> {
+                val frame = scan.frame.bitmap
+                val kept = scan.codes.mapNotNull { code ->
                     // A located code that cannot be cut from the image would leave WeChat nothing to scan.
-                    val crop = (found as? Found.Located)?.let { it.crop(frame) ?: return@mapNotNull null }
-                    found to crop
+                    val crop = (code.found as? Found.Located)?.let { it.crop(frame) ?: return@mapNotNull null }
+                    code to crop
                 }
                 // Thumbnails are cut only for the chooser, which shows only for more than one code.
                 val many = kept.size > 1
                 Read(
-                    codes = kept.map { (found, crop) ->
-                        val content = (found as? Found.Read)?.detection?.let { ReadContent.of(it.text, it.format) }
-                        ImageCode(found, content, if (many) found.thumbnail(frame) else null, crop)
+                    codes = kept.map { (code, crop) ->
+                        StillCode(code.found, code.content, if (many) code.found.thumbnail(frame) else null, crop)
                     },
                     miniCrop = null,
-                ).also { outcome.release() }
+                ).also { scan.release() }
             }
         }
     }
 }
 
-/**
- * A code [found] in a shared or opened image, as its sheet shows it: a code that was read has its
- * [content], read once for its card, its tile and history, and a mini program code only located has
- * its [crop] for WeChat instead. [thumbnail] shows it in the chooser when the image holds several.
- */
-class ImageCode(val found: Found, val content: ReadContent?, val thumbnail: Bitmap?, val crop: Bitmap?)
-
 class ImageScanViewModel(app: Application) : AndroidViewModel(app) {
 
-    private val zxing = Engines.zxing
-    private val wechat = Engines.wechat(app)
+    private val stills = StillReader(app)
     private val history = HistoryStore.get(app)
     private var loaded = false
 
@@ -153,13 +136,12 @@ class ImageScanViewModel(app: Application) : AndroidViewModel(app) {
         if (loaded) return
         loaded = true
         viewModelScope.launch {
-            val outcome = readStillImage(getApplication<Application>(), uri, zxing, wechat)
+            val scan = stills.read(uri)
             // Cutting the thumbnails and crops from the image takes a moment, so it stays off the main thread.
-            val read = withContext(Dispatchers.Default) { ImageScan.of(outcome) }
+            val read = withContext(Dispatchers.Default) { ImageScan.of(scan) }
             _result.value = read
             _outcomes.send(read)
         }
-        viewModelScope.launch { OpenInModule.refresh() }
     }
 
     /**

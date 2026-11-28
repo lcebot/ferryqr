@@ -4,19 +4,14 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.PointF
 import android.graphics.Rect
-import androidx.camera.core.ImageProxy
 import com.king.wechat.qrcode.WeChatQRCodeDetector
-import io.github.lcebot.wxcode.LumaImage
 import kotlin.math.hypot
 import kotlin.math.min
 import kotlin.math.sqrt
 import org.opencv.OpenCV
 import org.opencv.android.Utils
-import org.opencv.core.Core
-import org.opencv.core.CvType
 import org.opencv.core.Mat
 import org.opencv.core.MatOfByte
-import org.opencv.core.MatOfPoint2f
 import org.opencv.core.Scalar
 import org.opencv.core.Size
 import org.opencv.dnn.Dnn
@@ -60,50 +55,6 @@ class Survey(val read: List<Detection>, val located: List<MiniCode>, val regions
 
 /** A mini program code [WeChatEngine.lookAgain] found where it was, with its content when it was [read]. */
 class Relocated(val code: MiniCode, val read: Detection?)
-
-/**
- * Where [WeChatEngine.upright] turns frames and the mini program check does its work, kept from one
- * frame to the next by the one thread that reads them, since new buffers for every look would keep
- * the garbage collector busy on the analysis thread just while a code waits to be read. It holds
- * nothing until OpenCV is loaded.
- */
-class UprightBuffer {
-    internal var mat: Mat? = null
-
-    private var luma = ByteArray(0)
-    private var labels = IntArray(0)
-    private var points: MatOfPoint2f? = null
-
-    /**
-     * Room for [size] grey pixels, the frame's pixels copied out for the mini program code reader,
-     * which reads them while a code waits as often as the frame is turned. It grows only with the
-     * frame and may be longer than asked for.
-     */
-    internal fun luma(size: Int): ByteArray {
-        if (luma.size < size) luma = ByteArray(size)
-        return luma
-    }
-
-    /**
-     * Room for [size] component labels, which [MiniCodeCheck] reads out for every proposal it checks.
-     * Like [luma], it grows only with the region and may be longer than asked for.
-     */
-    internal fun labels(size: Int): IntArray {
-        if (labels.size < size) labels = IntArray(size)
-        return labels
-    }
-
-    /** The float points [MiniCodeCheck] turns each contour into for its enclosing circle. */
-    internal fun points(): MatOfPoint2f = points ?: MatOfPoint2f().also { points = it }
-
-    /** Gives the native memory back at once rather than when the collector gets to it. */
-    fun release() {
-        mat?.release()
-        mat = null
-        points?.release()
-        points = null
-    }
-}
 
 /**
  * WeChat's CNN code detector, run directly as a proposer, and OpenCV's WeChatQRCode as a second QR
@@ -158,47 +109,15 @@ class WeChatEngine(context: Context) {
     val isReady: Boolean
         get() = ready == true && (detector != null || detectorFailed)
 
-    /** Lets the next warm-up or decode try loading OpenCV and the models again after a failed attempt. */
+    /**
+     * Lets the next warm-up or decode try loading OpenCV and the models again after a failed attempt.
+     * Called from a click, so it never waits on [lock], which a decode or the warm-up may hold for
+     * hundreds of milliseconds; both flags are volatile, and a load failing again just as this runs
+     * only leaves the retry to the next reset.
+     */
     fun retryIfFailed() {
         if (ready == false) ready = null
-        synchronized(lock) { detectorFailed = false }
-    }
-
-    /**
-     * The luma plane of [image], cropped and turned upright the way zxing-cpp reads the frame, so
-     * positions in it match the upright frame; null until OpenCV is loaded, or for a plane OpenCV
-     * cannot read in place. Read straight from the camera's plane, it saves turning the frame into
-     * colour and back into grey. [image] must still be open. What this returns belongs to [into] and
-     * holds until the next frame is turned there.
-     */
-    fun upright(image: ImageProxy, into: UprightBuffer): Mat? {
-        if (!ensureReady()) return null
-        return try {
-            val plane = image.planes[0]
-            // OpenCV reads a direct buffer in place, where the camera wrote it.
-            val buffer = plane.buffer.takeIf { it.isDirect } ?: return null
-            val crop = image.cropRect
-            val turn = when (image.imageInfo.rotationDegrees) {
-                90 -> Core.ROTATE_90_CLOCKWISE
-                180 -> Core.ROTATE_180
-                270 -> Core.ROTATE_90_COUNTERCLOCKWISE
-                else -> null
-            }
-            // The luma plane always has a pixel stride of one, but its rows may be padded, which the
-            // step skips. Neither header copies a pixel, so the frame is copied only as it is turned.
-            val whole = Mat(crop.bottom, crop.right, CvType.CV_8UC1, buffer, plane.rowStride.toLong())
-            val cropped = whole.submat(crop.top, crop.bottom, crop.left, crop.right)
-            val upright = into.mat ?: Mat().also { into.mat = it }
-            try {
-                if (turn == null) cropped.copyTo(upright) else Core.rotate(cropped, upright, turn)
-            } finally {
-                cropped.release()
-                whole.release()
-            }
-            upright
-        } catch (t: Throwable) {
-            null
-        }
+        detectorFailed = false
     }
 
     /** Called under [lock]. The model files ship in the WeChatQRCode assets. */
@@ -226,7 +145,7 @@ class WeChatEngine(context: Context) {
         return try {
             Utils.bitmapToMat(bitmap, rgba)
             Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY)
-            survey(gray, look)
+            survey(gray, look, null)
         } catch (t: Throwable) {
             Survey.NONE
         } finally {
@@ -236,53 +155,69 @@ class WeChatEngine(context: Context) {
     }
 
     /**
-     * [survey] on a grey image, such as one from [upright]; [gray] stays the caller's to release.
-     * With [buffer], the one [gray] was turned into, the mini program check and the read work in the
-     * buffer's room; without it, in room kept for this call only.
+     * [survey] on a camera [frame], in the room of the buffer it was turned into. A mini program code
+     * already tried on the frame, as a deep pass relocates each one before it looks over the frame
+     * again, is not read a second time and stays out of what comes back. Until the frame has a grey
+     * image, its colour bitmap stands in.
      */
-    fun survey(gray: Mat, look: Look, buffer: UprightBuffer? = null): Survey {
+    internal fun survey(frame: UprightFrame, look: Look): Survey {
+        val gray = frame.gray() ?: return survey(frame.bitmap(), look)
+        return survey(gray, look, frame)
+    }
+
+    /**
+     * [survey] on a grey image, which stays the caller's to release. With [frame], the one [gray]
+     * belongs to, the mini program check and the read work in the frame's room, and read the frame's
+     * grey pixels copied once; without it, in room kept for this call only.
+     */
+    private fun survey(gray: Mat, look: Look, frame: UprightFrame?): Survey {
         if (!ensureReady()) return Survey.NONE
-        val scratch = buffer ?: UprightBuffer()
+        val scratch = frame?.buffer ?: UprightBuffer()
         return try {
             val boxes = synchronized(lock) { proposals(gray, look.detectorArea) }
             val proposed = boxes.mapNotNull { MiniCodeCheck.inRegion(gray, it.second, scratch) }.distinctBy(::cellOf)
             val searched = if (look.wholeImageSearch) MiniCodeCheck.inImage(gray, scratch)?.takeIf { code -> proposed.none { it.overlaps(code) } } else null
             val mini = proposed + listOfNotNull(searched)
+            // Codes tried already still keep their detector boxes from passing for QR codes.
             val regions = boxes
                 .filter { (score, box) -> score >= QR_REGION_SCORE && mini.none { it.covers(box) } }
                 .map { it.second }
-            if (mini.isEmpty()) return Survey(emptyList(), emptyList(), regions)
-            val read = readAll(gray, mini, scratch)
+            val fresh = if (frame == null) mini else mini.filterNot { frame.tried(it) }
+            if (fresh.isEmpty()) return Survey(emptyList(), emptyList(), regions)
+            frame?.minisTried?.addAll(fresh)
+            val luma = frame?.luma() ?: gray.toLuma(scratch)
+            val read = fresh.associateWith { it.read(luma) }
             Survey(read.values.filterNotNull(), read.filterValues { it == null }.keys.toList(), regions)
         } catch (t: Throwable) {
             Survey.NONE
         } finally {
-            if (buffer == null) scratch.release()
+            if (frame == null) scratch.release()
         }
     }
 
     /**
-     * Looks for a mini program code at [region] of [gray], where one was located before, with the
+     * Looks for a mini program code at [region] of [frame], where one was located before, with the
      * structural check alone, which costs far less than the detector; null when the check finds
-     * none there, as after the code has moved. The code comes back with its content when it can be
-     * read. [buffer], the one [gray] was turned into, lends the check and the read their room.
+     * none there, as after the code has moved, or before the frame has a grey image. The code comes
+     * back with its content when it can be read, unless it was tried on this frame already.
      */
-    fun lookAgain(gray: Mat, region: Rect, buffer: UprightBuffer): Relocated? {
+    internal fun lookAgain(frame: UprightFrame, region: Rect): Relocated? {
         if (!ensureReady()) return null
+        val gray = frame.gray() ?: return null
         return try {
-            val code = MiniCodeCheck.inRegion(gray, region, buffer) ?: return null
-            Relocated(code, readAll(gray, listOf(code), buffer).getValue(code))
+            val code = MiniCodeCheck.inRegion(gray, region, frame.buffer) ?: return null
+            if (frame.tried(code)) return Relocated(code, null)
+            frame.minisTried += code
+            Relocated(code, code.read(frame.luma()))
         } catch (t: Throwable) {
             null
         }
     }
 
-    /** Reads each of [codes] from [gray] in [buffer]'s room, as null for one that cannot be read. */
-    private fun readAll(gray: Mat, codes: List<MiniCode>, buffer: UprightBuffer): Map<MiniCode, Detection?> {
-        val pixels = buffer.luma(gray.cols() * gray.rows())
-        gray.get(0, 0, pixels)
-        val frame = LumaImage(pixels, gray.cols(), gray.rows())
-        return codes.associateWith { it.read(frame) }
+    /** Whether a mini program code in the place of [code] was tried on this frame already. */
+    private fun UprightFrame.tried(code: MiniCode): Boolean {
+        val cell = cellOf(code)
+        return minisTried.any { cellOf(it) == cell }
     }
 
     /** Overlapping proposals for one code collapse into one, keyed by a coarse grid cell. */

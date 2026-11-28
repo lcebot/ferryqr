@@ -41,12 +41,16 @@ class OpenInAppsTest {
 
     @Test
     fun everyModuleFerryIsAnApp() {
-        for (ferry in ActiveFerries.all.filter { it.route == Route.MODULE }) assertTrue(ferry.pkg in packages, "${ferry.pkg} has no strategy")
+        for (ferry in ActiveFerries.all) {
+            val route = ferry.route as? Route.Module ?: continue
+            assertTrue(route.app in OpenInApps.all, "${ferry.pkg} has no strategy")
+            assertEquals(ferry.pkg, route.app.pkg, "${ferry.pkg} takes the strategy of another app")
+        }
     }
 
     @Test
     fun everyAppCanBeOffered() {
-        for (pkg in packages) assertTrue(ActiveFerries.of(pkg)?.route == Route.MODULE, "$pkg is not offered through the module")
+        for (pkg in packages) assertTrue(ActiveFerries.of(pkg)?.route is Route.Module, "$pkg is not offered through the module")
     }
 
     @Test

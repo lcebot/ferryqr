@@ -5,6 +5,8 @@ import android.os.Build
 import android.util.Size
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import androidx.camera.core.SurfaceRequest
+import androidx.camera.viewfinder.compose.MutableCoordinateTransformer
 import androidx.compose.ui.graphics.Matrix
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.IntSize
@@ -105,12 +107,17 @@ private fun Bitmap.softened(): Bitmap {
 }
 
 /**
- * A still of the camera's picture in the camera's own orientation. The image, and its [soft] copy
- * where there is one, are stretched over the surface's [resolution], which [toViewfinder] places in
- * the viewfinder as the picture was placed when the still was taken, so the still lies exactly over
- * the picture it replaces.
+ * A still of the camera's picture in the camera's own orientation, taken while the viewfinder's
+ * [transformer] placed the picture of [shown]. The image, and its [soft] copy where there is one,
+ * are stretched over the surface's [resolution], which [toViewfinder] places in the viewfinder as the
+ * picture was placed when the still was taken, so the still lies exactly over the picture it replaces.
  */
-internal class Still(val shot: Shot, val resolution: IntSize, val toViewfinder: Matrix) {
+internal class Still(val shot: Shot, shown: SurfaceRequest, transformer: MutableCoordinateTransformer) {
+    val resolution = IntSize(shown.resolution.width, shown.resolution.height)
+    val toViewfinder = Matrix().apply {
+        setFrom(transformer.transformMatrix)
+        invert()
+    }
     val image = shot.frame.bitmap.asImageBitmap()
     val soft = shot.soft?.asImageBitmap()
 }

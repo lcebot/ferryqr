@@ -5,10 +5,6 @@ import android.icu.text.Collator
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.SizeTransform
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -47,12 +43,12 @@ import io.github.lcebot.ferryqr.dispatch.DefaultApp
 import io.github.lcebot.ferryqr.dispatch.DefaultApps
 import io.github.lcebot.ferryqr.dispatch.FerryEnv
 import io.github.lcebot.ferryqr.dispatch.Handling
-import io.github.lcebot.ferryqr.dispatch.Launch
+import io.github.lcebot.ferryqr.dispatch.InstalledApps
 import io.github.lcebot.ferryqr.dispatch.Route
 import io.github.lcebot.ferryqr.dispatch.SystemFeature
 import io.github.lcebot.ferryqr.dispatch.SystemFeatures
 import io.github.lcebot.ferryqr.openin.ModuleState
-import io.github.lcebot.ferryqr.openin.OpenInApps
+import io.github.lcebot.ferryqr.openin.OpenInApp
 import io.github.lcebot.ferryqr.openin.OpenInModule
 import io.github.lcebot.ferryqr.openin.Strategy
 import kotlinx.coroutines.Dispatchers
@@ -70,19 +66,14 @@ private class AppSetting(val pkg: String, @StringRes val name: Int, val fixed: M
 /** The space between a list item's leading icon and its text. */
 private val LEADING_TO_TEXT = 16.dp
 
-private val REASONS = mapOf(
-    OpenInApps.DIDI to R.string.method_didi_reason,
-    OpenInApps.MEITUAN to R.string.method_meituan_reason,
-)
-
-/** Only a replaced result has an alternative, the camera; the other ways are the only ones that work. */
-private fun settingOf(ferry: ActiveFerry): AppSetting {
-    val app = OpenInApps.all.first { it.pkg == ferry.pkg }
-    return when (app.strategy) {
-        is Strategy.ReplaceResult -> AppSetting(app.pkg, ferry.name, fixed = null, reason = null)
-        Strategy.FeedCamera -> AppSetting(app.pkg, ferry.name, Method.Camera, REASONS.getValue(app.pkg))
-        is Strategy.FinishWithResult -> AppSetting(app.pkg, ferry.name, Method.Direct, REASONS.getValue(app.pkg))
-    }
+/**
+ * The setting of [ferry], which reaches its app through the module as [app] describes. Only a
+ * replaced result has an alternative, the camera; the other ways are the only ones that work.
+ */
+private fun settingOf(ferry: ActiveFerry, app: OpenInApp): AppSetting = when (val strategy = app.strategy) {
+    is Strategy.ReplaceResult -> AppSetting(app.pkg, ferry.name, fixed = null, reason = null)
+    is Strategy.FeedCamera -> AppSetting(app.pkg, ferry.name, Method.Camera, strategy.reason)
+    is Strategy.FinishWithResult -> AppSetting(app.pkg, ferry.name, Method.Direct, strategy.reason)
 }
 
 /**
@@ -98,8 +89,11 @@ fun FerrySettingsScreen(onBack: () -> Unit) {
     val locale = LocalConfiguration.current.locales[0]
     val collator = remember(locale) { Collator.getInstance(locale) }
     fun <T> sorted(items: List<T>, name: (T) -> Int) = items.sortedWith(compareBy(collator) { context.getString(name(it)) })
-    val modules = remember(collator) { sorted(ActiveFerries.all.filter { it.route == Route.MODULE }) { it.name }.map(::settingOf) }
-    val entries = remember(collator) { sorted(ActiveFerries.all.filter { it.route == Route.ENTRY }) { it.name } }
+    val modules = remember(collator) {
+        val settings = ActiveFerries.all.mapNotNull { ferry -> (ferry.route as? Route.Module)?.let { settingOf(ferry, it.app) } }
+        sorted(settings) { it.name }
+    }
+    val entries = remember(collator) { sorted(ActiveFerries.all.filter { it.route == Route.Entry }) { it.name } }
     val features = remember(collator) { sorted(SystemFeatures.all) { it.name } }
     val defaults = remember(collator) { sorted(DefaultApps.all) { it.name } }
 
@@ -126,22 +120,22 @@ fun FerrySettingsScreen(onBack: () -> Unit) {
         } else {
             item(key = "apps") {
                 SettingsSection(R.string.ferry_group_apps, R.string.settings_entries_intro, first = true) {
-                    entries.forEachIndexed { index, ferry ->
-                        EntryItem(ferry, facts?.installed(ferry.pkg), segmentShape(index, entries.size))
+                    entries.forEach { ferry ->
+                        row { shape -> EntryItem(ferry, facts?.installed(ferry.pkg), shape) }
                     }
                 }
             }
             item(key = "system") {
                 SettingsSection(R.string.ferry_group_system, R.string.ferry_group_system_intro) {
-                    features.forEachIndexed { index, feature ->
-                        FeatureItem(feature, facts?.let { feature in it.supported }, segmentShape(index, features.size))
+                    features.forEach { feature ->
+                        row { shape -> FeatureItem(feature, facts?.let { feature in it.supported }, shape) }
                     }
                 }
             }
             item(key = "defaults") {
                 SettingsSection(R.string.ferry_group_defaults, R.string.ferry_group_defaults_intro) {
-                    defaults.forEachIndexed { index, app ->
-                        DefaultAppItem(app, facts?.handling?.get(app), facts?.labels.orEmpty(), segmentShape(index, defaults.size))
+                    defaults.forEach { app ->
+                        row { shape -> DefaultAppItem(app, facts?.handling?.get(app), facts?.labels.orEmpty(), shape) }
                     }
                 }
             }
@@ -159,24 +153,12 @@ private fun OpenInHeader() {
         modifier = Modifier.padding(start = LIST_TEXT_INSET, end = LIST_TEXT_INSET, bottom = SECTION_GAP),
         verticalArrangement = Arrangement.spacedBy(SECTION_GAP),
     ) {
-        Text(
-            stringResource(R.string.settings_open_in_intro),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            stringResource(R.string.settings_methods_intro),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        SectionNote(stringResource(R.string.settings_open_in_intro))
+        SectionNote(stringResource(R.string.settings_methods_intro))
         Method.entries.forEach { method ->
             Column {
                 Text(stringResource(method.label), style = MaterialTheme.typography.labelLarge)
-                Text(
-                    stringResource(method.description),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                SectionNote(stringResource(method.description))
             }
         }
     }
@@ -220,7 +202,7 @@ private fun AppRow(
                     val resize = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
                     AnimatedContent(
                         targetState = status to working,
-                        transitionSpec = { (fadeIn(fade) togetherWith fadeOut(fade)) using SizeTransform(clip = false) { _, _ -> resize } },
+                        transitionSpec = { crossfadeResizing(fade, resize) },
                         label = "app-status",
                     ) { (text, on) ->
                         Text(
@@ -280,7 +262,7 @@ private fun AppSettingItem(app: AppSetting, installed: Boolean?, shape: Shape) {
             haptic = { toggle(it == Method.Camera) },
         )
         // Only an app limited to one method says why; the methods themselves are described above.
-        if (app.reason != null) Note(app.reason)
+        if (app.reason != null) SectionNote(stringResource(app.reason))
     }
 }
 
@@ -296,7 +278,7 @@ private fun EntryItem(ferry: ActiveFerry, installed: Boolean?, shape: Shape) {
         false -> stringResource(R.string.app_not_installed)
     }
     AppRow({ AppIcon(ferry.pkg, R.drawable.ic_apps, Modifier.size(24.dp)) }, stringResource(ferry.name), status, installed == true, shape) {
-        ferry.summary?.let { Note(it) }
+        ferry.summary?.let { SectionNote(stringResource(it)) }
     }
 }
 
@@ -309,7 +291,7 @@ private fun FeatureItem(feature: SystemFeature, supported: Boolean?, shape: Shap
         false -> stringResource(R.string.feature_unsupported)
     }
     AppRow({ FeatureIcon(feature.icon) }, stringResource(feature.name), status, supported == true, shape) {
-        Note(feature.summary)
+        SectionNote(stringResource(feature.summary))
     }
 }
 
@@ -356,19 +338,14 @@ private var lastFacts: SystemFacts? = null
 
 /** Asks everything the page shows in one pass, which belongs off the main thread as each question is a binder call. */
 private fun readFacts(context: Context): SystemFacts {
-    val handling = DefaultApps.all.associateWith { it.handling(context) }
     val env = FerryEnv(context)
+    val handling = DefaultApps.all.associateWith { it.handling(env) }
     return SystemFacts(
         installedPackages = ActiveFerries.all.filter { it.installed(env) }.mapTo(HashSet()) { it.pkg },
-        supported = SystemFeatures.all.filterTo(HashSet()) { it.supported(context) },
+        supported = SystemFeatures.all.filterTo(HashSet()) { it.supported(env) },
         handling = handling,
         labels = handling.values.filterIsInstance<Handling.App>()
-            .mapNotNull { app -> Launch.appLabel(context, app.pkg)?.let { app.pkg to it } }
+            .mapNotNull { app -> InstalledApps.label(context, app.pkg)?.let { app.pkg to it } }
             .toMap(),
     )
-}
-
-@Composable
-private fun Note(@StringRes text: Int) {
-    Text(stringResource(text), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }

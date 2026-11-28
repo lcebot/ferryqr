@@ -1,9 +1,18 @@
 package io.github.lcebot.ferryqr.dispatch
 
 import android.content.Context
+import io.github.lcebot.ferryqr.content.BoardingPassPayload
+import io.github.lcebot.ferryqr.content.ContactPayload
+import io.github.lcebot.ferryqr.content.DppPayload
+import io.github.lcebot.ferryqr.content.EsimPayload
+import io.github.lcebot.ferryqr.content.EventPayload
+import io.github.lcebot.ferryqr.content.FidoPayload
+import io.github.lcebot.ferryqr.content.MiniProgramPayload
+import io.github.lcebot.ferryqr.content.OtpPayload
 import io.github.lcebot.ferryqr.content.SchemePayload
 import io.github.lcebot.ferryqr.content.TextPayload
 import io.github.lcebot.ferryqr.content.WebPayload
+import io.github.lcebot.ferryqr.content.WifiPayload
 
 /**
  * The most code points a row's or a tile's title keeps. A row or tile shows two lines at most, which
@@ -64,7 +73,8 @@ class ContentNames internal constructor(context: Context, val content: ReadConte
     val automaticShortTitle: String = carried.name ?: when (payload) {
         is WebPayload -> payload.host
         is TextPayload, is SchemePayload -> payload.raw
-        else -> null
+        is FidoPayload, is BoardingPassPayload, is OtpPayload, is EsimPayload, is DppPayload, is WifiPayload,
+        is ContactPayload, is EventPayload, is MiniProgramPayload -> null
     } ?: kindLabel
 
     /** As a shortcut shows it: its name, else [automaticShortTitle]. */

@@ -25,8 +25,8 @@ private enum class GeneratorSlot { CHIPS, TOOLBAR, PROBE, FIELD, CODE }
  * [gap] apart. Upright, the code sits between the chips and the toolbar; [sideBySide], it takes one
  * half of the width and the controls the other. [field] is shown with the number of lines it is
  * given, and [fieldProbe] is the field one line tall, measured but never shown. [onSnackbarLift]
- * learns how far the snackbar has to rise above the bottom of the page to stay clear of the toolbar
- * and the field.
+ * learns how far above the bottom of the layout the toolbar and the field end, which the snackbar
+ * has to stay clear of.
  */
 @Composable
 internal fun GeneratorLayout(
@@ -68,7 +68,7 @@ internal fun GeneratorLayout(
         val oneLine = subcompose(GeneratorSlot.PROBE, fieldProbe).maxOfOrNull { it.measure(controls).height } ?: 0
         val chipsHeight = chipsRow.maxOfOrNull { it.height } ?: 0
         val toolbarHeight = toolbarRow.maxOfOrNull { it.height } ?: 0
-        // Upright, the code keeps a square as wide as the page before the field takes more lines.
+        // Upright, the code's area keeps a square as wide as the page before the field takes more lines.
         val roomForField = height - keyboardTarget - chipsHeight - toolbarHeight - gapPx * 2 -
             if (sideBySide) 0 else gapPx + width
         val perLine = lineHeight.toPx().roundToInt()

@@ -5,11 +5,21 @@ import android.content.Context
 import android.content.Intent
 import androidx.annotation.StringRes
 import io.github.lcebot.ferryqr.R
+import io.github.lcebot.ferryqr.content.BoardingPassPayload
+import io.github.lcebot.ferryqr.content.ContactPayload
+import io.github.lcebot.ferryqr.content.DppPayload
+import io.github.lcebot.ferryqr.content.EsimPayload
+import io.github.lcebot.ferryqr.content.EventPayload
+import io.github.lcebot.ferryqr.content.FidoPayload
 import io.github.lcebot.ferryqr.content.MiniProgramPayload
 import io.github.lcebot.ferryqr.content.OtpPayload
 import io.github.lcebot.ferryqr.content.Payload
 import io.github.lcebot.ferryqr.content.SchemePayload
+import io.github.lcebot.ferryqr.content.TextPayload
 import io.github.lcebot.ferryqr.content.WebPayload
+import io.github.lcebot.ferryqr.content.WifiPayload
+import io.github.lcebot.ferryqr.openin.OpenInApp
+import io.github.lcebot.ferryqr.openin.OpenInApps
 
 /**
  * A way a scanned code reaches another app. An [ActiveFerry] is one FerryQR made and tried by hand
@@ -72,12 +82,12 @@ internal fun Ferry.reach(env: FerryEnv, origin: Origin): Reach = when {
 }
 
 /** How an [ActiveFerry] reaches its app, which decides the tab the ferry page lists it under. */
-internal enum class Route {
-    /** Through the LSPosed module, as [OpenInApps] describes for the app. */
-    MODULE,
+internal sealed interface Route {
+    /** Through the LSPosed module, in the way [app] describes. */
+    class Module(val app: OpenInApp) : Route
 
     /** Through an entry the app takes content from other apps by, official or private, with no module. */
-    ENTRY,
+    data object Entry : Route
 }
 
 /**
@@ -102,7 +112,7 @@ internal class ActiveFerry(
     val exclusive: Boolean = false,
     private val handoff: (Activity, String) -> Boolean,
 ) : Ferry {
-    override fun isReady(env: FerryEnv): Boolean = route != Route.MODULE || pkg in env.ready
+    override fun isReady(env: FerryEnv): Boolean = route !is Route.Module || pkg in env.ready
 
     override fun label(context: Context): String = context.getString(name)
 
@@ -114,29 +124,34 @@ internal class PassiveFerry(override val pkg: String, private val intent: Intent
     override fun isReady(env: FerryEnv): Boolean = true
     override val album: Boolean get() = false
 
-    override fun label(context: Context): String = Launch.appLabel(context, pkg) ?: pkg
+    override fun label(context: Context): String = InstalledApps.labelOrPackage(context, pkg)
 
     override fun open(activity: Activity, text: String): Boolean = Launch.start(activity, Intent(intent).setPackage(pkg))
 }
 
 internal object ActiveFerries {
     val ALIPAY = ActiveFerry(
-        Alipay.PACKAGE, R.string.app_alipay, Route.ENTRY, general = true, album = false,
+        Alipay.PACKAGE, R.string.app_alipay, Route.Entry, general = true, album = false,
         summary = R.string.entry_alipay, handoff = Alipay::handoff,
     )
-    val WECHAT = ActiveFerry(WeChat.PACKAGE, R.string.app_wechat, Route.MODULE, general = true, album = true) { activity, text ->
-        WeChat.openScanner(activity, text)
-    }
-    val DIDI = ActiveFerry(Didi.PACKAGE, R.string.app_didi, Route.MODULE, general = false, album = false, handoff = Didi::openScanner)
+    val WECHAT = ActiveFerry(
+        WeChat.PACKAGE, R.string.app_wechat, Route.Module(OpenInApps.WECHAT_APP), general = true, album = true,
+        handoff = { activity, text -> WeChat.openScanner(activity, text) },
+    )
+    val DIDI = ActiveFerry(
+        Didi.PACKAGE, R.string.app_didi, Route.Module(OpenInApps.DIDI_APP), general = false, album = false,
+        handoff = Didi::openScanner,
+    )
     val MEITUAN = ActiveFerry(
-        Meituan.PACKAGE, R.string.app_meituan, Route.MODULE, general = false, album = false, handoff = Meituan::openScanner,
+        Meituan.PACKAGE, R.string.app_meituan, Route.Module(OpenInApps.MEITUAN_APP), general = false, album = false,
+        handoff = Meituan::openScanner,
     )
     val XIAOMI_ACCOUNT = ActiveFerry(
-        Xiaomi.ACCOUNT, R.string.app_xiaomi_account, Route.ENTRY, general = false, album = false,
+        Xiaomi.ACCOUNT, R.string.app_xiaomi_account, Route.Entry, general = false, album = false,
         summary = R.string.entry_xiaomi_account, exclusive = true, handoff = Xiaomi::signIn,
     )
     val MI_HOME = ActiveFerry(
-        Xiaomi.MI_HOME, R.string.app_mi_home, Route.ENTRY, general = false, album = false,
+        Xiaomi.MI_HOME, R.string.app_mi_home, Route.Entry, general = false, album = false,
         summary = R.string.entry_mi_home, exclusive = true, handoff = Xiaomi::addDevice,
     )
 
@@ -156,7 +171,8 @@ internal object ActiveFerries {
         is WebPayload -> claimant(payload.url)
         is SchemePayload -> claimant(payload.raw)
         is MiniProgramPayload -> WECHAT
-        else -> null
+        is FidoPayload, is BoardingPassPayload, is OtpPayload, is EsimPayload, is DppPayload, is WifiPayload,
+        is ContactPayload, is EventPayload, is TextPayload -> null
     }
 }
 
@@ -168,12 +184,13 @@ internal object PassiveFerries {
      */
     fun of(env: FerryEnv, payload: Payload): PassiveFerry? {
         val intent = when (payload) {
-            is WebPayload -> Launch.linkIntent(payload.url)
-            is SchemePayload -> Launch.schemeIntent(payload.uri, payload.scheme)
-            is OtpPayload -> Launch.linkIntent(payload.raw)
-            else -> null
+            is WebPayload -> Intents.link(payload.url)
+            is SchemePayload -> Intents.scheme(payload.uri, payload.scheme)
+            is OtpPayload -> Intents.link(payload.raw)
+            is FidoPayload, is BoardingPassPayload, is EsimPayload, is DppPayload, is WifiPayload, is ContactPayload,
+            is EventPayload, is TextPayload, is MiniProgramPayload -> null
         } ?: return null
-        return Launch.handler(env.context, env.resolved(intent), env.browsers)?.let { PassiveFerry(it, intent) }
+        return env.handler(intent)?.let { PassiveFerry(it, intent) }
     }
 }
 

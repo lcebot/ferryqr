@@ -1,10 +1,14 @@
 package io.github.lcebot.ferryqr.history
 
+import android.app.Application
 import android.content.Context
+import android.os.LocaleList
 import android.util.AtomicFile
 import io.github.lcebot.ferryqr.AppSettings
 import io.github.lcebot.ferryqr.dispatch.ContentNames
+import io.github.lcebot.ferryqr.dispatch.Kind
 import io.github.lcebot.ferryqr.dispatch.ReadContent
+import io.github.lcebot.ferryqr.languages
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.OutputStream
@@ -18,6 +22,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -107,8 +112,16 @@ class HistoryStore private constructor(private val context: Context) {
     /** Asks the writer to save the latest entries; requests made while it writes merge into one. */
     private val saves = Channel<Unit>(Channel.CONFLATED)
 
-    /** Whether the favorites changed since the shortcuts were last brought in line. Guarded by [lock]. */
+    /**
+     * Whether what the shortcuts show or carry changed since they were last brought in line, as
+     * [shortcutView] tells, or a change of language or of the settings for sensitive kinds makes it.
+     * Guarded by [lock].
+     */
     private var shortcutsStale = false
+
+    /** The languages the shortcuts were last labelled in, null until they first are. */
+    @Volatile
+    private var shortcutLanguages: LocaleList? = null
 
     private val _entries = MutableStateFlow<List<HistoryEntry>?>(null)
 
@@ -144,30 +157,83 @@ class HistoryStore private constructor(private val context: Context) {
             if (!read.writable) return@launch
             // Shortcuts outlive the process, so they are brought in line with the file once it is read.
             syncShortcuts(_entries.value.orEmpty())
+            // The entries last written. A pass asked for only to bring the shortcuts in line, as a
+            // change of language asks for one, finds them unchanged and writes nothing.
+            var written: List<HistoryEntry>? = null
             for (request in saves) {
                 // The flag is taken together with the entries it was raised for, so a favorites change
                 // made while this pass writes keeps its flag for the next pass, which saves its entries.
                 val (snapshot, stale) = synchronized(lock) { _entries.value to shortcutsStale.also { shortcutsStale = false } }
                 if (snapshot == null) continue
-                // One failed write leaves the next to try again, rather than ending saving for good.
-                try {
-                    save(snapshot)
-                } catch (e: Exception) {
-                    // The entries stay in memory, and the next change writes them all again.
+                if (snapshot !== written) {
+                    written = snapshot
+                    // One failed write leaves the next to try again, rather than ending saving for good.
+                    try {
+                        save(snapshot)
+                    } catch (e: Exception) {
+                        // The entries stay in memory, and the next change writes them all again.
+                    }
                 }
                 if (stale) syncShortcuts(snapshot)
             }
         }
+        // Unnamed shortcuts are labelled with titles in the app's language, so a new language labels
+        // them again. Before they are first labelled there is nothing to label again, since that
+        // first time takes the language of the moment.
+        scope.launch {
+            (context as Application).languages(this).collect { locales ->
+                val labelled = shortcutLanguages
+                if (labelled != null && locales != labelled) markShortcutsStale()
+            }
+        }
+        // Each shortcut carries its entry in the saved form, which depends on whether the settings
+        // keep the entry's kind, so a change to any of them brings the shortcuts in line again, and a
+        // pinned shortcut carries the text itself only while its kind is kept.
+        scope.launch {
+            AppSettings.of(context).kept.drop(1).collect { markShortcutsStale() }
+        }
+    }
+
+    /** Asks the writer to bring the shortcuts in line, though the entries may be unchanged. */
+    private fun markShortcutsStale() {
+        synchronized(lock) { shortcutsStale = true }
+        saves.trySend(Unit)
     }
 
     /** Shortcuts the launcher refuses leave the history and its saving untouched. */
     private fun syncShortcuts(entries: List<HistoryEntry>) {
+        shortcutLanguages = context.resources.configuration.locales
         try {
             FavoriteShortcuts.update(context, favoritesOf(entries))
         } catch (e: Exception) {
-            // The shortcuts are brought in line again with the next change to the favorites.
+            // The shortcuts are brought in line again with the next change to what they show.
         }
     }
+
+    /**
+     * What the app shortcuts show of [entries], which brings them in line only when it changes: the
+     * shortcut favorites in their order, each by its content, short title and kind, and every
+     * favorite by what names it, which decides the pinned shortcuts that stay enabled and how they
+     * are labelled. When a favorite was made or how the favorites around the shortcuts are ordered
+     * changes nothing shown, so neither counts.
+     */
+    private fun shortcutView(entries: List<HistoryEntry>): ShortcutView {
+        val favorites = favoritesOf(entries)
+        return ShortcutView(
+            shortcuts = favorites.filter { it.shortcut }.take(FavoriteShortcuts.MAX).map { entry ->
+                val names = entry.content.names(context, entry.label)
+                ShortcutFace(entry.text, names.shortTitle, names.kind)
+            },
+            favorites = favorites.mapTo(HashSet()) { FavoriteName(it.text, it.format, it.label) },
+        )
+    }
+
+    private data class ShortcutFace(val text: String, val shortTitle: String, val kind: Kind)
+
+    /** A favorite's content and its name, from which a pinned shortcut's title and kind follow. */
+    private data class FavoriteName(val text: String, val format: String, val label: String?)
+
+    private data class ShortcutView(val shortcuts: List<ShortcutFace>, val favorites: Set<FavoriteName>)
 
     /** Writes the history file that could not be read to [out], as it was; false when that fails. */
     fun exportDamaged(out: OutputStream): Boolean = runCatching {
@@ -331,7 +397,7 @@ class HistoryStore private constructor(private val context: Context) {
             }
             val next = limited(change(current))
             if (next == current) return
-            if (favoritesOf(next) != favoritesOf(current)) shortcutsStale = true
+            if (shortcutView(next) != shortcutView(current)) shortcutsStale = true
             _entries.value = next
         }
         saves.trySend(Unit)

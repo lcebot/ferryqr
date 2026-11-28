@@ -10,7 +10,6 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -34,10 +33,13 @@ internal class HistoryMessages(private val vm: HistoryViewModel) {
         note = Note(message)
     }
 
-    /** Deletes [entries], and the offer to undo them takes the place of a message still to show. */
-    fun delete(entries: List<HistoryEntry>) {
+    /**
+     * Deletes [entries], and the offer to undo them takes the place of a message still to show.
+     * Returns the id of the undo session they join.
+     */
+    fun delete(entries: List<HistoryEntry>): Long {
         note = null
-        vm.delete(entries)
+        return vm.delete(entries)
     }
 
     /**
@@ -72,25 +74,23 @@ internal class HistoryMessages(private val vm: HistoryViewModel) {
  * since the chance to undo last passed, and a page composed again offers it again. A message takes
  * its place while it shows, and the offer comes back once the message has gone. The offer stays
  * until it is acted on or closed, as a snackbar with an action does; a newer offer or message
- * cancels the one showing. Undoing passes [onUndo] the entries it brings back, in the order they
- * were deleted.
+ * cancels the one showing. Undoing hands [list] the entries it brings back, in the order they were
+ * deleted, to fly back, and a session whose deletions the view model lets go lets [list] drop the
+ * swipes it kept for them.
  */
 @Composable
-internal fun rememberHistoryMessages(
-    vm: HistoryViewModel,
-    snackbar: SnackbarHostState,
-    onUndo: (List<HistoryEntry>) -> Unit,
-): HistoryMessages {
+internal fun rememberHistoryMessages(vm: HistoryViewModel, snackbar: SnackbarHostState, list: MagneticList): HistoryMessages {
     val context = LocalContext.current
     val haptics = rememberHaptics()
     val undo by vm.undo.collectAsStateWithLifecycle()
-    val undone by rememberUpdatedState(onUndo)
+    val dropped by vm.dropped.collectAsStateWithLifecycle()
     val messages = remember(vm) { HistoryMessages(vm) }
-    LaunchedEffect(messages, messages.waiting, undo) {
+    LaunchedEffect(messages, messages.waiting, undo, list) {
         messages.present(snackbar, context, undo) {
             haptics.tap()
-            undone(vm.undoDeletes())
+            list.departures.undone(vm.undoDeletes().map { it.text })
         }
     }
+    LaunchedEffect(list, dropped) { list.departures.sessionEnded(dropped) }
     return messages
 }

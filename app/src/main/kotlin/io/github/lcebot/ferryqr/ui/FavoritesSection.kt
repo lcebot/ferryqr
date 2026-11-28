@@ -2,7 +2,6 @@ package io.github.lcebot.ferryqr.ui
 
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalDensity
@@ -23,10 +22,10 @@ private const val SUGGEST_TILES_AT = 6
  * says. They show in [layout], as rows of the list or as tiles; they fold when [foldable], and
  * folded while [folded], to the first rows, hiding [hiddenCount] of them. The list shows [rows],
  * the favorites' rows in the order shown, and the tiles are laid out from [tiles] as [arrangement]
- * with [rowsShown] of their rows in view. Favorites are moved through [reorder], the tiles' board
- * or the list's reordering, whichever [layout] uses. Only the list has a mode for moving them,
- * [reorderable] with more than one favorite and [reordering] while it is on, since tiles are
- * dragged straight away. [suggestTiles] says the moment has come to suggest tiles.
+ * with [rowsShown] of their rows in view. Both show the favorites' contents in [order]. Only the
+ * list has a mode for moving them, [reorderable] with more than one favorite and [reordering] while
+ * it is on, since tiles are dragged straight away. [suggestTiles] says the moment has come to
+ * suggest tiles.
  */
 internal class FavoritesSection(
     val layout: FavoriteLayout,
@@ -37,7 +36,7 @@ internal class FavoritesSection(
     val tiles: TileInputs,
     val arrangement: TileArrangement,
     val rowsShown: Int,
-    val reorder: FavoritesReorder,
+    val order: List<String>,
     val reorderable: Boolean,
     val reordering: Boolean,
     val suggestTiles: Boolean,
@@ -49,8 +48,8 @@ internal class FavoritesSection(
  * The favorites section for [favorites], shown by the [names] they go by, in [layout], [folded]
  * or not to [foldedRows], in a page [available] pixels wide inside its margins. [tilesSuggested]
  * says whether tiles were suggested already. It is built again only when one of these changes, or
- * the order [board] or [listReorder] moves the favorites into while one is moved, and it keeps
- * both of them in step with what it shows.
+ * the order [session] moves the favorites into while one is moved, and once composed it hands the
+ * order it shows to [session] and what the tiles are laid out from to [board].
  */
 @Composable
 internal fun rememberFavoritesSection(
@@ -61,28 +60,30 @@ internal fun rememberFavoritesSection(
     foldedRows: Int,
     tilesSuggested: Boolean,
     available: Int,
+    session: FavoriteDragSession,
     board: TileBoard,
-    listReorder: ListReorderState,
 ): FavoritesSection {
     val density = LocalDensity.current
     val layoutDirection = LocalLayoutDirection.current
-    LaunchedEffect(favorites) { listReorder.sync(favorites) }
     // Tiles are as wide as their names, measured before they are laid out, so the rows they fill
     // are known for folding them and for suggesting them.
     val widths = rememberTileWidths(names, with(density) { tileChrome(layoutDirection).roundToPx() })
     val gap = with(density) { ListItemDefaults.SegmentedGap.roundToPx() }
     val column = with(density) { GRID_COLUMN.roundToPx() }
     // Read here rather than while building, so moving a favorite builds the section again.
-    val tileOrder = if (board.key != null) board.order.toList() else null
-    val listOrder = if (listReorder.active) listReorder.order.toList() else null
+    val moved = if (session.engaged) session.order.toList() else null
+    val reordering = session.active
     val section = remember(
-        favorites, layout, folded, foldedRows, tilesSuggested, widths, available, gap, column, tileOrder, listOrder, board, listReorder,
+        favorites, layout, folded, foldedRows, tilesSuggested, widths, available, gap, column, moved, reordering, board,
     ) {
+        val current = favorites.map { it.text }
+        // What the history changed while a favorite is moved is merged in here rather than once the
+        // section is composed, so a favorite added meanwhile joins the favorites in the same frame
+        // as it leaves the rest of the history.
+        val order = moved?.let { syncOrder(it, current) } ?: current
         if (layout != FavoriteLayout.LIST) {
-            val present = favorites.mapTo(HashSet()) { it.text }
-            val keys = tileOrder?.filter { it in present } ?: favorites.map { it.text }
             val columns = if (layout == FavoriteLayout.GRID) gridColumns(available, gap, column) else null
-            val tiles = TileInputs(keys, widths, available, gap, columns)
+            val tiles = TileInputs(order, widths, available, gap, columns)
             val arrangement = tiles.arrange()
             val foldable = arrangement.rows > foldedRows
             FavoritesSection(
@@ -94,23 +95,26 @@ internal fun rememberFavoritesSection(
                 tiles = tiles,
                 arrangement = arrangement,
                 rowsShown = if (foldable && folded) foldedRows else arrangement.rows,
-                reorder = board,
+                order = order,
                 reorderable = false,
                 reordering = false,
                 suggestTiles = false,
             )
         } else {
-            val reordering = listOrder != null
             // Folded, the favorites show their first few rows, which in the list are favorites.
             val foldable = favorites.size > foldedRows && !reordering
-            val byKey = favorites.associateBy { it.text }
-            val ordered = listOrder?.mapNotNull { byKey[it] } ?: favorites
+            val ordered = if (moved == null) {
+                favorites
+            } else {
+                val byKey = favorites.associateBy { it.text }
+                order.mapNotNull { byKey[it] }
+            }
             // Tiles fit as many favorites in a row as their names allow; once there are enough
             // favorites that tiles would at least halve their rows, history suggests them, once.
             // The tiles are arranged for that only while the suggestion can still be made.
             val suggestible = !tilesSuggested && !reordering && favorites.size >= SUGGEST_TILES_AT
             val worthTiles = suggestible &&
-                arrangeTiles(favorites.map { it.text }, { widths[it] ?: 0 }, available, gap, null).rows * 2 <= favorites.size
+                arrangeTiles(current, { widths[it] ?: 0 }, available, gap, null).rows * 2 <= favorites.size
             FavoritesSection(
                 layout = layout,
                 foldable = foldable,
@@ -120,13 +124,16 @@ internal fun rememberFavoritesSection(
                 tiles = TileInputs.NONE,
                 arrangement = TileInputs.NONE.arrange(),
                 rowsShown = 0,
-                reorder = listReorder,
+                order = order,
                 reorderable = favorites.size > 1,
                 reordering = reordering,
                 suggestTiles = worthTiles,
             )
         }
     }
-    SideEffect { board.update(section.tiles, section.rowsShown) }
+    SideEffect {
+        session.shown(section.order)
+        board.update(section.tiles, section.rowsShown)
+    }
     return section
 }

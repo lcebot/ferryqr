@@ -43,11 +43,11 @@ internal class TileArrangement(
      * tiles, as a segmented list is between its rows. A row shorter than the one above or below
      * leaves the end of the longer one as a corner of the outline too.
      */
-    fun cornersOf(spot: TileSpot, rowsShown: Int): TileCorners {
+    fun cornersOf(spot: TileSpot, rowsShown: Int): SegmentCorners {
         val lastRow = rowsShown - 1
         val end = spot.x + spot.width
         fun shorter(row: Int) = row < 0 || row > lastRow || row >= rowEnds.size || rowEnds[row] < end - 1
-        return TileCorners(
+        return SegmentCorners(
             topStart = spot.first && spot.row == 0,
             topEnd = spot.last && shorter(spot.row - 1),
             bottomStart = spot.first && spot.row == lastRow,
@@ -106,8 +106,6 @@ internal class RowHeights(private val heights: IntArray, private val gap: Int) {
         return (rows - 1).coerceAtLeast(0)
     }
 }
-
-internal class TileCorners(val topStart: Boolean, val topEnd: Boolean, val bottomStart: Boolean, val bottomEnd: Boolean)
 
 /**
  * Lays out tiles of the widths [widthOf] gives, in rows [available] wide.

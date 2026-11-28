@@ -9,14 +9,17 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.ContentTransform
-import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.updateTransition
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -40,6 +43,7 @@ import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.clearText
@@ -67,6 +71,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -77,12 +82,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
@@ -93,13 +102,18 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.util.lerp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.lcebot.ferryqr.AppSettings
 import io.github.lcebot.ferryqr.LongCodeEnlarge
@@ -107,12 +121,12 @@ import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.content.Classifier
 import io.github.lcebot.ferryqr.dispatch.ActiveFerries
 import io.github.lcebot.ferryqr.dispatch.ActiveFerry
+import io.github.lcebot.ferryqr.dispatch.CardAction
+import io.github.lcebot.ferryqr.dispatch.Cards
 import io.github.lcebot.ferryqr.dispatch.Ferries
 import io.github.lcebot.ferryqr.dispatch.Ferry
 import io.github.lcebot.ferryqr.dispatch.FerryEnv
 import io.github.lcebot.ferryqr.dispatch.Origin
-import io.github.lcebot.ferryqr.dispatch.Reach
-import io.github.lcebot.ferryqr.dispatch.reach
 import io.github.lcebot.ferryqr.generate.AutoFormat
 import io.github.lcebot.ferryqr.generate.CodeDrawing
 import io.github.lcebot.ferryqr.generate.CodeGenerator
@@ -139,6 +153,12 @@ private const val KEYBOARD_CLOSE_TIMEOUT_MS = 300L
 
 private val GAP = 12.dp
 
+/** The page's margin at its sides and at its bottom. */
+private val PAGE_PADDING = 16.dp
+
+/** The space between format chips. */
+private val CHIP_GAP = 8.dp
+
 /** The apps offered for the text are looked up once typing has paused this long. */
 private const val OFFER_DELAY_MS = 150L
 
@@ -148,6 +168,9 @@ fun GeneratorScreen(onBack: () -> Unit) {
     val activity = LocalActivity.current
     val haptics = rememberHaptics()
     val snackbar = remember { SnackbarHostState() }
+    // Handing the text to an app is followed as a result card's actions are, though the page stays.
+    val results = rememberActionResultHandler(snackbar)
+    val onAction: (CardAction) -> Unit = { action -> activity?.let { results.run(it, action) } }
     val scope = rememberCoroutineScope()
     val windowInfo = LocalWindowInfo.current
     // The text is read in effects and in the parts that depend on it, and values drawn from it are
@@ -200,15 +223,20 @@ fun GeneratorScreen(onBack: () -> Unit) {
     // The field follows only whether the text fits, not every code made from it.
     val unfit by remember { derivedStateOf { made?.generated as? Generated.Unfit } }
     val ready = readyApps()
-    // Every installed app FerryQR reaches its own way, each in a place of its own in the toolbar so
-    // it can fade in and out there: the apps for their own codes first, the general ones last.
-    // Asking the package manager is a call into another process, so it stays off the main thread,
-    // and the apps are named there too, as every app offered is, together with how each takes the text.
+    // Typed text has no code for a scanner, and only installed apps are offered, so an app either
+    // opens the text or needs the module. One that needs it could only open its scanner on nothing,
+    // so its action is blocked: its button looks disabled but still explains why when tapped. Each
+    // action hands over the text as it is when tapped.
+    fun <F : Ferry> named(env: FerryEnv, ferry: F): NamedFerry<F>? =
+        Cards.targetAction(env, ferry, Origin.TYPED) { ferry.open(it, field.text.toString()) }?.let { NamedFerry(ferry, it) }
+    // Every installed app FerryQR reaches its own way, each given a place of its own in the toolbar
+    // so it can fade in and out there. Asking the package manager is a call into another process, so
+    // it stays off the main thread, and the apps are named there too, as every app offered is,
+    // together with how each takes the text.
     val candidates by produceState(emptyList<NamedFerry<ActiveFerry>>(), ready) {
         value = withContext(Dispatchers.IO) {
             val env = FerryEnv(context, ready)
-            ActiveFerries.all.filter { it.installed(env) }.sortedBy { it.general }
-                .map { NamedFerry(it, it.label(context), it.reach(env, Origin.TYPED)) }
+            ActiveFerries.all.mapNotNull { named(env, it) }
         }
     }
     val appFade = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
@@ -221,9 +249,17 @@ fun GeneratorScreen(onBack: () -> Unit) {
             delay(OFFER_DELAY_MS)
             value = withContext(Dispatchers.IO) {
                 val env = FerryEnv(context, ready)
-                Ferries.offered(env, Classifier.classify(text))
-                    .filter { it.installed(env) }
-                    .map { NamedFerry(it, it.label(context), it.reach(env, Origin.TYPED)) }
+                Ferries.offered(env, Classifier.classify(text)).mapNotNull { named(env, it) }
+            }
+        }
+    }
+    // The places in the toolbar, the apps for their own codes first and the general ones last, and
+    // drawn from both lists, so an app offered always has one, even one installed while the page was
+    // out of sight. An app offered takes its place with the action made for the text just typed.
+    val slots by remember {
+        derivedStateOf {
+            ActiveFerries.all.sortedBy { it.general }.mapNotNull { ferry ->
+                (offered.firstOrNull { it.ferry == ferry } ?: candidates.firstOrNull { it.ferry == ferry })?.let { ferry to it }
             }
         }
     }
@@ -259,6 +295,21 @@ fun GeneratorScreen(onBack: () -> Unit) {
             Icon(painterResource(R.drawable.ic_close), stringResource(R.string.generate_clear))
         }
     }
+    // The clear button fades and grows in with the first character and goes the same way when the
+    // text is cleared, keeping its place in the field until it has gone.
+    val clearShown = updateTransition(hasText, label = "clear")
+    val clearPlace = clearShown.currentState || clearShown.targetState
+    val clearFade = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
+    val clearScale = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
+    val clearArriving: @Composable () -> Unit = {
+        clearShown.AnimatedVisibility(
+            visible = { it },
+            enter = fadeIn(clearFade) + scaleIn(clearScale),
+            exit = fadeOut(clearFade) + scaleOut(clearScale),
+        ) {
+            clearButton()
+        }
+    }
 
     if (picking) {
         FormatPickerSheet(
@@ -271,8 +322,11 @@ fun GeneratorScreen(onBack: () -> Unit) {
     }
 
     // How far the snackbar rises above the bottom of the page so it stays clear of the toolbar and
-    // the text field, which the layout below works out as it places them.
+    // the text field. The layout below works out how far above its own bottom they end as it places
+    // them, and its bottom sits the page's margin above the snackbar's, so the margin is added; the
+    // snackbar's own padding then keeps it apart from them.
     val snackbarLift = remember { mutableIntStateOf(0) }
+    val bottomMargin = with(pageDensity) { PAGE_PADDING.roundToPx() }
     Scaffold(
         // The scaffold lifts the snackbar only above the system bars, and the keyboard would cover it.
         snackbarHost = {
@@ -300,36 +354,13 @@ fun GeneratorScreen(onBack: () -> Unit) {
                 .fillMaxSize()
                 .padding(padding)
                 .consumeWindowInsets(padding)
-                .padding(horizontal = 16.dp)
-                .padding(bottom = 16.dp),
+                .padding(horizontal = PAGE_PADDING)
+                .padding(bottom = PAGE_PADDING),
         ) {
             // Turned sideways, the screen has too little height for the code above the controls, so the
             // code takes one half of the width, as tall as the screen lets it be, and the controls the other.
             val sideBySide = maxWidth > maxHeight
             val toolbarRoom = if (sideBySide) (maxWidth - GAP) / 2 else maxWidth
-
-            // What is done with the code sits in one toolbar under it: actions on the code itself,
-            // then the apps that can open the text, with sharing as the main way out.
-            val sendApp: (NamedFerry<Ferry>) -> SendApp = { (ferry, name, reach) ->
-                // Typed text has no code for a scanner, and only installed apps are offered, so an
-                // app either opens the text or needs the module. One that needs it could only open
-                // its scanner on nothing, so its button looks disabled but still explains why when tapped.
-                val opens = reach == Reach.Opens
-                SendApp(context.getString(R.string.open_in_app, name), ferry.pkg, looksEnabled = opens) {
-                    when {
-                        activity == null -> Unit
-                        !opens -> {
-                            haptics.reject()
-                            scope.launch { snackbar.showLatest(context.getString(R.string.needs_module_in_app, name)) }
-                        }
-                        else -> {
-                            haptics.tap()
-                            val opened = ferry.open(activity, field.text.toString())
-                            if (!opened) scope.launch { snackbar.showLatest(context.getString(R.string.no_app)) }
-                        }
-                    }
-                }
-            }
 
             // The code opens over the whole window when tapped, as large as the window lets it be.
             var enlarged by rememberSaveable { mutableStateOf(false) }
@@ -338,13 +369,21 @@ fun GeneratorScreen(onBack: () -> Unit) {
 
             val chipFade = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
             val chipResize = MaterialTheme.motionScheme.fastSpatialSpec<IntSize>()
+            val formatChip: @Composable (CodeType) -> Unit = { option ->
+                FilterChip(
+                    selected = option == chosen,
+                    onClick = { haptics.step(); choose(option.name) },
+                    label = { Text(stringResource(option.label)) },
+                    modifier = Modifier.padding(start = CHIP_GAP).semantics { role = Role.RadioButton },
+                )
+            }
             val chips: @Composable () -> Unit = {
                 // The automatic choice leads and names the format it uses; the common formats follow, with
                 // one picked from the rest beside them while it is in use, and the rest one tap away.
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
+                // Only one format is chosen at a time, so the chips are one group of radio buttons to
+                // screen readers, as the picker's tiles are. Each chip after the first keeps its gap
+                // before it, so one that comes and goes brings its gap along.
+                Row(modifier = Modifier.horizontalScroll(rememberScrollState()).selectableGroup()) {
                     Labeled(R.string.format_auto_desc) {
                         FilterChip(
                             selected = chosen == null,
@@ -354,10 +393,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
                                 // so the chips after it slide along rather than jump.
                                 AnimatedContent(
                                     targetState = automatic,
-                                    transitionSpec = {
-                                        (fadeIn(chipFade) togetherWith fadeOut(chipFade)) using
-                                            SizeTransform(clip = false) { _, _ -> chipResize }
-                                    },
+                                    transitionSpec = { crossfadeResizing(chipFade, chipResize) },
                                     contentAlignment = Alignment.CenterStart,
                                     label = "auto-format",
                                 ) { format ->
@@ -367,16 +403,25 @@ fun GeneratorScreen(onBack: () -> Unit) {
                             leadingIcon = {
                                 Icon(painterResource(R.drawable.ic_lightbulb), contentDescription = null, modifier = Modifier.size(FilterChipDefaults.IconSize))
                             },
-                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                            modifier = Modifier.semantics {
+                                liveRegion = LiveRegionMode.Polite
+                                role = Role.RadioButton
+                            },
                         )
                     }
-                    val formats = CodeType.COMMON + listOfNotNull(chosen?.takeIf { it !in CodeType.COMMON })
-                    formats.forEach { option ->
-                        FilterChip(
-                            selected = option == chosen,
-                            onClick = { haptics.step(); choose(option.name) },
-                            label = { Text(stringResource(option.label)) },
-                        )
+                    CodeType.COMMON.forEach { formatChip(it) }
+                    // The format picked from the rest fades in as it opens its place, and out as it
+                    // closes it, so the chip after it slides along rather than jumps.
+                    AnimatedContent(
+                        targetState = chosen?.takeIf { it !in CodeType.COMMON },
+                        transitionSpec = {
+                            (fadeIn(chipFade) + expandHorizontally(chipResize)) togetherWith
+                                (fadeOut(chipFade) + shrinkHorizontally(chipResize)) using null
+                        },
+                        contentAlignment = Alignment.CenterStart,
+                        label = "picked-format",
+                    ) { extra ->
+                        if (extra != null) formatChip(extra)
                     }
                     // It opens the picker rather than being chosen, so it is an assist chip, which
                     // screen readers announce as a button rather than as an unchecked option.
@@ -384,6 +429,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
                     // an assist chip's own, so the row reads as one set of options.
                     AssistChip(
                         onClick = { haptics.tap(); openPicker() },
+                        modifier = Modifier.padding(start = CHIP_GAP),
                         label = { Text(stringResource(R.string.format_more)) },
                         colors = AssistChipDefaults.assistChipColors(
                             labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -396,63 +442,106 @@ fun GeneratorScreen(onBack: () -> Unit) {
                 }
             }
             val codeFade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+            val codeShape = MaterialTheme.shapes.large
+            val tapLabel = stringResource(R.string.code_enlarge)
+            val longPressLabel = stringResource(R.string.code_change_format)
             val codeArea: @Composable () -> Unit = {
-                // A long code is drawn again at the shape it is shown in, so its bars fill it without a
-                // scaled picture, from the same text and format as the code it replaces.
                 val drawing = made?.drawing
                 // The format of the code shown, which the format chosen may have moved on from.
                 val long = drawing?.type?.long == true
                 if (enlarged && drawing != null) {
-                    CodeOverlay(drawing.base, brighten, codeBounds, onDismiss = { enlarged = false }, drawing = drawing, long = long)
+                    CodeOverlay(drawing.base, brighten, codeBounds, onDismiss = { enlarged = false }, long = long)
                 }
-                Box(
-                    modifier = Modifier.fillMaxSize().then(
-                        if (drawing == null) {
-                            Modifier
-                        } else {
-                            Modifier.clickable(onClickLabel = stringResource(R.string.code_enlarge)) {
-                                haptics.tap()
-                                enlarged = true
-                            }
-                        },
-                    ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    val look = when {
-                        drawing == null || !long -> CodeLook.SQUARE
-                        enlarge == LongCodeEnlarge.TILT -> CodeLook.TILTED
-                        else -> CodeLook.STRETCHED
-                    }
-                    // A code drawn another way crossfades into the new one; drawn the same way, it is
-                    // simply drawn again.
-                    AnimatedContent(
-                        targetState = ShownCode(look, drawing),
-                        contentKey = { it.look },
-                        transitionSpec = { fadeIn(codeFade) togetherWith fadeOut(codeFade) },
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier.fillMaxSize(),
-                        label = "code",
-                    ) { shown ->
-                        // Where the code itself is drawn, which the enlarged code grows out of.
-                        val bounds = Modifier.onGloballyPositioned { codeBounds = it.boundsInWindow() }
-                        val code = shown.drawing
-                        // The transition hands its content the area's exact size; inside a box the
-                        // square preview is free to be smaller, as large as the shorter side.
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            when {
-                                // The code turns with its area as the keyboard resizes it.
-                                shown.look == CodeLook.TILTED && code != null -> BoxWithConstraints(bounds.fillMaxSize()) {
-                                    TiltedCode(code.base, DpSize(maxWidth, maxHeight), Modifier.fillMaxSize())
+                // A tap opens the code over the whole window, and a long press offers another format,
+                // as on a result card.
+                val taps = if (drawing == null) {
+                    Modifier
+                } else {
+                    Modifier.codeTaps(
+                        shape = codeShape,
+                        tapLabel = tapLabel,
+                        onTap = { haptics.tap(); enlarged = true },
+                        onLongPress = { openPicker() },
+                        longPressLabel = longPressLabel,
+                    )
+                }
+                val look = when {
+                    drawing == null || !long -> CodeLook.SQUARE
+                    enlarge == LongCodeEnlarge.TILT -> CodeLook.TILTED
+                    enlarge == LongCodeEnlarge.STRETCH -> CodeLook.STRETCHED
+                    // A long code that opens over the whole window when tapped is shown here as the
+                    // strip it is, as on a result card.
+                    else -> CodeLook.SQUARE
+                }
+                // The hint sits under the code: under the square a code takes at its own shape, or
+                // under the whole area that a tilted or stretched code fills, moving between the two
+                // as the code changes how it is drawn.
+                val filling by animateFloatAsState(
+                    if (look == CodeLook.SQUARE) 0f else 1f,
+                    MaterialTheme.motionScheme.defaultSpatialSpec(),
+                    label = "hint-place",
+                )
+                val hintAlpha by animateFloatAsState(if (drawing != null) 1f else 0f, codeFade, label = "code-hint")
+                Layout(
+                    content = {
+                        // A code drawn another way crossfades into the new one; drawn the same way, it is
+                        // simply drawn again.
+                        AnimatedContent(
+                            targetState = ShownCode(look, drawing),
+                            contentKey = { it.look },
+                            transitionSpec = { fadeIn(codeFade) togetherWith fadeOut(codeFade) },
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.fillMaxSize(),
+                            label = "code",
+                        ) { shown ->
+                            // What the enlarged code grows out of and returns to: the white card that
+                            // takes the taps, or the tilted code itself, which has none.
+                            val bounds = Modifier.onGloballyPositioned { codeBounds = it.boundsInWindow() }
+                            val code = shown.drawing
+                            val placeholder = if (unfit != null) R.string.generate_empty_unfit else R.string.generate_empty
+                            // The transition hands its content the area's exact size; inside a box the
+                            // square preview is free to be smaller, as large as the shorter side.
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                when {
+                                    // The code turns with its area as the keyboard resizes it.
+                                    shown.look == CodeLook.TILTED && code != null -> BoxWithConstraints(bounds.fillMaxSize()) {
+                                        TiltedCode(code.base, DpSize(maxWidth, maxHeight), codeShape, Modifier.fillMaxSize(), taps)
+                                    }
+                                    shown.look == CodeLook.STRETCHED && code != null ->
+                                        CodePreview(code.base, placeholder, codeShape, taps, Modifier.fillMaxSize(), card = bounds, stretched = true)
+                                    else -> CodePreview(
+                                        code?.base,
+                                        placeholder,
+                                        codeShape,
+                                        taps,
+                                        Modifier.aspectRatio(1f, matchHeightConstraintsFirst = true),
+                                        card = bounds,
+                                    )
                                 }
-                                shown.look == CodeLook.STRETCHED && code != null ->
-                                    FilledTallCode(code.base, code, bounds.fillMaxSize())
-                                else -> CodePreview(
-                                    code?.base,
-                                    if (unfit != null) R.string.generate_empty_unfit else R.string.generate_empty,
-                                    bounds.aspectRatio(1f, matchHeightConstraintsFirst = true),
-                                )
                             }
                         }
+                        // There is nothing to tap without a code, so the hint shows and is read only with one.
+                        CodeHint(
+                            R.string.code_tap_enlarge_switch,
+                            Modifier
+                                .graphicsLayer { alpha = hintAlpha }
+                                .then(if (drawing == null) Modifier.clearAndSetSemantics {} else Modifier),
+                        )
+                    },
+                ) { measurables, constraints ->
+                    val width = constraints.maxWidth
+                    val height = constraints.maxHeight
+                    val gap = CODE_HINT_GAP.roundToPx()
+                    val hint = measurables[1].measure(Constraints(maxWidth = width))
+                    val codeHeight = (height - gap - hint.height).coerceAtLeast(0)
+                    val code = measurables[0].measure(Constraints.fixed(width, codeHeight))
+                    // The square sits in the middle of the area, so the hint under it leaves as much
+                    // room below as the square leaves above, and the two stay centred together.
+                    val square = minOf(width, codeHeight)
+                    val hintY = lerp((codeHeight + square) / 2, codeHeight, filling.coerceIn(0f, 1f)) + gap
+                    layout(width, height) {
+                        code.place(0, 0)
+                        hint.place((width - hint.width) / 2, hintY)
                     }
                 }
             }
@@ -467,9 +556,11 @@ fun GeneratorScreen(onBack: () -> Unit) {
                 val code = drawing?.base
                 // Worked out again only when the offered apps or their room change, not for each new code.
                 val layout = remember(offered, toolbarRoom) { if (offered.isEmpty()) null else sendLayout(offered, toolbarRoom) }
+                // What is done with the code sits in one toolbar under it: actions on the code itself,
+                // then the apps that can open the text, with sharing as the main way out.
                 CodeToolbar(
                     code = code,
-                    onMessage = { message -> scope.launch { snackbar.showLatest(context.getString(message)) } },
+                    onMessage = results::message,
                     favorite = {
                         // Kept codes are shown again from history, drawn the same way as here. Unstarred,
                         // the toggle takes the toolbar's own content colour, like save and copy beside it;
@@ -503,8 +594,11 @@ fun GeneratorScreen(onBack: () -> Unit) {
                             // time, the same way as when an app appears for the text.
                             AppGroup {
                                 val enabled = hasText
-                                for (app in candidates.filterNot { it.ferry.general }) {
-                                    AppSlot(shown.inline.any { it.ferry == app.ferry }, sendApp(app), enabled, appFade, appResize)
+                                val (general, own) = slots.partition { (ferry, _) -> ferry.general }
+                                for ((ferry, app) in own) {
+                                    key(ferry.pkg) {
+                                        AppSlot(shown.inline.any { it.ferry == ferry }, app.sendApp(), enabled, onAction, appFade, appResize)
+                                    }
                                 }
                                 // The app the system opens the text in has a place of its own, between the
                                 // apps for their own codes and the general ones, and keeps it while it fades out.
@@ -515,17 +609,19 @@ fun GeneratorScreen(onBack: () -> Unit) {
                                     contentAlignment = Alignment.Center,
                                     label = "passive-app",
                                 ) { app ->
-                                    if (app != null) AppButton(sendApp(app), enabled)
+                                    if (app != null) AppButton(app.sendApp(), enabled, onAction)
                                 }
-                                for (app in candidates.filter { it.ferry.general }) {
-                                    AppSlot(shown.inline.any { it.ferry == app.ferry }, sendApp(app), enabled, appFade, appResize)
+                                for ((ferry, app) in general) {
+                                    key(ferry.pkg) {
+                                        AppSlot(shown.inline.any { it.ferry == ferry }, app.sendApp(), enabled, onAction, appFade, appResize)
+                                    }
                                 }
                                 AnimatedVisibility(
                                     visible = shown.folded.isNotEmpty(),
                                     enter = fadeIn(appFade) + expandHorizontally(appResize),
                                     exit = fadeOut(appFade) + shrinkHorizontally(appResize),
                                 ) {
-                                    SendMenu(shown.folded.map(sendApp), enabled = enabled)
+                                    SendMenu(shown.folded.map { it.sendApp() }, enabled = enabled, onAction = onAction)
                                 }
                             }
                         }
@@ -537,7 +633,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
                     state = field,
                     lines = lines,
                     error = unfitMessage(unfit, made?.type ?: type),
-                    trailing = if (hasText) clearButton else null,
+                    trailing = if (clearPlace) clearArriving else null,
                     // Its lines change with the room the keyboard leaves. Shrinking, it never springs
                     // below its new height, which would cut off its outline and supporting text.
                     modifier = Modifier
@@ -553,7 +649,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
                     state = probeState,
                     lines = 1,
                     error = unfitMessage(unfit, made?.type ?: type),
-                    trailing = if (hasText) clearButton else null,
+                    trailing = if (clearPlace) clearButton else null,
                 )
             }
             GeneratorLayout(
@@ -564,12 +660,16 @@ fun GeneratorScreen(onBack: () -> Unit) {
                 toolbar = toolbar,
                 field = textField,
                 fieldProbe = fieldProbe,
-                onSnackbarLift = { snackbarLift.intValue = it },
+                onSnackbarLift = { snackbarLift.intValue = it + bottomMargin },
                 modifier = Modifier.fillMaxSize(),
             )
         }
     }
 }
+
+/** The app as the toolbar and its menu show it, by its action's label. */
+@Composable
+private fun NamedFerry<Ferry>.sendApp(): SendApp = SendApp(action, labelOf(action))
 
 /**
  * The field for the text of the code, [lines] tall, with [error] under it when there is one. The
@@ -596,10 +696,7 @@ private fun GeneratorField(
     )
 }
 
-/**
- * What was made from the text in [type]: whether it fits, and when it does, its [drawing], from which
- * a long code is drawn again with the same text and format.
- */
+/** What was made from the text in [type]: whether it fits, and when it does, its [drawing]. */
 private class Made(val type: CodeType, val generated: Generated, val drawing: CodeDrawing?)
 
 /**
@@ -631,11 +728,21 @@ private enum class CodeLook { SQUARE, TILTED, STRETCHED }
 private data class ShownCode(val look: CodeLook, val drawing: CodeDrawing?)
 
 /**
- * The code always sits on white, whatever the theme, because readers expect dark modules on light.
- * Without a code, [placeholder] says why there is none.
+ * The code always sits on white, whatever the theme, because readers expect dark modules on light,
+ * on a card of [shape] with a white [CODE_BORDER] around the code, where [taps] land, and which takes
+ * the modifier [card]. The card takes the code's own shape, or, when [stretched], fills the preview
+ * with the code stretched inside it. Without a code, [placeholder] says why there is none.
  */
 @Composable
-private fun CodePreview(code: Bitmap?, @StringRes placeholder: Int, modifier: Modifier = Modifier) {
+private fun CodePreview(
+    code: Bitmap?,
+    @StringRes placeholder: Int,
+    shape: Shape,
+    taps: Modifier,
+    modifier: Modifier = Modifier,
+    card: Modifier = Modifier,
+    stretched: Boolean = false,
+) {
     Surface(
         modifier = modifier,
         shape = MaterialTheme.shapes.extraLarge,
@@ -652,19 +759,25 @@ private fun CodePreview(code: Bitmap?, @StringRes placeholder: Int, modifier: Mo
             modifier = Modifier.fillMaxSize().padding(20.dp),
             label = "code-preview",
         ) { (code, words) ->
-            if (code != null) {
+            if (code != null && stretched) {
+                PlainCode(code, card.fillMaxSize().then(taps), shape = shape, tall = true)
+            } else if (code != null) {
                 val image = remember(code) { code.asImageBitmap() }
                 // Inside a box, so the white card takes the code's own shape rather than the area's size.
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Surface(shape = MaterialTheme.shapes.large, color = Color.White) {
+                    Box(
+                        card
+                            .clip(shape)
+                            .then(taps)
+                            .background(Color.White)
+                            .padding(CODE_BORDER),
+                    ) {
                         Image(
                             bitmap = image,
                             contentDescription = null,
                             contentScale = ContentScale.Fit,
                             filterQuality = FilterQuality.None,
-                            modifier = Modifier
-                                .padding(8.dp)
-                                .aspectRatio(code.width.toFloat() / code.height),
+                            modifier = Modifier.aspectRatio(code.width.toFloat() / code.height),
                         )
                     }
                 }

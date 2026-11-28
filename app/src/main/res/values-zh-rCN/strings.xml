@@ -200,7 +200,7 @@
     <string name="card_raw">原文</string>
     <string name="app_not_installed">未安装</string>
     <string name="module_active">模块已生效</string>
-    <string name="module_checking">检查中</string>
+    <string name="module_checking">正在检查…</string>
     <string name="module_inactive">未在 LSPosed 中启用 FerryQR</string>
     <string name="module_out_of_scope">未在 LSPosed 中加入 FerryQR 的作用域</string>
     <string name="module_enabled">已启用。如果%1$s已经在运行，请重启一次。</string>

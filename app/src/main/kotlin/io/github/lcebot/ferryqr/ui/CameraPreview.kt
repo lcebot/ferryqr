@@ -3,8 +3,8 @@
 package io.github.lcebot.ferryqr.ui
 
 import androidx.camera.compose.CameraXViewfinder
-import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.SurfaceOrientedMeteringPointFactory
+import androidx.camera.core.SurfaceRequest
 import androidx.camera.viewfinder.compose.MutableCoordinateTransformer
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -21,9 +21,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,9 +36,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import io.github.lcebot.ferryqr.scan.AutoZoom
-import java.util.concurrent.Executor
-import kotlin.math.floor
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -67,43 +62,27 @@ internal const val PICKER_SCRIM_ALPHA = 0.45f
 private val STILL_BLUR = 20.dp
 
 /**
- * The camera's picture over the whole of the bounds [modifier] gives it. [contentPadding] is the
- * part the page's bars cover, so the indicator a reset shows sits in the middle of what stays in view.
- * [onSettled] hears whenever the bound camera's picture shows and whenever the camera fails to show
- * one, so what waits for the camera a reset binds never waits on a camera that cannot run.
- * [onUnavailable] hears of each failure once, and [onStopped] whenever the camera closes as the
- * scanner stops, when the viewfinder is covered until the camera's picture shows again.
+ * The picture of [camera] over the whole of the bounds [modifier] gives it, bound for this screen's
+ * lifecycle. [contentPadding] is the part the page's bars cover, so the indicator a reset shows sits
+ * in the middle of what stays in view. Taps focus only while [scanning].
  */
 @Composable
-fun CameraPreview(
-    analyzer: ImageAnalysis.Analyzer,
-    executor: Executor,
-    autoZoom: AutoZoom,
-    session: Int,
-    torch: Torch,
-    onZoom: (Float) -> Unit,
-    onUnavailable: () -> Unit,
-    onSettled: () -> Unit,
-    onStopped: () -> Unit,
+internal fun CameraPreview(
+    camera: ScannerCamera,
     scanning: Boolean,
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
-    val cameraSession = remember { CameraSession(analyzer, executor, autoZoom, torch) }
+    // The surface the preview draws on, which stays in place until the next session's arrives.
+    var surface by remember { mutableStateOf<SurfaceRequest?>(null) }
     val veil = rememberViewfinderVeil()
     val transformer = remember { MutableCoordinateTransformer() }
     val haptics = rememberHaptics()
     val scrim = MaterialTheme.colorScheme.scrim
     // The veil spans the whole viewfinder and moves on the scheme's slow springs.
     val slowEffects = MaterialTheme.motionScheme.slowEffectsSpec<Float>()
-    val currentSession by rememberUpdatedState(session)
-    // The session lives as long as the lifecycle owner, across compositions that pass new callbacks.
-    val zoomChanged by rememberUpdatedState(onZoom)
-    val unavailable by rememberUpdatedState(onUnavailable)
-    val settled by rememberUpdatedState(onSettled)
-    val stopped by rememberUpdatedState(onStopped)
 
     LaunchedEffect(owner) {
         try {
@@ -111,82 +90,73 @@ fun CameraPreview(
                 // Each status makes one call on the veil, and a new status takes over from what the
                 // last one still animates.
                 launch {
-                    cameraSession.status.collectLatest { status ->
+                    camera.status.collectLatest { status ->
                         when (status) {
                             CameraStatus.Connecting -> Unit
-                            CameraStatus.Live -> {
-                                settled()
-                                veil.reveal()
-                            }
-                            CameraStatus.Stopped -> {
-                                stopped()
-                                veil.close()
-                            }
-                            is CameraStatus.Failed -> {
-                                unavailable()
-                                settled()
-                                // A camera that fails while its picture shows leaves the picture as
-                                // it is, since CameraX may open the camera again by itself; only a
-                                // camera that has not shown its picture yet ends on the error.
-                                if (!status.wasLive) veil.fail()
-                            }
+                            CameraStatus.Live -> veil.reveal()
+                            CameraStatus.Stopped -> veil.close()
+                            // A camera that fails while its picture shows leaves the picture as it
+                            // is, since CameraX may open the camera again by itself; only a camera
+                            // that has not shown its picture yet ends on the error.
+                            is CameraStatus.Failed -> if (!status.wasLive) veil.fail()
                         }
                     }
                 }
-                if (!cameraSession.connect(context)) return@coroutineScope
+                // A reset asked before this screen was made has been bound for already.
                 var first = true
-                snapshotFlow { currentSession }.collectLatest {
-                    if (!first) {
+                camera.resets.collectLatest { reset ->
+                    if (!first && reset != null) {
                         veil.restart()
-                        val still = if (veil.holding) null else cameraSession.takeStill(transformer)
-                        cameraSession.retire()
+                        val shown = surface
+                        val still = if (veil.holding || !reset.stillWanted || shown == null) {
+                            null
+                        } else {
+                            camera.takeShot()?.let { Still(it, shown, transformer) }
+                        }
                         veil.freeze(still)
                     }
                     first = false
-                    if (cameraSession.bind(owner) { zoomChanged(it) }) cameraSession.follow(owner)
+                    // Connecting costs nothing once CameraX is held, and asking on every reset lets
+                    // one asked after CameraX could not be reached try it again.
+                    if (camera.connect(context) && camera.bind(owner, context) { surface = it }) camera.follow(owner)
                 }
             }
         } finally {
-            cameraSession.release()
+            camera.release(owner)
             veil.dropStill()
         }
     }
 
     // Once the scan has an outcome, the tapped point does not matter.
     LaunchedEffect(scanning) {
-        if (!scanning) autoZoom.releaseTapFocus()
+        if (!scanning) camera.focus.releaseTapFocus()
     }
 
     var tap by remember { mutableStateOf<FocusTap?>(null) }
     // A tap's place is in the view's own pixels, which run from the left edge whatever the layout
     // direction, so the focus box starts from the top left corner and moves by an absolute offset.
     Box(modifier, contentAlignment = AbsoluteAlignment.TopLeft) {
-        cameraSession.request?.let { surface ->
+        surface?.let { shown ->
             CameraXViewfinder(
-                surfaceRequest = surface,
+                surfaceRequest = shown,
                 coordinateTransformer = transformer,
                 modifier = Modifier
                     .fillMaxSize()
                     .pointerInput(Unit) {
                         detectTransformGestures { _, _, zoom, _ ->
-                            val c = cameraSession.camera ?: return@detectTransformGestures
-                            val state = c.cameraInfo.zoomState.value ?: return@detectTransformGestures
-                            autoZoom.onUserZoom()
-                            val next = (state.zoomRatio * zoom).coerceIn(state.minZoomRatio, state.maxZoomRatio)
                             // A light detent at every whole zoom ratio, where logical cameras tend to switch lenses.
-                            if (floor(next) != floor(state.zoomRatio)) haptics.step()
-                            c.cameraControl.setZoomRatio(next)
+                            if (camera.pinch(zoom)) haptics.step()
                         }
                     }
-                    .pointerInput(surface, scanning) {
+                    .pointerInput(shown, scanning) {
                         detectTapGestures { at ->
                             if (!scanning) return@detectTapGestures
                             val onSurface = with(transformer) { at.transform() }
                             val point = SurfaceOrientedMeteringPointFactory(
-                                surface.resolution.width.toFloat(),
-                                surface.resolution.height.toFloat(),
+                                shown.resolution.width.toFloat(),
+                                shown.resolution.height.toFloat(),
                             ).createPoint(onSurface.x, onSurface.y)
-                            if (autoZoom.focusAt(point)) {
+                            if (camera.focus.focusAt(point)) {
                                 haptics.tap()
                                 tap = FocusTap(at, (tap?.id ?: 0) + 1)
                             }
@@ -228,7 +198,7 @@ fun CameraPreview(
                     }
                 },
         )
-        FocusBox(tap, autoZoom.tapFocus)
+        FocusBox(tap, camera.focus.tapFocus)
         Box(Modifier.fillMaxSize().padding(contentPadding), contentAlignment = Alignment.Center) {
             // It leaves with the frozen picture and the dimming, whether the picture comes back or
             // the camera fails, and so fades on their spec.

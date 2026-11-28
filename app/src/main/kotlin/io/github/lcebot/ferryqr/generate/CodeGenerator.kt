@@ -12,7 +12,6 @@ import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import io.github.lcebot.ferryqr.R
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 /** How the format picker groups formats: 2D codes, retail product barcodes, and other barcodes. */
@@ -97,17 +96,13 @@ private const val EXPORT_MAX_PIXELS = 5_000_000
 object CodeGenerator {
 
     /**
-     * [heightRatio], for a long code, is the height wanted for every unit of width, quiet zone
-     * included: a barcode gets bars that tall and a PDF417 rows that tall, so a code drawn to fill
-     * a taller area keeps every module sharp and in proportion. Without [quietZone] the code has no
-     * margin at all, for a preview that gives every format the same margin of its own. Without
-     * [withAlternatives], content that does not fit comes back with no alternatives, which saves
-     * encoding it in every common format where they are not shown.
+     * Without [quietZone] the code has no margin at all, for a preview that gives every format the
+     * same margin of its own. Without [withAlternatives], content that does not fit comes back with
+     * no alternatives, which saves encoding it in every common format where they are not shown.
      */
     fun generate(
         text: String,
         type: CodeType,
-        heightRatio: Float? = null,
         quietZone: Boolean = true,
         withAlternatives: Boolean = true,
     ): Generated {
@@ -115,7 +110,7 @@ object CodeGenerator {
         val matrix = if (problem == null) encode(text, type.format) else null
         if (matrix != null) {
             val margin = if (quietZone) type.quietZone else 0
-            return Generated.Code(render(matrix, margin, linear = type.linear, heightRatio = heightRatio.takeIf { type.long }))
+            return Generated.Code(render(matrix, margin, linear = type.linear))
         }
         val alternatives = if (!withAlternatives) {
             emptyList()
@@ -137,8 +132,19 @@ object CodeGenerator {
         return Bitmap.createScaledBitmap(code, code.width * factor, code.height * factor, false)
     }
 
-    /** [text] as [format], one module a cell, or null when it does not fit. */
-    internal fun encode(text: String, format: BarcodeFormat): BitMatrix? {
+    /**
+     * [text] as [format], one module a cell, or null when it does not fit. A QR code takes level M,
+     * which still reads with part of the code worn or covered; text too long for that takes level L,
+     * enough for a code shown whole on a screen, before QR counts as unable to hold it.
+     */
+    internal fun encode(text: String, format: BarcodeFormat): BitMatrix? =
+        if (format == BarcodeFormat.QR_CODE) {
+            encode(text, format, ErrorCorrectionLevel.M) ?: encode(text, format, ErrorCorrectionLevel.L)
+        } else {
+            encode(text, format, level = null)
+        }
+
+    private fun encode(text: String, format: BarcodeFormat, level: ErrorCorrectionLevel?): BitMatrix? {
         val hints = buildMap<EncodeHintType, Any> {
             put(EncodeHintType.MARGIN, 0)
             // Plain Latin-1 text stays without an ECI header, which older readers handle best.
@@ -148,7 +154,7 @@ object CodeGenerator {
                 // an ECI; the other refuses anything beyond Latin-1.
                 if (format == BarcodeFormat.DATA_MATRIX) put(EncodeHintType.DATA_MATRIX_COMPACT, true)
             }
-            if (format == BarcodeFormat.QR_CODE) put(EncodeHintType.ERROR_CORRECTION, ErrorCorrectionLevel.M)
+            if (level != null) put(EncodeHintType.ERROR_CORRECTION, level)
         }
         return try {
             MultiFormatWriter().encode(text, format, 0, 0, hints)
@@ -162,20 +168,17 @@ object CodeGenerator {
     /**
      * One pixel per module. A [linear] code comes as a single row, which is repeated to give the
      * bars a readable height, and its quiet zone is needed only at the sides, with a sliver above and
-     * below unless [quietZone] is zero. With [heightRatio] the bars, or the rows of a stacked code,
-     * are repeated until the image is about that much taller than it is wide.
+     * below unless [quietZone] is zero.
      */
-    private fun render(matrix: BitMatrix, quietZone: Int, linear: Boolean, heightRatio: Float? = null): Bitmap {
+    internal fun render(matrix: BitMatrix, quietZone: Int, linear: Boolean): Bitmap {
         val single = linear && matrix.height == 1
         val margin = if (linear) minOf(quietZone, LINEAR_VERTICAL_MARGIN) else quietZone
         val width = matrix.width + 2 * quietZone
-        val wanted = heightRatio?.let { (width * it).roundToInt() - 2 * margin }
-        val repeat = if (single || wanted == null) 1 else max(1, (wanted.toFloat() / matrix.height).roundToInt())
-        val rows = if (single) max(LINEAR_MIN_HEIGHT, wanted ?: (matrix.width / LINEAR_ASPECT)) else matrix.height * repeat
+        val rows = if (single) max(LINEAR_MIN_HEIGHT, matrix.width / LINEAR_ASPECT) else matrix.height
         val height = rows + 2 * margin
         val pixels = IntArray(width * height) { Color.WHITE }
         for (y in 0 until rows) {
-            val source = if (single) 0 else y / repeat
+            val source = if (single) 0 else y
             for (x in 0 until matrix.width) {
                 if (matrix[x, source]) pixels[(y + margin) * width + x + quietZone] = Color.BLACK
             }
@@ -185,39 +188,10 @@ object CodeGenerator {
 }
 
 /**
- * How many heights a [CodeDrawing] keeps drawings for: the area a code grows to, the whole window,
- * and the last few an area passed through while it resized.
- */
-private const val TALL_KEPT = 4
-
-/**
  * [text] drawn as [type], one pixel per module in [base], which screens scale up unsmoothed and
- * exports upscale by themselves. A long code shown in an area taller than [base] is drawn again by
- * [tall], so its bars or rows grow rather than a scaled picture. Each height is drawn once and kept,
- * so a code enlarged again, or shown again by a card built again, takes the drawing it had.
- * Nothing recycles these bitmaps: a screen may still show one after the drawing has let it go.
+ * exports upscale by themselves.
  */
 class CodeDrawing(val text: String, val type: CodeType, val base: Bitmap) {
-
-    /** The tall drawings by height ratio, the one used last at the end. */
-    private val talls = object : LinkedHashMap<Float, Bitmap>(TALL_KEPT, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Float, Bitmap>?): Boolean = size > TALL_KEPT
-    }
-
-    /** The drawing for [ratio] when it is drawn already, which is quick enough for the main thread. */
-    fun drawnTall(ratio: Float): Bitmap? = synchronized(talls) { talls[ratio] }
-
-    /**
-     * The code drawn with bars or rows [ratio] times as tall as it is wide, as [CodeGenerator.generate]
-     * takes its height ratio. A code as tall as a screen takes a while to draw, so this belongs off
-     * the main thread.
-     */
-    fun tall(ratio: Float): Bitmap? {
-        drawnTall(ratio)?.let { return it }
-        val drawn = (CodeGenerator.generate(text, type, ratio) as? Generated.Code)?.bitmap ?: return null
-        synchronized(talls) { talls[ratio] = drawn }
-        return drawn
-    }
 
     companion object {
         /** [text] drawn as [type], or null when it does not fit. */
@@ -228,8 +202,17 @@ class CodeDrawing(val text: String, val type: CodeType, val base: Bitmap) {
          * A read code drawn again from its [text] so it can be scanned from the screen. [format] is
          * the reader's name for the original symbology; when FerryQR cannot write that one, or the
          * content does not fit it, a QR code carries the same content instead.
+         *
+         * An extended Code 39 code is drawn again in its extended form, which the create page does
+         * not offer, since a code that was read is shown as it was rather than as FerryQR would write it.
          */
-        fun redraw(text: String, format: String): CodeDrawing? =
-            CodeType.ofReaderName(format)?.let { of(text, it) } ?: of(text, CodeType.QR)
+        fun redraw(text: String, format: String): CodeDrawing? {
+            if (format == "CODE_39_EXT") {
+                val matrix = CodeGenerator.encode(text, BarcodeFormat.CODE_39) ?: return of(text, CodeType.QR)
+                val type = CodeType.CODE_39
+                return CodeDrawing(text, type, CodeGenerator.render(matrix, type.quietZone, linear = true))
+            }
+            return CodeType.ofReaderName(format)?.let { of(text, it) } ?: of(text, CodeType.QR)
+        }
     }
 }

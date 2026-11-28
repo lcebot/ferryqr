@@ -5,6 +5,7 @@ import android.net.Uri
 import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.content.BoardingPassPayload
 import io.github.lcebot.ferryqr.content.ContactPayload
+import io.github.lcebot.ferryqr.content.DppPayload
 import io.github.lcebot.ferryqr.content.EsimPayload
 import io.github.lcebot.ferryqr.content.EventPayload
 import io.github.lcebot.ferryqr.content.FidoPayload
@@ -14,6 +15,7 @@ import io.github.lcebot.ferryqr.content.PasskeyOperation
 import io.github.lcebot.ferryqr.content.PasskeyQr
 import io.github.lcebot.ferryqr.content.Payload
 import io.github.lcebot.ferryqr.content.SchemePayload
+import io.github.lcebot.ferryqr.content.TextPayload
 import io.github.lcebot.ferryqr.content.WebPayload
 import io.github.lcebot.ferryqr.content.WifiPayload
 import io.github.lcebot.wxcode.WxText
@@ -80,7 +82,7 @@ internal object Titles {
                 distinct = flight != null,
             )
         }
-        else -> NONE
+        is DppPayload, is TextPayload -> NONE
     }
 
     /** A name taken from the content's own fields, as a contact's or an event's is, which tells it apart whenever there is one. */

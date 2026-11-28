@@ -27,19 +27,18 @@ private const val OTP_ALGORITHM = "SHA1"
  * A passkey request from another device. Its passkey manager is offered again, which is what a
  * code in history is for: a quick retry while the other device still waits. A request older than
  * [PASSKEY_EXPIRY_MS], by the time the code says it was made or else by when it was scanned, has
- * most likely ended, which the card says, and copying it then comes first. Only a code from the
- * camera that at most one passkey manager takes has already been offered to it by the time its card
- * shows; among several, the card offers them.
+ * most likely ended, which the card says, and copying it then comes first. The passkey managers are
+ * those [routing] found; the card says none took the request when there are none, or when the one
+ * there is was tried before the card showed. Among several, the card offers them.
  */
-internal fun Cards.passkey(env: FerryEnv, payload: FidoPayload, origin: Origin, scannedAt: Long): CardBody {
-    val context = env.context
+internal fun Cards.passkey(context: Context, payload: FidoPayload, scannedAt: Long, routing: Routing): CardBody {
     val now = System.currentTimeMillis()
     val created = PasskeyQr.createdAt(payload.raw)?.times(1000)?.takeIf { it <= now } ?: scannedAt
     val expired = now - created > PASSKEY_EXPIRY_MS
-    val managers = env.apps(Launch.fidoIntents(payload.raw))
+    val managers = routing.apps
     val use = appsAction(R.string.use_passkey, R.drawable.ic_key, managers, ActionResult.Handoff, opens = true)
     val notes = listOfNotNull(
-        context.getString(R.string.fido_unhandled).takeIf { origin == Origin.CAMERA && managers.size <= 1 },
+        context.getString(R.string.fido_unhandled).takeIf { managers.isEmpty() || routing.launches },
         context.getString(
             R.string.passkey_expired,
             DateUtils.getRelativeTimeSpanString(created, now, DateUtils.MINUTE_IN_MILLIS),
@@ -62,7 +61,7 @@ internal fun Cards.otp(env: FerryEnv, payload: OtpPayload, origin: Origin): Card
     val sensitive = payload.sensitiveKind != null
     // The same question the authenticator's ranking asks, so the card asks it once. Only schemes the
     // manifest queries for are visible, otpauth among them.
-    val addable = env.resolved(Launch.linkIntent(payload.raw)).matches.isNotEmpty()
+    val addable = env.resolved(Intents.link(payload.raw)).matches.isNotEmpty()
     // The authenticator the link goes to without asking is named; among several, the system asks.
     val authenticator = env.rank(payload)
     val rows = buildList {
@@ -98,29 +97,29 @@ internal fun Cards.otp(env: FerryEnv, payload: OtpPayload, origin: Origin): Card
 }
 
 /**
- * An eSIM activation code, led by its server when it names one, with the code below. Only a code
- * from the camera that at most one LPA app takes has already been offered to the system by the
- * time its card shows, so only then does the card say it was not taken; otherwise it offers to try.
+ * An eSIM activation code, led by its server when it names one, with the code below. The LPA apps
+ * are those [routing] found; the card says the code was not taken when none takes it, or when the
+ * one that does was tried before the card showed. Otherwise it offers to try.
  */
-internal fun Cards.esim(env: FerryEnv, payload: EsimPayload, names: ContentNames, origin: Origin): CardBody {
-    val lpas = env.apps(Launch.esimIntents(payload.raw))
+internal fun Cards.esim(env: FerryEnv, payload: EsimPayload, names: ContentNames, routing: Routing): CardBody {
+    val lpas = routing.apps
     return CardBody(
         body = payload.raw.takeIf { names.carried.name != null },
-        notes = listOfNotNull(env.context.getString(R.string.esim_unhandled).takeIf { origin == Origin.CAMERA && lpas.size <= 1 }),
+        notes = listOfNotNull(env.context.getString(R.string.esim_unhandled).takeIf { lpas.isEmpty() || routing.launches }),
         actions = listOf(
             appsAction(R.string.add_esim, R.drawable.ic_sim_card, lpas, ActionResult.Handoff),
             copyAction(payload.raw, payload.sensitiveKind != null),
-            appsAction(R.string.open_sim_settings, R.drawable.ic_settings, env.apps(Launch.simSettingsIntents()), ActionResult.Done),
+            appsAction(R.string.open_sim_settings, R.drawable.ic_settings, env.apps(Intents.simSettings()), ActionResult.Done),
         ),
     )
 }
 
 /**
- * A Wi-Fi Easy Connect code. As with an eSIM code, only one from the camera has already been offered
- * to the system by the time its card shows, so only then does the card say the system could not start it.
+ * A Wi-Fi Easy Connect code. Only one that [routing] has already offered to the system by the time its
+ * card shows makes the card say the system could not start it.
  */
-internal fun Cards.dpp(context: Context, payload: DppPayload, origin: Origin): CardBody = CardBody(
-    notes = listOfNotNull(context.getString(R.string.dpp_unsupported).takeIf { origin == Origin.CAMERA }),
+internal fun Cards.dpp(context: Context, payload: DppPayload, routing: Routing): CardBody = CardBody(
+    notes = listOfNotNull(context.getString(R.string.dpp_unsupported).takeIf { routing.launches }),
     actions = listOf(
         CardAction(R.string.connect, R.drawable.ic_wifi) {
             if (Launch.dpp(it, payload.raw)) ActionResult.Handoff else ActionResult.Unavailable
@@ -146,7 +145,7 @@ internal fun Cards.wifi(context: Context, payload: WifiPayload): CardBody {
         // A network without a name is already called hidden by its headline.
         context.getString(R.string.wifi_hidden).takeIf { payload.hidden && payload.ssid.isNotBlank() },
     ).joinToString("\n")
-    val suggestion = Launch.wifiSuggestion(payload)
+    val suggestion = Intents.wifiSuggestion(payload)
     val actions = buildList {
         if (suggestion != null) {
             add(CardAction(R.string.connect, R.drawable.ic_wifi) {

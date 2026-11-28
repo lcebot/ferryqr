@@ -2,17 +2,23 @@
 package io.github.lcebot.ferryqr.ui
 
 import androidx.annotation.StringRes
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -57,6 +63,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import io.github.lcebot.ferryqr.R
 import kotlinx.coroutines.launch
@@ -168,25 +175,76 @@ private fun SettingsList(padding: PaddingValues, content: LazyListScope.() -> Un
     )
 }
 
-/** A group of settings under its header, with an optional [intro] between them. */
+/**
+ * The rows of a [SettingsSection] in their order, each drawn by its content in the shape of its
+ * place among the rows shown.
+ */
+internal class SectionRows {
+    internal class RowSpec(val visible: Boolean, val conditional: Boolean, val content: @Composable (Shape) -> Unit)
+
+    internal val specs = mutableListOf<RowSpec>()
+
+    /** A row that is always shown. */
+    fun row(content: @Composable (shape: Shape) -> Unit) {
+        specs += RowSpec(visible = true, conditional = false, content)
+    }
+
+    /**
+     * A row shown while [visible], which comes and goes with the gap above it, so it follows another
+     * row of the section.
+     */
+    fun conditionalRow(visible: Boolean, content: @Composable (shape: Shape) -> Unit) {
+        require(specs.isNotEmpty()) { "A conditional row brings the gap above it, so it never comes first" }
+        specs += RowSpec(visible, conditional = true, content)
+    }
+}
+
+/**
+ * A group of settings under its header, with an optional [intro] between them, and the [rows] a
+ * segmented list apart. Each row takes the corners of its place among the rows shown, which follow
+ * it as rows come and go.
+ *
+ * A conditional row and the gap above it open and close together on the section's own springs, so
+ * the gap never stays behind, doubled around nothing, until the row has left. It keeps the shape it
+ * has while shown as it comes and goes, rather than rounding as the last row while it leaves.
+ */
 @Composable
 internal fun SettingsSection(
     @StringRes title: Int,
     @StringRes intro: Int? = null,
     first: Boolean = false,
-    rows: @Composable ColumnScope.() -> Unit,
+    rows: SectionRows.() -> Unit,
 ) {
+    val effects = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+    val spatial = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
+    val built = SectionRows().apply(rows).specs
+    val shown = built.count { it.visible }
     Column {
         SectionHeader(stringResource(title), top = if (first) 0.dp else SECTION_TOP)
         if (intro != null) {
-            Text(
-                stringResource(intro),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = LIST_TEXT_INSET, end = LIST_TEXT_INSET, bottom = SECTION_GAP),
-            )
+            SectionNote(stringResource(intro), Modifier.padding(start = LIST_TEXT_INSET, end = LIST_TEXT_INSET, bottom = SECTION_GAP))
         }
-        Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap), content = rows)
+        var place = 0
+        built.forEachIndexed { index, row ->
+            // A hidden row is counted among the rows shown, so it has the shape it will have, or had.
+            val shape = segmentShape(place, if (row.visible) shown else shown + 1)
+            if (row.conditional) {
+                AnimatedVisibility(
+                    visible = row.visible,
+                    enter = fadeIn(effects) + expandVertically(spatial),
+                    exit = fadeOut(effects) + shrinkVertically(spatial),
+                ) {
+                    Column {
+                        Spacer(Modifier.height(ListItemDefaults.SegmentedGap))
+                        row.content(shape)
+                    }
+                }
+            } else {
+                if (index > 0) Spacer(Modifier.height(ListItemDefaults.SegmentedGap))
+                row.content(shape)
+            }
+            if (row.visible) place++
+        }
     }
 }
 
