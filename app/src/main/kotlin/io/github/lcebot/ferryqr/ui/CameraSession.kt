@@ -37,14 +37,12 @@ import kotlin.math.abs
 import kotlin.math.ln
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.transformLatest
 
 /** 1080p keeps small and distant codes readable while zxing-cpp stays fast on the luma plane. */
 private val TARGET_SIZE = Size(1920, 1080)
@@ -111,6 +109,25 @@ private class Captures {
     }
 }
 
+/** Where the bound camera is, as the viewfinder over it shows. */
+internal sealed interface CameraStatus {
+    /** Bound, or opening again after the scanner stopped, with its picture not in view yet. */
+    data object Connecting : CameraStatus
+
+    /** Its picture is in view. */
+    data object Live : CameraStatus
+
+    /** Closed while the scanner is stopped, as when a page opens over it. */
+    data object Stopped : CameraStatus
+
+    /**
+     * It cannot run: CameraX was out of reach, or the camera did not bind, did not open or failed
+     * while it ran, which [wasLive] tells. Each failure is a value of its own, so one that follows
+     * another is heard all the same.
+     */
+    class Failed(val wasLive: Boolean) : CameraStatus
+}
+
 /**
  * The bound camera's torch. [on] follows the camera's own torch state rather than the last request,
  * since the camera turns the torch off by itself when it closes, as it does whenever the scanner
@@ -155,10 +172,17 @@ internal class CameraSession(
     var camera by mutableStateOf<Camera?>(null)
         private set
 
-    private val _failed = MutableStateFlow(false)
+    private val _status = MutableStateFlow<CameraStatus>(CameraStatus.Connecting)
 
-    /** Whether the camera bound last cannot run, which the page has been told. */
-    val failed: StateFlow<Boolean> = _failed.asStateFlow()
+    /** Where the camera bound last is, which alone tells the viewfinder and the page what it does. */
+    val status: StateFlow<CameraStatus> = _status.asStateFlow()
+
+    /**
+     * Whether the failure of the camera bound last has been reported, which it is once, until the
+     * camera opens again or another binds. A camera that keeps failing while the scanner stops and
+     * starts again is still one failure.
+     */
+    private var reported = false
 
     private val selector = ResolutionSelector.Builder()
         .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
@@ -173,13 +197,10 @@ internal class CameraSession(
     private var captures = Captures()
     private var stopObserving: (() -> Unit)? = null
 
-    // Whether the bound camera's picture is in view, so a reset has a picture to freeze.
-    private var live = false
-
     /**
      * Gets hold of CameraX, which fails, besides on a device without a back camera, when the camera
      * service or another app holds the camera in a way it cannot recover from; either way there is
-     * no preview, and this returns false.
+     * no preview, the status turns [CameraStatus.Failed], and this returns false.
      */
     suspend fun connect(context: Context): Boolean {
         provider = try {
@@ -187,20 +208,28 @@ internal class CameraSession(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            fail()
             return false
         }
         return true
     }
 
+    /** Reports a failure, unless the one under way has been reported already. */
+    private fun fail() {
+        if (reported) return
+        reported = true
+        _status.value = CameraStatus.Failed(wasLive = _status.value == CameraStatus.Live)
+    }
+
     /**
      * Binds a new session in place of the one bound last, for [owner]'s lifecycle, and returns
-     * whether the camera bound. A camera that cannot bind tells [onUnavailable] at once, and one that
-     * binds tells it of a failure to open as [failed] turns true, and [onZoom] of its zoom ratio.
+     * whether the camera bound; one that cannot bind turns the status [CameraStatus.Failed] at once.
+     * [onZoom] hears of the zoom ratio.
      */
-    fun bind(owner: LifecycleOwner, onZoom: (Float) -> Unit, onUnavailable: () -> Unit): Boolean {
+    fun bind(owner: LifecycleOwner, onZoom: (Float) -> Unit): Boolean {
         release()
-        live = false
-        _failed.value = false
+        reported = false
+        _status.value = CameraStatus.Connecting
         val preview = Preview.Builder().setResolutionSelector(selector).build()
         preview.setSurfaceProvider { request = it }
         val analysis = ImageAnalysis.Builder()
@@ -216,8 +245,10 @@ internal class CameraSession(
             provider.bindToLifecycle(owner, provider.preferredBackCamera(), config)
         } catch (e: Exception) {
             analysis.clearAnalyzer()
-            _failed.value = true
-            onUnavailable()
+            // The camera let go of above had the flash unit the torch button stands for, and no
+            // camera is bound now.
+            torch.available = false
+            fail()
             return false
         }
         this.config = config
@@ -225,32 +256,27 @@ internal class CameraSession(
         analyzing = analysis
         camera = started
         autoZoom.camera = started
-        stopObserving = observe(started, owner, onZoom, onUnavailable)
+        stopObserving = observe(started, owner, onZoom)
         return true
     }
 
-    private fun observe(
-        camera: Camera,
-        owner: LifecycleOwner,
-        onZoom: (Float) -> Unit,
-        onUnavailable: () -> Unit,
-    ): () -> Unit {
+    private fun observe(camera: Camera, owner: LifecycleOwner, onZoom: (Float) -> Unit): () -> Unit {
         val info = camera.cameraInfo
         val zoomObserver = Observer<ZoomState> { onZoom(it.zoomRatio) }
         val torchObserver = Observer<Int> { torch.on = it == TorchState.ON }
         // A camera that binds can still fail to open, as when another app holds it or a policy
-        // disables it, and CameraX reports that here rather than from the binding. The page hears
-        // of each failure once, and the camera counts as running again once it opens. A passing
-        // error that CameraX retries at once is not worth a message.
+        // disables it, and CameraX reports that here rather than from the binding. The camera
+        // counts as running again once it opens: one that failed while its picture showed shows it
+        // again, and one that failed before waits for its first frame. A passing error that CameraX
+        // retries at once is not worth a message.
         val stateObserver = Observer<CameraState> { state ->
             val error = state.error
             if (error != null && error.code != CameraState.ERROR_OTHER_RECOVERABLE_ERROR) {
-                if (!_failed.value) {
-                    _failed.value = true
-                    onUnavailable()
-                }
+                fail()
             } else if (state.type == CameraState.Type.OPEN) {
-                _failed.value = false
+                reported = false
+                val failed = _status.value as? CameraStatus.Failed
+                if (failed != null) _status.value = if (failed.wasLive) CameraStatus.Live else CameraStatus.Connecting
             }
         }
         info.zoomState.observe(owner, zoomObserver)
@@ -268,27 +294,30 @@ internal class CameraSession(
     }
 
     /**
-     * True as the bound camera's picture reaches the viewfinder, and false as the camera closes when
-     * [owner] stops, as when a page opens over the scanner. The camera opens black as the scanner
-     * starts again, and true follows on its first frame after.
+     * Follows the bound camera's picture into [status] until cancelled, as when the next session
+     * binds: [CameraStatus.Live] as the picture reaches the viewfinder, and [CameraStatus.Stopped] as
+     * the camera closes when [owner] stops, as when a page opens over the scanner. The camera opens
+     * black as the scanner starts again, so it is [CameraStatus.Connecting] until its first frame after.
      */
-    @OptIn(ExperimentalCoroutinesApi::class)
-    fun pictures(owner: LifecycleOwner): Flow<Boolean> {
+    suspend fun follow(owner: LifecycleOwner) {
         val captures = captures
         var stopped = false
-        return owner.lifecycle.currentStateFlow
+        owner.lifecycle.currentStateFlow
             .map { it.isAtLeast(Lifecycle.State.STARTED) }
             .distinctUntilChanged()
-            .transformLatest { running ->
-                if (running) {
-                    // Captures from before the camera closed say nothing of the picture it opens with.
-                    if (stopped) captures.forget()
-                    captures.await()
-                } else {
+            .collectLatest { running ->
+                if (!running) {
                     stopped = true
+                    _status.value = CameraStatus.Stopped
+                    return@collectLatest
                 }
-                live = running
-                emit(running)
+                if (stopped) {
+                    // Captures from before the camera closed say nothing of the picture it opens with.
+                    captures.forget()
+                    _status.value = CameraStatus.Connecting
+                }
+                captures.await()
+                _status.value = CameraStatus.Live
             }
     }
 
@@ -298,7 +327,7 @@ internal class CameraSession(
      */
     suspend fun takeStill(transformer: MutableCoordinateTransformer): Still? {
         val shown = request
-        if (!live || _failed.value || shown == null) return null
+        if (_status.value != CameraStatus.Live || shown == null) return null
         val shot = stills.take() ?: return null
         val toViewfinder = Matrix().apply {
             setFrom(transformer.transformMatrix)
@@ -310,12 +339,12 @@ internal class CameraSession(
     /**
      * Lets go of the camera on its way out of a reset while it stays bound for the still over it. Its
      * controls and observers go at once, and a failure of its own neither tells the page again nor
-     * stands for the camera bound next.
+     * stands for the camera bound next, which is connecting from here on.
      */
     fun retire() {
-        live = false
         forgetCamera()
-        _failed.value = false
+        reported = false
+        _status.value = CameraStatus.Connecting
     }
 
     /** Unbinds the session bound last. */
@@ -327,6 +356,9 @@ internal class CameraSession(
         config = null
         analyzing = null
         forgetCamera()
+        // A preview started again reads the status from scratch, not what the last session reached.
+        reported = false
+        _status.value = CameraStatus.Connecting
     }
 
     private fun forgetCamera() {

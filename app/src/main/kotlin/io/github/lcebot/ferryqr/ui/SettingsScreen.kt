@@ -26,9 +26,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Label
@@ -39,7 +37,6 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.SliderState
 import androidx.compose.material3.Text
-import androidx.compose.material3.ToggleButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -48,11 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -169,35 +162,12 @@ private fun FavoriteSettings() {
                         modifier = Modifier.padding(top = SETTING_CONTROL_GAP),
                         verticalArrangement = Arrangement.spacedBy(SETTING_CONTROL_GAP),
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().selectableGroup(),
-                            horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
-                        ) {
-                            listOf(false, true).forEachIndexed { index, option ->
-                                ToggleButton(
-                                    checked = option == tiles,
-                                    colors = settingToggleColors(),
-                                    onCheckedChange = {
-                                        if (it) {
-                                            haptics.step()
-                                            settings.favoriteTiles.value = option
-                                        }
-                                    },
-                                    shapes = if (index == 0) {
-                                        ButtonGroupDefaults.connectedLeadingButtonShapes()
-                                    } else {
-                                        ButtonGroupDefaults.connectedTrailingButtonShapes()
-                                    },
-                                    modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
-                                ) {
-                                    Text(
-                                        stringResource(if (option) R.string.favorite_layout_tiles else R.string.favorite_layout_list),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                            }
-                        }
+                        ConnectedChoice(
+                            options = listOf(false, true),
+                            selected = tiles,
+                            label = { if (it) R.string.favorite_layout_tiles else R.string.favorite_layout_list },
+                            onSelect = { settings.favoriteTiles.value = it },
+                        )
                         ChoiceDescription(if (tiles) R.string.favorite_layout_tiles_desc else R.string.favorite_layout_list_desc)
                     }
                 },
@@ -308,31 +278,12 @@ private fun DisplaySettings() {
             supportingContent = {
                 Column(verticalArrangement = Arrangement.spacedBy(SETTING_CONTROL_GAP)) {
                     Text(stringResource(R.string.settings_long_codes_desc))
-                    Row(
-                        modifier = Modifier.fillMaxWidth().selectableGroup(),
-                        horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
-                    ) {
-                        LongCodeEnlarge.entries.forEachIndexed { index, option ->
-                            ToggleButton(
-                                checked = option == mode,
-                                colors = settingToggleColors(),
-                                onCheckedChange = {
-                                    if (it) {
-                                        haptics.step()
-                                        settings.longCodeEnlarge.value = option
-                                    }
-                                },
-                                shapes = when (index) {
-                                    0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
-                                    LongCodeEnlarge.entries.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
-                                    else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
-                                },
-                                modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
-                            ) {
-                                Text(stringResource(enlargeLabel(option)), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
-                        }
-                    }
+                    ConnectedChoice(
+                        options = LongCodeEnlarge.entries,
+                        selected = mode,
+                        label = ::enlargeLabel,
+                        onSelect = { settings.longCodeEnlarge.value = it },
+                    )
                     ChoiceDescription(enlargeDescription(mode))
                 }
             },

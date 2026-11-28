@@ -61,13 +61,15 @@ internal val TOOLBAR_TO_FAB_GAP = 8.dp
  * The actions on a code image, in one floating toolbar under the code: [favorite] when given,
  * then save and copy, then [extra] actions, with sharing as the floating action button. Results
  * are told through [onMessage], for the page or sheet holding the toolbar to show with its own
- * snackbar host, since a sheet covers the snackbar of the page under it.
+ * snackbar host, since a sheet covers the snackbar of the page under it. [code] is drawn from
+ * content one pixel per module unless it is a [picture], which [CodeExport] writes as it is.
  */
 @Composable
 fun CodeToolbar(
     code: Bitmap?,
     onMessage: (Int) -> Unit,
     modifier: Modifier = Modifier,
+    picture: Boolean = false,
     favorite: (@Composable () -> Unit)? = null,
     extra: @Composable RowScope.() -> Unit = {},
 ) {
@@ -75,10 +77,10 @@ fun CodeToolbar(
     val haptics = rememberHaptics()
     val scope = rememberCoroutineScope()
 
-    fun export(action: (Context, Bitmap) -> Boolean, @StringRes done: Int?, @StringRes failed: Int) {
+    fun export(action: (Context, Bitmap, Boolean) -> Boolean, @StringRes done: Int?, @StringRes failed: Int) {
         val bitmap = code ?: return
         scope.launch {
-            val ok = withContext(Dispatchers.IO) { action(context, bitmap) }
+            val ok = withContext(Dispatchers.IO) { action(context, bitmap, picture) }
             if (ok) haptics.confirm() else haptics.reject()
             (if (ok) done else failed)?.let(onMessage)
         }
@@ -87,7 +89,7 @@ fun CodeToolbar(
     fun share() {
         val bitmap = code ?: return
         scope.launch {
-            val chooser = withContext(Dispatchers.IO) { CodeExport.share(context, bitmap) }
+            val chooser = withContext(Dispatchers.IO) { CodeExport.share(context, bitmap, picture) }
             if (chooser != null) {
                 haptics.tap()
                 context.startActivity(chooser)

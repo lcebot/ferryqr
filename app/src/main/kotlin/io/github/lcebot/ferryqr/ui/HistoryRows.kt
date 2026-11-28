@@ -7,7 +7,6 @@ import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.collection.intListOf
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateDp
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.updateTransition
@@ -19,6 +18,7 @@ import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -40,8 +40,8 @@ import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -58,6 +58,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
@@ -69,7 +71,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.unit.dp
@@ -180,15 +181,41 @@ internal class EntryActions(
  * How a favorite row takes part in reordering the favorites. While [active], it neither opens nor
  * swipes nor opens its menu, and a long press anywhere on it or a drag on its handle picks it up,
  * as in Android's own reorderable lists. While [lifted], it takes the dragged look of the
- * expressive list's reorder tokens. [onDrag] moves it by a distance down the list.
+ * expressive list's reorder tokens. [onDragStart] picks it up, or says it was refused, and [onDrag]
+ * moves it by a distance down the list.
  */
 internal class RowReorder(
     val active: Boolean,
     val lifted: Boolean,
-    val onDragStart: () -> Unit,
+    val onDragStart: () -> Boolean,
     val onDrag: (Float) -> Unit,
     val onDragEnd: () -> Unit,
 )
+
+/**
+ * Moves the row [reorder] gives with this element's drags, after a long press when
+ * [afterLongPress]. Only a drag whose start picked the row up moves it and sets it down, so a second
+ * finger on another row while one is held takes nothing over.
+ */
+private suspend fun PointerInputScope.dragRow(afterLongPress: Boolean, reorder: () -> RowReorder?) {
+    var picked = false
+    val start: (Offset) -> Unit = { picked = reorder()?.onDragStart() == true }
+    val end: () -> Unit = {
+        if (picked) {
+            picked = false
+            reorder()?.onDragEnd()
+        }
+    }
+    val move: (PointerInputChange, Offset) -> Unit = { change, amount ->
+        change.consume()
+        if (picked) reorder()?.onDrag(amount.y)
+    }
+    if (afterLongPress) {
+        detectDragGesturesAfterLongPress(onDragStart = start, onDragEnd = end, onDragCancel = end, onDrag = move)
+    } else {
+        detectDragGestures(onDragStart = start, onDragEnd = end, onDragCancel = end, onDrag = move)
+    }
+}
 
 /**
  * One entry: a tap opens it, a long press opens its menu, a swipe toward the start deletes it, and a
@@ -198,7 +225,8 @@ internal class RowReorder(
  * itself. A row swiped away and deleted leaves its swipe with [list] while undoing can bring it
  * back, and brought back, it flies back into its place from where it went in its turn, as a tile
  * does. A favorite row is reordered through [reorder], the same row showing its handle while that
- * is active, so entering and leaving the mode moves only what the handle changes.
+ * is active, so entering and leaving the mode moves only what the handle changes. A row that becomes
+ * a favorite or stops being one changes its look the same way, its time and avatar following it.
  */
 @Composable
 internal fun EntryRow(
@@ -214,12 +242,10 @@ internal fun EntryRow(
 ) {
     val reordering = reorder?.active == true
     val drag by rememberUpdatedState(reorder)
-    var menu by remember { mutableStateOf(false) }
-    var touch by remember { mutableStateOf(Offset.Zero) }
+    val menu = remember { EntryMenuState() }
     val density = LocalDensity.current
     val magnet = rememberRowMagnet(list, entry.text, group, index, with(density) { DETACH_AT.toPx() })
     var width by remember { mutableIntStateOf(0) }
-    val kept = remember { list.departed[entry.text] }
     val swipe = rememberEntrySwipe(
         entry = entry,
         group = group,
@@ -229,40 +255,74 @@ internal fun EntryRow(
         flyTo = { width.toFloat() },
         onDelete = actions.onDelete,
         onFavorite = actions.onFavorite,
-        kept = kept,
     )
-    DisposableEffect(swipe) {
-        onDispose { if (swipe.acting) list.departed[entry.text] = swipe }
-    }
-    LaunchedEffect(swipe) {
-        if (kept == null) return@LaunchedEffect
-        list.departed.remove(entry.text)
-        if (swipe.acting) list.returnInTurn(entry.text, swipe)
-    }
     // What a swipe shows behind the row takes the row's own shape, rounding with it as it is pulled
     // and comes loose, so it matches the corners of the neighbours that round toward it.
     val roundTop by rememberRounding(magnet.topStart)
     val roundBottom by rememberRounding(magnet.bottomStart)
     val shape = segmentShape(index, count, roundTop, roundBottom)
+    SwipeableEntry(
+        entry = entry,
+        swipe = swipe,
+        magnet = magnet,
+        shape = shape,
+        menu = menu,
+        actions = actions,
+        modifier = modifier.onSizeChanged { width = it.width },
+        swipeEnabled = !reordering,
+        gestures = Modifier.pointerInput(entry.text, reordering) {
+            if (reordering) dragRow(afterLongPress = true) { drag }
+        },
+    ) {
+        EntryItem(
+            entry,
+            listed,
+            shape,
+            onClick = { if (!reordering && !list.held) actions.onOpen(entry) },
+            onLongClick = if (reordering) null else ({ if (!list.held) menu.expanded = true }),
+            interactionSource = rememberLiftedInteraction(reorder?.lifted == true),
+            reordering = reordering,
+            drag = { drag },
+        )
+    }
+}
+
+/** An entry's long-press menu: whether it is [expanded], and [at] where the touch that opens it went down. */
+@Stable
+internal class EntryMenuState {
+    var expanded by mutableStateOf(false)
+    var at by mutableStateOf(Offset.Zero)
+}
+
+/**
+ * An entry that swipes as a notification does, for a row or a tile, which gives its own [content]
+ * and [shape]. Behind the content, what the swipe shows takes the entry's shape, leans as far as
+ * [magnet] leans it, and fades as the swipe's backdrop does; the content moves by the swipe's shift
+ * and the entry's lean, on whole pixels. The entry's [menu] opens where the touch went down, while
+ * [menuShown]. [modifier] comes before the swipe's gestures and [gestures] after them, so the
+ * entry's own gestures see each touch before the swipe does. [swipeEnabled] is false where the
+ * entry takes no swipes.
+ */
+@Composable
+internal fun SwipeableEntry(
+    entry: HistoryEntry,
+    swipe: EntrySwipe,
+    magnet: Magnet,
+    shape: Shape,
+    menu: EntryMenuState,
+    actions: EntryActions,
+    modifier: Modifier = Modifier,
+    swipeEnabled: Boolean = true,
+    gestures: Modifier = Modifier,
+    menuShown: Boolean = true,
+    content: @Composable () -> Unit,
+) {
     Box(
         modifier
-            .onSizeChanged { width = it.width }
-            .trackTouch { touch = it }
-            .entrySwipe(swipe, enabled = !reordering)
-            .pointerInput(entry.text, reordering) {
-                if (!reordering) return@pointerInput
-                detectDragGesturesAfterLongPress(
-                    onDragStart = { drag?.onDragStart() },
-                    onDragEnd = { drag?.onDragEnd() },
-                    onDragCancel = { drag?.onDragEnd() },
-                    onDrag = { change, amount ->
-                        change.consume()
-                        drag?.onDrag(amount.y)
-                    },
-                )
-            },
+            .trackTouch { menu.at = it }
+            .entrySwipe(swipe, swipeEnabled)
+            .then(gestures),
     ) {
-        // What the swipe shows behind the row leans with the pull, clearly more than the rows next to it.
         SwipeBackground(
             swipe.direction,
             swipe.armed,
@@ -274,29 +334,21 @@ internal fun EntryRow(
             },
         )
         Box(Modifier.graphicsLayer { translationX = onWholePixels(swipe.shift.value.value + magnet.lean.value.value) }) {
-            EntryItem(
-                entry,
-                listed,
-                shape,
-                onClick = { if (!reordering && !list.held) actions.onOpen(entry) },
-                onLongClick = if (reordering) null else ({ if (!list.held) menu = true }),
-                interactionSource = rememberLiftedInteraction(reorder?.lifted == true),
-                reorder = reorder,
-            )
+            content()
         }
         EntryMenu(
             entry = entry,
-            at = touch,
-            expanded = menu,
-            onDismiss = { menu = false },
+            at = menu.at,
+            expanded = menu.expanded && menuShown,
+            onDismiss = { menu.expanded = false },
             actions = actions,
         )
     }
 }
 
 /**
- * [listed] is the names the history lists show [entry] by. A favorite row reordered through
- * [reorder] shows its drag handle at its end while that is active.
+ * [listed] is the names the history lists show [entry] by. A favorite row shows its drag handle at
+ * its end while [reordering], which picks it up through [drag].
  */
 @Composable
 private fun EntryItem(
@@ -306,29 +358,28 @@ private fun EntryItem(
     onClick: () -> Unit,
     onLongClick: (() -> Unit)?,
     interactionSource: MutableInteractionSource,
-    reorder: RowReorder?,
+    reordering: Boolean,
+    drag: () -> RowReorder?,
 ) {
     val context = LocalContext.current
     val shown = rememberNames(entry, listed)
     val time = remember(entry.time) { DateFormat.getTimeFormat(context).format(Date(entry.time)) }
-    val handle = reorder?.let { rememberHandleShow(it.active) }
     // A favorite is kept for what it is rather than when it was scanned, so its trailing slot holds
-    // only its drag handle. A reorderable row keeps the slot whether the handle shows or not: the
-    // list item puts its gap before the slot whenever there is one, and a slot coming and going
-    // would open and close that gap in one frame.
-    val trailing: (@Composable () -> Unit)? = when {
-        reorder != null && handle != null -> { { DragHandle(entry.text, reorder, handle) } }
-        entry.favorite -> null
-        else -> { { Text(time, style = MaterialTheme.typography.labelMedium) } }
-    }
-    // While the handle is away, the text reaches over the gap the slot keeps, so the row reads as
-    // one without a trailing slot; as the handle comes, the text gives the gap back as fast as the
-    // handle grows, so a title that wraps anew does so beside the moving handle rather than in one
-    // frame. Measured here rather than padded in composition, so the room changing on every frame
-    // lays the text out again without composing the row again.
+    // only its drag handle, while the favorites are reordered, and the other entries' slot holds
+    // their time. Every row keeps the slot whether anything shows in it or not: the list item puts
+    // its gap before the slot whenever there is one, and a slot coming and going would open and
+    // close that gap in one frame.
+    val timePart = rememberSlotPart(!entry.favorite, "entry-time")
+    val handle = rememberSlotPart(reordering, "reorder-handle")
+    // While the slot is empty, the text reaches over the gap the slot keeps, so the row reads as one
+    // without a trailing slot; as the time or the handle comes, the text gives the gap back as fast
+    // as the slot grows, and takes it back as fast as the slot shrinks, so a title that wraps anew
+    // does so beside the moving slot rather than in one frame. Measured here rather than padded in
+    // composition, so the room changing on every frame lays the text out again without composing
+    // the row again.
     val room = Modifier.layout { measurable, constraints ->
-        val shown = handle?.let { (it.width / HANDLE_SIZE).coerceIn(0f, 1f) } ?: 1f
-        val reach = if (handle == null || !constraints.hasBoundedWidth) 0 else (TRAILING_GAP * (1f - shown)).roundToPx()
+        val filled = (timePart.fraction + handle.fraction).coerceIn(0f, 1f)
+        val reach = if (!constraints.hasBoundedWidth) 0 else (TRAILING_GAP * (1f - filled)).roundToPx()
         val placeable = measurable.measure(constraints.copy(maxWidth = constraints.maxWidth + reach))
         // Wider than its place by the reach, it runs on over the slot's gap, toward the end in either direction.
         layout(constraints.constrainWidth(placeable.width), placeable.height) { placeable.placeRelative(0, 0) }
@@ -343,7 +394,16 @@ private fun EntryItem(
             // the icon, time and handle of a row three lines tall, which a title on two lines makes it.
             verticalAlignment = Alignment.CenterVertically,
             leadingContent = { EntryAvatar(shown.kind.icon, entry.favorite) },
-            trailingContent = trailing,
+            trailingContent = {
+                // The time and the handle pass each other here only when a row becomes a favorite
+                // while the favorites are reordered.
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (timePart.present) {
+                        Text(time, style = MaterialTheme.typography.labelMedium, modifier = Modifier.slotPart(timePart))
+                    }
+                    if (handle.present) DragHandle(entry.text, reordering, drag, handle)
+                }
+            },
             supportingContent = { Text(stringResource(shown.kind.label), modifier = room) },
             shapes = ListItemDefaults.shapes(shape = shape),
             colors = ListItemDefaults.colors(
@@ -366,72 +426,64 @@ private val TRAILING_GAP = 12.dp
 private val HANDLE_TOUCH = 48.dp
 
 /**
- * How far a favorite row's handle has come in: the [width] it takes in the trailing slot, on the
- * fast spatial spring, its [alpha], on the fast effects one, and whether it is [present] at all,
- * shown or on its way in or out. Both run on one transition, so they start and end together.
+ * How far one part of a row's trailing slot, its time or its drag handle, has come in: the
+ * [fraction] of its own width it takes in the slot, on the fast spatial spring, its [alpha], on the
+ * fast effects one, and whether it is [present] at all, shown or on its way in or out. Both run on
+ * one transition, so they start and end together.
  */
-private class HandleShow(widthState: State<Dp>, alphaState: State<Float>, val present: Boolean) {
-    val width by widthState
+private class SlotPart(fractionState: State<Float>, alphaState: State<Float>, val present: Boolean) {
+    val fraction by fractionState
     val alpha by alphaState
 }
 
-/** The handle of a favorite row, shown while [active], on the fast springs as a small part of the row. */
+/** A part of a row's trailing slot, shown while [shown], on the fast springs as a small part of the row. */
 @Composable
-private fun rememberHandleShow(active: Boolean): HandleShow {
+private fun rememberSlotPart(shown: Boolean, label: String): SlotPart {
     val motion = MaterialTheme.motionScheme
-    val transition = updateTransition(active, label = "reorder-handle")
-    val width = transition.animateDp({ motion.fastSpatialSpec() }, label = "handle-width") { if (it) HANDLE_SIZE else 0.dp }
-    val alpha = transition.animateFloat({ motion.fastEffectsSpec() }, label = "handle-alpha") { if (it) 1f else 0f }
-    return HandleShow(width, alpha, transition.currentState || transition.targetState)
+    val transition = updateTransition(shown, label = label)
+    val fraction = transition.animateFloat({ motion.fastSpatialSpec() }, label = "$label-width") { if (it) 1f else 0f }
+    val alpha = transition.animateFloat({ motion.fastEffectsSpec() }, label = "$label-alpha") { if (it) 1f else 0f }
+    return SlotPart(fraction, alpha, transition.currentState || transition.targetState)
 }
 
 /**
+ * Lays a part of the trailing slot out as wide as [part] has come in, fading as it does. The part
+ * keeps its own size at the slot's inner edge, so it slides in from the end as the text gives way.
+ */
+private fun Modifier.slotPart(part: SlotPart): Modifier = layout { measurable, constraints ->
+    val placeable = measurable.measure(constraints.copy(minWidth = 0, maxWidth = Constraints.Infinity))
+    val width = (placeable.width * part.fraction).roundToInt().coerceAtLeast(0)
+    layout(constraints.constrainWidth(width), placeable.height) { placeable.placeRelative(0, 0) }
+}.graphicsLayer { alpha = part.alpha }
+
+/**
  * The drag handle, in the row's trailing slot, so it lifts with the row and takes the list item's
- * dragged colours as the row is picked up. The slot is as wide as the handle has come in, and the
- * glyph keeps to the slot's inner edge, so it slides in from the end as the text gives way and
- * fades as it does. Its touch area reaches past the slot into the gap and the row's end padding,
- * as wide as Material's minimum, so a touch anywhere in it picks the row up, not only one on the
- * glyph.
+ * dragged colours as the row is picked up. Its touch area reaches past the glyph into the gap and
+ * the row's end padding, as wide as Material's minimum, so a touch anywhere in it picks the row up
+ * through [drag] while [active], not only one on the glyph.
  */
 @Composable
-private fun DragHandle(key: String, reorder: RowReorder, handle: HandleShow) {
-    val drag by rememberUpdatedState(reorder)
+private fun DragHandle(key: String, active: Boolean, drag: () -> RowReorder?, part: SlotPart) {
     Box(
         Modifier
+            .slotPart(part)
             .layout { measurable, _ ->
                 val glyph = HANDLE_SIZE.roundToPx()
                 val touch = HANDLE_TOUCH.roundToPx()
                 val placeable = measurable.measure(Constraints.fixed(touch, touch))
                 val margin = (touch - glyph) / 2
-                layout(handle.width.roundToPx().coerceAtLeast(0), glyph) { placeable.placeRelative(-margin, -margin) }
+                layout(glyph, glyph) { placeable.placeRelative(-margin, -margin) }
             }
-            .graphicsLayer { alpha = handle.alpha },
+            .pointerInput(key, active) {
+                if (active) dragRow(afterLongPress = false, drag)
+            },
+        contentAlignment = Alignment.Center,
     ) {
-        if (handle.present) {
-            Box(
-                Modifier
-                    .size(HANDLE_TOUCH)
-                    .pointerInput(key, reorder.active) {
-                        if (!reorder.active) return@pointerInput
-                        detectDragGestures(
-                            onDragStart = { drag.onDragStart() },
-                            onDragEnd = { drag.onDragEnd() },
-                            onDragCancel = { drag.onDragEnd() },
-                            onDrag = { change, amount ->
-                                change.consume()
-                                drag.onDrag(amount.y)
-                            },
-                        )
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    painterResource(R.drawable.ic_drag_indicator),
-                    contentDescription = stringResource(R.string.favorite_drag),
-                    modifier = Modifier.size(HANDLE_SIZE),
-                )
-            }
-        }
+        Icon(
+            painterResource(R.drawable.ic_drag_indicator),
+            contentDescription = stringResource(R.string.favorite_drag),
+            modifier = Modifier.size(HANDLE_SIZE),
+        )
     }
 }
 
@@ -441,7 +493,7 @@ private fun DragHandle(key: String, reorder: RowReorder, handle: HandleShow) {
  * new favorite, and the primary colours of other entries for one that stops being a favorite.
  */
 @Composable
-internal fun SwipeBackground(
+private fun SwipeBackground(
     direction: SwipeToDismissBoxValue,
     armed: Boolean,
     becomesFavorite: Boolean,
@@ -504,7 +556,7 @@ internal fun Modifier.trackTouch(onDown: (Offset) -> Unit): Modifier = pointerIn
  * from there toward the end and downward, or toward the start or upward where there is no room.
  */
 @Composable
-internal fun EntryMenu(entry: HistoryEntry, at: Offset, expanded: Boolean, onDismiss: () -> Unit, actions: EntryActions) {
+private fun EntryMenu(entry: HistoryEntry, at: Offset, expanded: Boolean, onDismiss: () -> Unit, actions: EntryActions) {
     val position = remember(at) {
         MenuAnchorPosition.Custom(
             xCandidates = {
@@ -527,7 +579,7 @@ internal fun EntryMenu(entry: HistoryEntry, at: Offset, expanded: Boolean, onDis
                 add(MenuEntry(R.string.favorite_remove, R.drawable.ic_star_filled) { actions.onFavorite(entry, false) })
                 add(MenuEntry(R.string.rename, R.drawable.ic_edit) { actions.onRename(entry) })
                 if (entry.text != actions.topFavorite) {
-                    add(MenuEntry(R.string.favorite_move_top, R.drawable.ic_drag_indicator) { actions.onMoveToTop(entry) })
+                    add(MenuEntry(R.string.favorite_move_top, R.drawable.ic_vertical_align_top) { actions.onMoveToTop(entry) })
                 }
                 if (entry.shortcut) {
                     add(MenuEntry(R.string.shortcut_remove, R.drawable.ic_app_shortcut) { actions.onShortcut(entry, false) })

@@ -79,10 +79,15 @@ object Classifier {
         return SchemePayload(text, uri, "mailto")
     }
 
-    /** `SMSTO:number:body`, the non-URI form most generators emit. */
+    /**
+     * `SMSTO:number:body`, the non-URI form most generators emit. A number that a `?` ends first is
+     * the URI form, `smsto:number?body=text`, which is opened as written.
+     */
     private fun smsto(text: String, rest: String): Payload {
-        val number = rest.substringBefore(':').trim()
-        val body = rest.substringAfter(':', "").trim()
+        val end = rest.indexOfAny(charArrayOf(':', '?'))
+        if (end >= 0 && rest[end] == '?') return uriLike(text)
+        val number = (if (end < 0) rest else rest.substring(0, end)).trim()
+        val body = if (end < 0) "" else rest.substring(end + 1).trim()
         if (number.isEmpty()) return TextPayload(text)
         val uri = "smsto:" + encode(number) + if (body.isEmpty()) "" else "?body=${encode(body)}"
         return SchemePayload(text, uri, "smsto")

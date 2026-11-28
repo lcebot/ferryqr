@@ -114,30 +114,31 @@ internal object MiniCodeCheck {
         val x1 = min(gray.cols(), (box.right + pad).toInt())
         val y1 = min(gray.rows(), (box.bottom + pad).toInt())
         if (x1 - x0 < 16 || y1 - y0 < 16) return null
-        val roi = gray.submat(y0, y1, x0, x1)
         val scale = REGION_SIDE / max(x1 - x0, y1 - y0)
+        val roi = gray.submat(y0, y1, x0, x1)
         val region = Mat()
-        Imgproc.resize(
-            roi, region, Size((x1 - x0) * scale, (y1 - y0) * scale), 0.0, 0.0,
-            if (scale < 1) Imgproc.INTER_AREA else Imgproc.INTER_CUBIC,
-        )
-        roi.release()
         try {
+            Imgproc.resize(
+                roi, region, Size((x1 - x0) * scale, (y1 - y0) * scale), 0.0, 0.0,
+                if (scale < 1) Imgproc.INTER_AREA else Imgproc.INTER_CUBIC,
+            )
             val block = max(15, (min(region.cols(), region.rows()) / 10) or 1)
             val found = find(region, block, buffer) ?: return null
             return found.toMiniCode(scale, x0, y0)
         } finally {
             region.release()
+            roi.release()
         }
     }
 
     /** Searches a whole grayscale image, for still images where the detector proposed nothing. */
     fun inImage(gray: Mat, buffer: UprightBuffer): MiniCode? {
         val scale = min(1.0, SEARCH_SIDE / max(gray.cols(), gray.rows()))
-        val image = if (scale < 1) Mat().also {
-            Imgproc.resize(gray, it, Size(gray.cols() * scale, gray.rows() * scale), 0.0, 0.0, Imgproc.INTER_AREA)
-        } else gray
+        val image = if (scale < 1) Mat() else gray
         try {
+            if (image !== gray) {
+                Imgproc.resize(gray, image, Size(gray.cols() * scale, gray.rows() * scale), 0.0, 0.0, Imgproc.INTER_AREA)
+            }
             // Eyes span a few to a few dozen pixels here, so several neighbourhood sizes are tried.
             val found = listOf(15, 31, 51).firstNotNullOfOrNull { find(image, it, buffer) } ?: return null
             return found.toMiniCode(scale, 0, 0)
@@ -156,9 +157,9 @@ internal object MiniCodeCheck {
 
     private fun find(gray: Mat, block: Int, buffer: UprightBuffer): Ring? {
         val binary = Mat()
-        // Dark ink becomes foreground.
-        Imgproc.adaptiveThreshold(gray, binary, 255.0, Imgproc.ADAPTIVE_THRESH_MEAN_C, Imgproc.THRESH_BINARY_INV, block, 8.0)
         try {
+            // Dark ink becomes foreground.
+            Imgproc.adaptiveThreshold(gray, binary, 255.0, Imgproc.ADAPTIVE_THRESH_MEAN_C, Imgproc.THRESH_BINARY_INV, block, 8.0)
             val eyes = eyes(binary, buffer.points())
             if (eyes.size < 3) return null
             return ring(marks(binary, buffer), eyes)
@@ -170,12 +171,12 @@ internal object MiniCodeCheck {
     private fun eyes(binary: Mat, points: MatOfPoint2f): List<Eye> {
         val contours = ArrayList<MatOfPoint>()
         val hierarchy = Mat()
-        // One approximation applies to every contour. Each is used only for its area, enclosing
-        // circle and centroid, which the corners of a polygon decide alone, so dropping the pixels
-        // along its straight runs changes none of them.
-        Imgproc.findContours(binary, contours, hierarchy, Imgproc.RETR_TREE, Imgproc.CHAIN_APPROX_SIMPLE)
         val found = ArrayList<Eye>()
         try {
+            // One approximation applies to every contour. Each is used only for its area, enclosing
+            // circle and centroid, which the corners of a polygon decide alone, so dropping the
+            // pixels along its straight runs changes none of them.
+            Imgproc.findContours(binary, contours, hierarchy, Imgproc.RETR_TREE, Imgproc.CHAIN_APPROX_SIMPLE)
             if (hierarchy.empty()) return found
             for (i in contours.indices) {
                 val child = hierarchy.get(0, i)[2].toInt()
@@ -222,15 +223,30 @@ internal object MiniCodeCheck {
         return if (m.m00 != 0.0) Point(m.m10 / m.m00, m.m01 / m.m00) else null
     }
 
-    private fun marks(binary: Mat, buffer: UprightBuffer): Marks {
+    /**
+     * Labels the connected marks of [binary] into [buffer]'s labels, row after row, and returns how
+     * many labels there are, the background's included.
+     */
+    private fun labelMarks(binary: Mat, buffer: UprightBuffer): Int {
         val labels = Mat()
         val stats = Mat()
         val centroids = Mat()
-        val n = Imgproc.connectedComponentsWithStats(binary, labels, stats, centroids, 8)
-        val w = labels.cols()
-        val h = labels.rows()
+        try {
+            val n = Imgproc.connectedComponentsWithStats(binary, labels, stats, centroids, 8)
+            labels.get(0, 0, buffer.labels(labels.cols() * labels.rows()))
+            return n
+        } finally {
+            labels.release()
+            stats.release()
+            centroids.release()
+        }
+    }
+
+    private fun marks(binary: Mat, buffer: UprightBuffer): Marks {
+        val n = labelMarks(binary, buffer)
+        val w = binary.cols()
+        val h = binary.rows()
         val label = buffer.labels(w * h)
-        labels.get(0, 0, label)
         // One pass gathers the second moments of every mark for its principal axis.
         val sx = DoubleArray(n)
         val sy = DoubleArray(n)
@@ -283,9 +299,6 @@ internal object MiniCodeCheck {
             ax[l] = ex / len
             ay[l] = ey / len
         }
-        labels.release()
-        stats.release()
-        centroids.release()
         return Marks(n, cx, cy, area, ax, ay, elongated)
     }
 

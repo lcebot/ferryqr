@@ -16,12 +16,16 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/** Every operation does file I/O and belongs on a background dispatcher. */
+/**
+ * Every operation does file I/O and belongs on a background dispatcher. Each writes a code drawn
+ * from content, which has one pixel per module, as [CodeGenerator.forExport] scales it, and a
+ * picture, such as a mini program code drawn with curves, at the size it has.
+ */
 object CodeExport {
 
     /** The clipboard holds a content URI to a PNG in the cache, served by the app's FileProvider. */
-    fun copy(context: Context, code: Bitmap): Boolean = try {
-        val uri = cached(context, code, "ferryqr.png")
+    fun copy(context: Context, code: Bitmap, picture: Boolean): Boolean = try {
+        val uri = cached(context, code, picture, "ferryqr.png")
         val clip = ClipData.newUri(context.contentResolver, context.getString(R.string.generate_clip_label), uri)
         context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(clip)
         true
@@ -34,8 +38,8 @@ object CodeExport {
      * so a later copy cannot change an image another app is still reading. The caller starts the
      * returned intent; null means the image could not be written.
      */
-    fun share(context: Context, code: Bitmap): Intent? = try {
-        val uri = cached(context, code, "share.png")
+    fun share(context: Context, code: Bitmap, picture: Boolean): Intent? = try {
+        val uri = cached(context, code, picture, "share.png")
         val send = Intent(Intent.ACTION_SEND)
             .setType("image/png")
             .putExtra(Intent.EXTRA_STREAM, uri)
@@ -47,15 +51,17 @@ object CodeExport {
         null
     }
 
-    private fun cached(context: Context, code: Bitmap, name: String): Uri {
+    private fun exported(code: Bitmap, picture: Boolean): Bitmap = if (picture) code else CodeGenerator.forExport(code)
+
+    private fun cached(context: Context, code: Bitmap, picture: Boolean, name: String): Uri {
         val dir = File(context.cacheDir, "qr").apply { mkdirs() }
         val file = File(dir, name)
-        file.outputStream().use { CodeGenerator.forExport(code).compress(Bitmap.CompressFormat.PNG, 100, it) }
+        file.outputStream().use { exported(code, picture).compress(Bitmap.CompressFormat.PNG, 100, it) }
         return FileProvider.getUriForFile(context, "${context.packageName}.files", file)
     }
 
     /** Writes to Pictures/FerryQR through MediaStore, which needs no storage permission. */
-    fun save(context: Context, code: Bitmap): Boolean {
+    fun save(context: Context, code: Bitmap, picture: Boolean): Boolean {
         val name = "FerryQR_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + ".png"
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, name)
@@ -71,7 +77,7 @@ object CodeExport {
         } ?: return false
         return try {
             val stream = resolver.openOutputStream(uri) ?: throw IllegalStateException("no output stream")
-            stream.use { CodeGenerator.forExport(code).compress(Bitmap.CompressFormat.PNG, 100, it) }
+            stream.use { exported(code, picture).compress(Bitmap.CompressFormat.PNG, 100, it) }
             resolver.update(uri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
             true
         } catch (e: Exception) {

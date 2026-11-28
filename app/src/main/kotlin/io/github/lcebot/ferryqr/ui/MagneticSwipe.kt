@@ -28,6 +28,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -51,9 +52,7 @@ import kotlin.math.roundToLong
 import kotlin.math.sign
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 /**
@@ -153,21 +152,45 @@ internal class MagneticList(val scope: CoroutineScope) {
         haptics ?: SwipeHaptics(context, fallback).also { haptics = it }
 
     /**
-     * The swipes of rows swiped away and deleted, by content, kept while undoing can bring them
-     * back: a row brought back takes up its swipe again and flies back into its place from where it
-     * went, as a tile does.
+     * The entries swiped away and deleted, by content, from when the swipe acts until the undo
+     * session that deleted them ends. Undoing names those it brings back, and each takes up its swipe
+     * again, whether it is composed again or was still composed as it faded out, and flies back into
+     * its place from where it went. One brought back stays until it lands, or else until the next
+     * undo session ends, as one brought back out of view never comes into view to fly back.
      */
-    val departed = HashMap<String, EntrySwipe>()
+    private val departed = mutableStateMapOf<String, Departure>()
 
-    /** Where each entry the last undo brought back stood in the order they were deleted. */
-    private var turns: Map<String, Int> = emptyMap()
+    /** Entries brought back and ready to fly back, with their turns, gathered before any of them starts. */
+    private val ready = ArrayList<Pair<Int, EntrySwipe>>()
 
-    /** Entries brought back and ready to fly back, by content, gathered before any of them starts. */
-    private val ready = ArrayList<Pair<String, EntrySwipe>>()
+    /** Keeps [swipe], which has swiped the entry with content [key] away to delete it, while undoing can bring the entry back. */
+    fun depart(key: String, swipe: EntrySwipe) {
+        departed[key] = Departure(swipe)
+    }
+
+    /** Whether the entry with content [key] was swiped away and deleted, and undoing can still bring it back or is bringing it back. */
+    fun isDeparted(key: String): Boolean = key in departed
+
+    /** The swipe the entry with content [key] flies back with, from when undoing brings it back until it lands. */
+    fun returning(key: String): EntrySwipe? = departed[key]?.takeIf { it.turn != null }?.swipe
 
     /** Takes the contents of the entries an undo brings back, in the order they were deleted, earliest first. */
     fun undone(contents: List<String>) {
-        turns = contents.withIndex().associate { (turn, content) -> content to turn }
+        contents.forEachIndexed { turn, content -> departed[content]?.turn = turn }
+    }
+
+    /**
+     * The undo session has ended: the entries it deleted for good are let go, and so are those an
+     * earlier undo brought back that have not flown back since.
+     */
+    fun undoEnded() {
+        departed.filterValues { it.turn == null || it.outlived }.keys.forEach { departed.remove(it) }
+        departed.values.forEach { it.outlived = true }
+    }
+
+    /** [swipe] has brought the entry with content [key] back into its place, or a finger caught it on its way. */
+    fun landed(key: String, swipe: EntrySwipe) {
+        if (departed[key]?.swipe === swipe) departed.remove(key)
     }
 
     /**
@@ -180,11 +203,11 @@ internal class MagneticList(val scope: CoroutineScope) {
     fun returnInTurn(key: String, swipe: EntrySwipe) {
         if (swipe.returning) return
         swipe.returning = true
-        ready += key to swipe
+        ready += (departed[key]?.turn ?: Int.MAX_VALUE) to swipe
         if (ready.size > 1) return
         scope.launch {
             withFrameNanos {}
-            val inTurn = ready.sortedBy { (content, _) -> turns[content] ?: Int.MAX_VALUE }
+            val inTurn = ready.sortedBy { (turn, _) -> turn }
             ready.clear()
             inTurn.forEachIndexed { turn, (_, back) ->
                 launch {
@@ -194,6 +217,14 @@ internal class MagneticList(val scope: CoroutineScope) {
             }
         }
     }
+}
+
+/** An entry swiped away and deleted: its [swipe], and once undoing brings it back, its [turn] among those brought back with it. */
+private class Departure(val swipe: EntrySwipe) {
+    var turn by mutableStateOf<Int?>(null)
+
+    /** Whether an undo session has ended since undoing brought the entry back. */
+    var outlived = false
 }
 
 /**
@@ -228,6 +259,20 @@ internal class Magnet {
     val bottomStart = SpringFollower(Animatable(0f))
     val bottomEnd = SpringFollower(Animatable(0f))
     val corners = listOf(topStart, topEnd, bottomStart, bottomEnd)
+    private val all = listOf(lean, backdrop) + corners
+
+    /** Steps all of the values together, so the pulls bearing on the entry only send them on. */
+    val loop = FollowerLoop { all }
+}
+
+/** Sends each of the magnet's values toward where [pose] has it, for its loop to step it there. */
+private suspend fun Magnet.aim(pose: Pose) {
+    loop.aim(lean, pose.lean)
+    loop.aim(backdrop, pose.backdrop)
+    loop.aim(topStart, pose.topStart)
+    loop.aim(topEnd, pose.topEnd)
+    loop.aim(bottomStart, pose.bottomStart)
+    loop.aim(bottomEnd, pose.bottomEnd)
 }
 
 /** How many steps of half a dp a corner takes between [INNER_CORNER] and [OUTER_CORNER]. */
@@ -329,11 +374,12 @@ internal fun rememberMagnet(
     val relation by rememberUpdatedState(relate)
     val own by rememberUpdatedState(key)
     LaunchedEffect(list, magnet, detachAt, nearestShare) {
+        launch { magnet.loop.run() }
         var last: Map<Pull, Contribution> = emptyMap()
         snapshotFlow {
             val bearing = list.pulls.mapNotNull { pull -> relation(pull)?.let { contribution(pull, it, detachAt) } }
             bearing.lastOrNull { it.pull.key == own }?.let { listOf(it) } ?: bearing
-        }.collectLatest { current ->
+        }.collect { current ->
             // Each pull that changed phase, or came to bear on the entry or stopped, sets the
             // springs as it would alone; the one follower of each value then follows all of them
             // together, so a pull starting, coming loose, rejoining or ending moves the entry on
@@ -342,15 +388,7 @@ internal fun rememberMagnet(
             last.forEach { (pull, before) -> if (pull !in next) magnet.respring(before, null, current, settle, quick, roundness) }
             current.forEach { magnet.respring(last[it.pull], it, current, settle, quick, roundness) }
             last = next
-            val goal = combine(current, nearestShare * detachAt)
-            coroutineScope {
-                launch { magnet.lean.follow(goal.lean) }
-                launch { magnet.backdrop.follow(goal.backdrop) }
-                launch { magnet.topStart.follow(goal.topStart) }
-                launch { magnet.topEnd.follow(goal.topEnd) }
-                launch { magnet.bottomStart.follow(goal.bottomStart) }
-                launch { magnet.bottomEnd.follow(goal.bottomEnd) }
-            }
+            magnet.aim(combine(current, nearestShare * detachAt))
         }
     }
     return magnet
@@ -467,7 +505,8 @@ private fun rowRelation(pull: Pull, place: Triple<Any, Any, Int>): Relation? {
         else -> 0
     }
     val share = leanShare(distance)
-    // What the swipe shows behind the pulled row leans as the rows next to it do, as behind a tile.
+    // What the swipe shows behind the pulled row leans with the pull, clearly more than the rows next
+    // to it, by BACKDROP_SHARE.
     val backdrop = if (distance == 0) BACKDROP_SHARE else 0f
     return Relation(share, share, ROUNDNESS_MULTIPLIERS[distance + 3], corners, loose, backdrop)
 }
@@ -519,6 +558,10 @@ private fun contribution(pull: Pull, relation: Relation, detachAt: Float): Contr
 @Stable
 internal class EntrySwipe {
     val shift = SpringFollower(Animatable(0f))
+    private val shifts = listOf(shift)
+
+    /** Steps [shift] while it follows the finger, so each move of the finger only sends it on. */
+    internal val loop = FollowerLoop { shifts }
     var pull by mutableStateOf<Pull?>(null)
         internal set
 
@@ -571,8 +614,10 @@ internal class EntrySwipe {
  * The swipe of [entry], at [index] of [group] in [list]. Let go to act, it flies off toward the
  * side it was swiped to, aimed past the distance [flyTo] gives for that side and stopped there, so
  * the action follows as soon as it has left. A favorite swipe slides it back once done, unless
- * [leavesOnFavorite], as a favorite tile does that leaves the favorites. An entry composed again
- * after it left goes on with the swipe it [kept].
+ * [leavesOnFavorite], as a favorite tile does that leaves the favorites. A delete swipe leaves the
+ * swipe with [list] while undoing can bring the entry back, and an entry composed again after it
+ * left takes it up again as its [swipe]. Brought back, the entry flies back into its place in its
+ * turn, once it is [listed] again rather than only composed while it leaves.
  */
 @Composable
 internal fun rememberEntrySwipe(
@@ -585,12 +630,12 @@ internal fun rememberEntrySwipe(
     onDelete: (HistoryEntry) -> Unit,
     onFavorite: (HistoryEntry, Boolean) -> Unit,
     leavesOnFavorite: Boolean = false,
-    kept: EntrySwipe? = null,
+    listed: Boolean = true,
+    swipe: EntrySwipe = remember { list.returning(entry.text) ?: EntrySwipe() },
 ): EntrySwipe {
     val context = LocalContext.current
     val haptics = rememberHaptics()
     val swipeHaptics = remember(list) { list.haptics(context, haptics) }
-    val swipe = remember { kept ?: EntrySwipe() }
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     val density = LocalDensity.current
     val detachAt = with(density) { DETACH_AT.toPx() }
@@ -604,16 +649,18 @@ internal fun rememberEntrySwipe(
 
     LaunchedEffect(swipe.pull) {
         val swiped = swipe.pull ?: return@LaunchedEffect
+        launch { swipe.loop.run() }
         var phase = swiped.phase
-        snapshotFlow { swiped.phase to swiped.finger }.collectLatest { (now, finger) ->
-            if (now == PullPhase.Released) return@collectLatest
+        snapshotFlow { swiped.phase to swiped.finger }.collect { (now, finger) ->
+            // Let go, the release moves the entry, which holds the shift meanwhile.
+            if (now == PullPhase.Released) return@collect
             if (now != phase) {
                 // Coming loose throws the entry on at the finger's speed; rejoining throws it back.
                 val speed = abs(swipe.tracker.calculateVelocity()) * sign(finger)
                 if (now == PullPhase.Detached) shift.animateWith(quick, speed) else shift.animateWith(quick, -speed)
                 phase = now
             }
-            shift.follow(if (now == PullPhase.Detached) finger else PULLED_SHARE * finger)
+            swipe.loop.aim(shift, if (now == PullPhase.Detached) finger else PULLED_SHARE * finger)
         }
     }
     DisposableEffect(list) {
@@ -621,6 +668,12 @@ internal fun rememberEntrySwipe(
             swipe.pull?.let { list.pulls.remove(it) }
             magnet.lean.held = false
         }
+    }
+    // An entry swiped away and brought back by undo flies back from where it went, whether it is
+    // composed again for that or was still composed, as a row still fading out is.
+    val back = listed && list.returning(entry.text) === swipe
+    LaunchedEffect(back) {
+        if (back) list.returnInTurn(entry.text, swipe)
     }
     LaunchedEffect(swipe.direction, entry.favorite) {
         if (swipe.direction == SwipeToDismissBoxValue.Settled) swipe.becomesFavorite = !entry.favorite
@@ -712,6 +765,7 @@ internal fun rememberEntrySwipe(
                     shift.held = false
                 } finally {
                     swipe.returning = false
+                    list.landed(current.text, swipe)
                 }
             }
         }
@@ -753,6 +807,7 @@ internal fun rememberEntrySwipe(
                                     swipe.backdrop.animateTo(0f, fade)
                                 }
                             } else {
+                                list.depart(current.text, swipe)
                                 delete(current)
                                 swipe.backdrop.animateTo(0f, fade)
                             }

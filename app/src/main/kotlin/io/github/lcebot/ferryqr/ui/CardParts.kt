@@ -36,7 +36,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -179,9 +181,11 @@ internal fun CardActions(actions: List<CardAction>, onAction: (CardAction) -> Un
 
 /**
  * What a button stands for, so it keeps its own label and icon and moves to its new place when a
- * card built again offers the actions in another order.
+ * card built again offers the actions in another order. An app's action is its app's, as a card
+ * offers each app once, so one the card names another way as the app becomes ready stays the same
+ * button, whose label crossfades; any other action is its label's.
  */
-private fun actionKey(action: CardAction): Any = action.label to action.app
+private fun actionKey(action: CardAction): Any = action.app ?: action.label
 
 /** How far from full size an action scales as it appears and leaves. */
 private const val APPEARING_SCALE = 0.8f
@@ -206,14 +210,47 @@ private fun ActionButton(action: CardAction, primary: Boolean, onAction: (CardAc
         spec,
         label = "action-content",
     )
-    Button(
-        onClick = { onAction(action) },
-        shapes = ButtonDefaults.shapes(),
-        colors = ButtonDefaults.buttonColors(containerColor = container, contentColor = content),
-    ) {
-        ActionIcon(action, ButtonDefaults.IconSize)
-        Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-        ActionLabel(action)
+    ActionTarget(action, onAction) { onClick ->
+        Button(
+            onClick = onClick,
+            shapes = ButtonDefaults.shapes(),
+            colors = ButtonDefaults.buttonColors(containerColor = container, contentColor = content),
+        ) {
+            ActionIcon(action, ButtonDefaults.IconSize)
+            Spacer(Modifier.width(ButtonDefaults.IconSpacing))
+            ActionLabel(action)
+        }
+    }
+}
+
+/**
+ * The [button] of [action], given what its tap does: run the action, or, for one that several apps
+ * take, open a menu of them at the button, which runs it in the app picked. Opening the menu runs
+ * nothing. The menu takes focus, so back closes it rather than the card.
+ */
+@Composable
+private fun ActionTarget(action: CardAction, onAction: (CardAction) -> Unit, button: @Composable (onClick: () -> Unit) -> Unit) {
+    if (action.choices.isEmpty()) {
+        button { onAction(action) }
+    } else {
+        val haptics = rememberHaptics()
+        var open by remember { mutableStateOf(false) }
+        Box {
+            button {
+                haptics.tap()
+                open = true
+            }
+            AppMenu(
+                expanded = open,
+                onDismiss = { open = false },
+                apps = action.choices.map { choice ->
+                    SendApp(choice.name, choice.pkg, looksEnabled = true) {
+                        onAction(action.copy(choices = emptyList(), run = choice.run))
+                    }
+                },
+                focusable = true,
+            )
+        }
     }
 }
 
@@ -292,13 +329,15 @@ private fun ActionLines(main: @Composable () -> Unit, tools: @Composable () -> U
 @Composable
 private fun ToolButton(action: CardAction, onAction: (CardAction) -> Unit) {
     val label = labelOf(action)
-    Labeled(label) {
-        FilledTonalIconButton(
-            onClick = { onAction(action) },
-            shapes = IconButtonDefaults.shapes(),
-            modifier = Modifier.semantics { contentDescription = label },
-        ) {
-            ActionIcon(action, ACTION_ICON_SIZE)
+    ActionTarget(action, onAction) { onClick ->
+        Labeled(label) {
+            FilledTonalIconButton(
+                onClick = onClick,
+                shapes = IconButtonDefaults.shapes(),
+                modifier = Modifier.semantics { contentDescription = label },
+            ) {
+                ActionIcon(action, ACTION_ICON_SIZE)
+            }
         }
     }
 }

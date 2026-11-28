@@ -121,16 +121,17 @@ fun Bitmap.regionCrop(region: Rect, enlarged: Boolean): RegionCrop? {
  */
 internal fun Mat.regionCrop(region: Rect, enlarged: Boolean): RegionCrop? {
     val r = clipped(region, cols(), rows()) ?: return null
-    val cut = submat(r.top, r.bottom, r.left, r.right)
     val scale = if (enlarged) enlargement(r.width(), r.height()) else 1f
-    val sized = if (scale == 1f) cut else Mat().also {
-        Imgproc.resize(
-            cut, it,
-            Size((r.width() * scale).toInt().toDouble(), (r.height() * scale).toInt().toDouble()),
-            0.0, 0.0, Imgproc.INTER_LINEAR,
-        )
-    }
+    val cut = submat(r.top, r.bottom, r.left, r.right)
+    val sized = if (scale == 1f) cut else Mat()
     return try {
+        if (sized !== cut) {
+            Imgproc.resize(
+                cut, sized,
+                Size((r.width() * scale).toInt().toDouble(), (r.height() * scale).toInt().toDouble()),
+                0.0, 0.0, Imgproc.INTER_LINEAR,
+            )
+        }
         val image = Bitmap.createBitmap(sized.cols(), sized.rows(), Bitmap.Config.ARGB_8888)
         Utils.matToBitmap(sized, image)
         RegionCrop(image, r.left, r.top, scale)

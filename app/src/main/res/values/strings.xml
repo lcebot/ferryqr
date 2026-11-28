@@ -311,6 +311,7 @@
     <string name="generate_placeholder">Type or paste text</string>
     <string name="generate_clear">Clear text</string>
     <string name="generate_empty">The code appears here while typing</string>
+    <string name="generate_empty_unfit">Cannot use the selected format</string>
     <string name="code_copy">Copy image</string>
     <string name="code_save">Save to Pictures</string>
     <string name="code_copied">Image copied</string>

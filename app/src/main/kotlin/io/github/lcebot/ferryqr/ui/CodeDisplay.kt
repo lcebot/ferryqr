@@ -67,6 +67,12 @@ import kotlinx.coroutines.launch
 /** Space kept clear around a code shown over the whole window, as its quiet zone and more. */
 private val OVERLAY_MARGIN = 24.dp
 
+/**
+ * The smallest width, in dp, of the screens on which the system ignores an app's orientation
+ * request at FerryQR's target SDK, leaving the screen as the user holds it.
+ */
+private const val ORIENTATION_IGNORED_FROM_DP = 600
+
 /** How far a back gesture shrinks the full-window code before it lets go. */
 private const val BACK_SHRINK = 0.2f
 
@@ -115,7 +121,7 @@ fun FullBrightness() {
 
 /** Keeps the screen on while in composition, as a code on show must not go dark. */
 @Composable
-private fun KeepScreenOn() {
+internal fun KeepScreenOn() {
     val view = LocalView.current
     DisposableEffect(view) {
         view.keepScreenOn = true
@@ -132,7 +138,7 @@ private fun KeepScreenOn() {
  * enlarge it. The screen turns sideways while it shows, where the code is longest, and turns back
  * when it closes, even when the activity was recreated for the turn. A screen about to turn fades
  * the code in and out instead, since the card's code is where it was only in the window's earlier
- * shape.
+ * shape. A large screen, where the system does not turn for the app, grows the code as it stays.
  * [drawing], the code drawn from its content, is drawn again for a long code as tall as the window
  * lets it be, so its bars or rows grow rather than a scaled picture. Any other code keeps its own
  * shape and the screen its orientation.
@@ -166,7 +172,10 @@ fun CodeOverlay(
         if (brighten) FullBrightness()
         KeepScreenOn()
         val configuration = LocalConfiguration.current
-        val turning = remember { long && configuration.orientation == Configuration.ORIENTATION_PORTRAIT }
+        val turning = remember {
+            long && configuration.orientation == Configuration.ORIENTATION_PORTRAIT &&
+                configuration.smallestScreenWidthDp < ORIENTATION_IGNORED_FROM_DP
+        }
         // Saved with the overlay, so an activity recreated while it shows gives back the orientation
         // it had before the overlay, rather than the landscape the overlay asked for.
         val original by rememberSaveable {

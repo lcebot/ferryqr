@@ -59,8 +59,7 @@ internal fun FocusBox(tap: FocusTap?, held: StateFlow<Boolean>) {
             held.first { !it }
             shown.targetState = false
         }
-        // A fixed colour keeps one light tone in both themes, which the camera image behind needs.
-        val color = MaterialTheme.colorScheme.primaryFixed
+        val color = CameraOverlayStyle.accent
         AnimatedVisibility(
             visibleState = shown,
             enter = scaleIn(MaterialTheme.motionScheme.fastSpatialSpec(), initialScale = FOCUS_BOX_ENTER_SCALE) +

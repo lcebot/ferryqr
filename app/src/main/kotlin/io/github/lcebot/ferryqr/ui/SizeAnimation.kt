@@ -79,6 +79,23 @@ private class SizeAnimationNode(
     private var widthReached = true
     private var heightReached = true
 
+    // Detaching ends the spring wherever it has got to, and a node reattached, or reused under the
+    // same key from a lazy list's pool, finds its target unchanged and would never move on from
+    // there. So it lets go of all it knew and starts again at the size of what it holds next.
+    override fun onReset() = forget()
+
+    override fun onDetach() = forget()
+
+    private fun forget() {
+        following?.cancel()
+        following = null
+        size = null
+        target = IntSize.Zero
+        lookahead = null
+        widthReached = true
+        heightReached = true
+    }
+
     override fun MeasureScope.measure(measurable: Measurable, constraints: Constraints): MeasureResult {
         val placeable = measurable.measure(constraints)
         val measured = IntSize(placeable.width, placeable.height)

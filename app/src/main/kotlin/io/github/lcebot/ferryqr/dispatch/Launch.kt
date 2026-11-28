@@ -9,6 +9,7 @@ import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.pm.ResolveInfo
 import android.net.Uri
@@ -39,7 +40,12 @@ internal object Launch {
         false
     }
 
-    private fun browsable(uri: Uri) = Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE)
+    /**
+     * [uri] opened as a link. Intent filters match schemes case-sensitively and declare them in lower
+     * case, while scanned links often keep an upper-case scheme, such as the `HTTPS://` that the
+     * denser alphanumeric mode of a QR code calls for.
+     */
+    private fun browsable(uri: Uri) = Intent(Intent.ACTION_VIEW, uri.normalizeScheme()).addCategory(Intent.CATEGORY_BROWSABLE)
 
     /** A link no app claims for itself, so only browsers open it; the .invalid domain never exists. */
     private val ANY_WEB_LINK = Uri.parse("https://example.invalid/")
@@ -88,39 +94,33 @@ internal object Launch {
         return start(activity, intent)
     }
 
-    /**
-     * Whether any app opens [uri] as a link. Only schemes the manifest queries for are visible, so
-     * this answers for those alone.
-     */
-    fun canOpen(context: Context, uri: String): Boolean = query(context, browsable(Uri.parse(uri)), 0).isNotEmpty()
-
-    /** Whether any app opens the app link [uri], the way [scheme] would open it. */
-    fun opens(context: Context, uri: String, scheme: String): Boolean =
-        schemeIntent(uri, scheme)?.let { query(context, it, PackageManager.MATCH_DEFAULT_ONLY).isNotEmpty() } == true
-
     /** [uri] opened as a link, the way a browser hands it on. */
     fun linkIntent(uri: String): Intent = browsable(Uri.parse(uri))
 
     /**
-     * The app other than a browser that the system opens [intent] in without asking, such as one
-     * with a verified App Link for a web link, which is where [nonBrowser] goes too. Null when it
-     * goes to a browser, or when the system would ask, since no one app is chosen then. The
-     * manifest queries for every app with links, which is what lets the app be seen here. [browsers]
-     * are the apps that open any web link.
+     * What the system says about [intent], asked once: the activity it resolves to and every one
+     * that matches. A card asks through [FerryEnv.resolved], which keeps the answer for the card.
      */
-    fun handler(context: Context, intent: Intent, browsers: Set<String>): String? {
-        val chosen = resolve(context, intent, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo ?: return null
-        // The system's chooser resolves too, but is not among the activities that match the link.
-        val matches = query(context, intent, PackageManager.MATCH_DEFAULT_ONLY)
-            .any { it.activityInfo.packageName == chosen.packageName && it.activityInfo.name == chosen.name }
-        val pkg = chosen.packageName
-        return pkg.takeIf { matches && it != context.packageName && it !in browsers }
-    }
+    fun resolved(context: Context, intent: Intent): Resolved = Resolved(
+        resolve(context, intent, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo,
+        query(context, intent, PackageManager.MATCH_DEFAULT_ONLY),
+    )
+
+    /**
+     * The app other than a browser that the system opens an intent in without asking, as [resolved]
+     * gives it, such as one with a verified App Link for a web link, which is where [nonBrowser] goes
+     * too. Null when it goes to a browser, or when the system would ask, since no one app is chosen
+     * then. The manifest queries for every app with links, which is what lets the app be seen here.
+     * [browsers] are the apps that open any web link.
+     */
+    fun handler(context: Context, resolved: Resolved, browsers: Set<String>): String? =
+        resolved.chosen?.packageName?.takeIf { it != context.packageName && it !in browsers }
 
     /** Where [intent] goes: the app the system picks without asking, several it asks between, or none. */
     fun handling(context: Context, intent: Intent): Handling {
-        handler(context, intent, InstalledApps.browsers(context))?.let { return Handling.App(it) }
-        return if (query(context, intent, PackageManager.MATCH_DEFAULT_ONLY).isEmpty()) Handling.None else Handling.Asks
+        val answer = resolved(context, intent)
+        handler(context, answer, InstalledApps.browsers(context))?.let { return Handling.App(it) }
+        return if (answer.matches.isEmpty()) Handling.None else Handling.Asks
     }
 
     /** Succeeds only when an app other than a browser claims the link, such as a verified App Link. */
@@ -159,42 +159,55 @@ internal object Launch {
         intent.selector = null
         intent.flags = 0
         intent.addCategory(Intent.CATEGORY_BROWSABLE)
+        // The scheme in lower case, as [browsable] gives every other link. Setting the data alone
+        // would drop a type the URI names.
+        intent.data?.let { intent.setDataAndType(it.normalizeScheme(), intent.type) }
         return intent.takeUnless { it.data?.scheme?.lowercase() in Classifier.BLOCKED_SCHEMES }
     }
 
-    /** QR codes write the scheme as `FIDO`, while intent filters match schemes case-sensitively. */
-    fun fido(activity: Activity, raw: String): Boolean = fidoIntents(raw).any { start(activity, it) }
-
-    /** Whether anything takes passkey requests, asked with the forms [fido] tries. */
+    /** Whether anything takes passkey requests, asked with the forms [fidoIntents] gives. */
     fun fidoSupported(context: Context): Boolean =
         fidoIntents("FIDO:/").any { query(context, it, PackageManager.MATCH_DEFAULT_ONLY).isNotEmpty() }
 
-    private fun fidoIntents(raw: String): List<Intent> {
-        val original = Uri.parse(raw)
-        val candidates = listOf(original, original.normalizeScheme()).distinct()
+    /** The ways the passkey request [raw] reaches a passkey manager, best first, in both [spellings]. */
+    fun fidoIntents(raw: String): List<Intent> {
+        val candidates = spellings(raw)
         return candidates.map { Intent(FIDO_ACTION, it) } + candidates.map { Intent(Intent.ACTION_VIEW, it) }
     }
+
+    /**
+     * [raw] as scanned and with its scheme in lower case. Passkey requests and eSIM activation codes
+     * write their schemes in upper case, as `FIDO` and `LPA`, and intent filters match schemes
+     * case-sensitively, so an app may declare either spelling and both are asked.
+     */
+    private fun spellings(raw: String): List<Uri> = Uri.parse(raw).let { listOf(it, it.normalizeScheme()).distinct() }
 
     private const val FIDO_ACTION = "org.fidoalliance.intent.QRCodeAuthenticator"
 
     /** Whether the phone has an eSIM it can add profiles to. */
     fun esimSupported(context: Context): Boolean = context.getSystemService(EuiccManager::class.java)?.isEnabled == true
 
-    /** No public eSIM activation intent exists, so known LPA apps are tried in turn. */
-    fun esim(activity: Activity, raw: String): Boolean {
-        val code = if (raw.startsWith("LPA:", ignoreCase = true)) raw else "LPA:$raw"
+    /**
+     * The ways the eSIM activation code [raw] reaches an LPA app, best first, the code in both
+     * [spellings]. No public eSIM activation intent exists, so these are the known LPA apps' own,
+     * then any app that opens the code.
+     */
+    fun esimIntents(raw: String): List<Intent> {
+        val codes = spellings(if (raw.startsWith("LPA:", ignoreCase = true)) raw else "LPA:$raw")
         val miui = Intent("com.miui.euicc.action.ADD_ESIM")
             .putExtra("com.miui.euicc.extra.ACTIVATE_TYPE", "activate_manual")
             .putExtra("com.miui.euicc.extra.ACTIVATE_CODE", raw)
             .putExtra("com.miui.euicc.extra.OPERATE_TYPE", "scan")
-        val google = Intent(Intent.ACTION_VIEW, Uri.parse(code)).setPackage("com.google.android.euicc")
-        return start(activity, miui) || start(activity, google) ||
-            start(activity, Intent(Intent.ACTION_VIEW, Uri.parse(code)))
+        val google = codes.map { Intent(Intent.ACTION_VIEW, it).setPackage(GOOGLE_LPA) }
+        return listOf(miui) + google + codes.map { Intent(Intent.ACTION_VIEW, it) }
     }
 
-    fun simSettings(activity: Activity): Boolean =
-        start(activity, Intent("android.settings.MANAGE_ALL_SIM_PROFILES_SETTINGS")) ||
-            start(activity, Intent(Settings.ACTION_WIRELESS_SETTINGS))
+    /** Google's LPA app, which the manifest lists so it can be seen here. */
+    private const val GOOGLE_LPA = "com.google.android.euicc"
+
+    /** The screens where SIM profiles are managed, best first. */
+    fun simSettingsIntents(): List<Intent> =
+        listOf(Intent("android.settings.MANAGE_ALL_SIM_PROFILES_SETTINGS"), Intent(Settings.ACTION_WIRELESS_SETTINGS))
 
     /**
      * Whether the phone supports Wi-Fi Easy Connect. Asking needs ACCESS_WIFI_STATE, which some
@@ -304,5 +317,16 @@ internal object Launch {
         packages.getApplicationLabel(packages.getApplicationInfo(packageName, 0)).toString()
     } catch (e: PackageManager.NameNotFoundException) {
         null
+    }
+}
+
+/**
+ * What the system says about an intent: every activity that [matches] it, and [chosen], the one it
+ * opens without asking, if any. The system's chooser resolves too when it would ask, but it is not
+ * among the matches, so it is never [chosen].
+ */
+internal class Resolved(resolved: ActivityInfo?, val matches: List<ResolveInfo>) {
+    val chosen: ActivityInfo? = resolved?.takeIf { activity ->
+        matches.any { it.activityInfo.packageName == activity.packageName && it.activityInfo.name == activity.name }
     }
 }

@@ -58,6 +58,9 @@ class Survey(val read: List<Detection>, val located: List<MiniCode>, val regions
     }
 }
 
+/** A mini program code [WeChatEngine.lookAgain] found where it was, with its content when it was [read]. */
+class Relocated(val code: MiniCode, val read: Detection?)
+
 /**
  * Where [WeChatEngine.upright] turns frames and the mini program check does its work, kept from one
  * frame to the next by the one thread that reads them, since new buffers for every look would keep
@@ -115,7 +118,10 @@ class WeChatEngine(context: Context) {
     private var ready: Boolean? = null
 
     /** The bundled SSD detector run directly, since WeChatQRCode keeps undecoded boxes to itself. */
+    @Volatile
     private var detector: Net? = null
+
+    @Volatile
     private var detectorFailed = false
 
     private fun ensureReady(): Boolean {
@@ -123,7 +129,8 @@ class WeChatEngine(context: Context) {
         synchronized(lock) {
             ready?.let { return it }
             val ok = try {
-                // Loading OpenCV and copying the models is deferred until a code actually needs it.
+                // Loaded only once something asks for it: the scanner's warm-up as the scanner
+                // opens, or a still image read on a thread of its own.
                 OpenCV.initOpenCV().also { if (it) WeChatQRCodeDetector.init(app) }
             } catch (t: Throwable) {
                 false
@@ -133,7 +140,25 @@ class WeChatEngine(context: Context) {
         }
     }
 
-    /** Lets the next decode try loading OpenCV and the models again after a failed first attempt. */
+    /**
+     * Loads OpenCV, copies the models and reads the detector, which together take long enough to
+     * hold up a frame. The scanner runs this off the analysis thread as it opens, and reads frames
+     * with zxing-cpp alone until [isReady].
+     */
+    fun warmUp() {
+        if (!ensureReady()) return
+        synchronized(lock) { detector() }
+    }
+
+    /**
+     * Whether OpenCV and the detector are loaded, asked without waiting for them, so the analysis
+     * thread never waits on a warm-up still under way. A detector that failed to load counts as
+     * ready, since every look then returns at once with nothing.
+     */
+    val isReady: Boolean
+        get() = ready == true && (detector != null || detectorFailed)
+
+    /** Lets the next warm-up or decode try loading OpenCV and the models again after a failed attempt. */
     fun retryIfFailed() {
         if (ready == false) ready = null
         synchronized(lock) { detectorFailed = false }
@@ -227,17 +252,37 @@ class WeChatEngine(context: Context) {
                 .filter { (score, box) -> score >= QR_REGION_SCORE && mini.none { it.covers(box) } }
                 .map { it.second }
             if (mini.isEmpty()) return Survey(emptyList(), emptyList(), regions)
-            val size = gray.cols() * gray.rows()
-            val pixels = scratch.luma(size)
-            gray.get(0, 0, pixels)
-            val frame = LumaImage(pixels, gray.cols(), gray.rows())
-            val read = mini.associateWith { it.read(frame) }
+            val read = readAll(gray, mini, scratch)
             Survey(read.values.filterNotNull(), read.filterValues { it == null }.keys.toList(), regions)
         } catch (t: Throwable) {
             Survey.NONE
         } finally {
             if (buffer == null) scratch.release()
         }
+    }
+
+    /**
+     * Looks for a mini program code at [region] of [gray], where one was located before, with the
+     * structural check alone, which costs far less than the detector; null when the check finds
+     * none there, as after the code has moved. The code comes back with its content when it can be
+     * read. [buffer], the one [gray] was turned into, lends the check and the read their room.
+     */
+    fun lookAgain(gray: Mat, region: Rect, buffer: UprightBuffer): Relocated? {
+        if (!ensureReady()) return null
+        return try {
+            val code = MiniCodeCheck.inRegion(gray, region, buffer) ?: return null
+            Relocated(code, readAll(gray, listOf(code), buffer).getValue(code))
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
+    /** Reads each of [codes] from [gray] in [buffer]'s room, as null for one that cannot be read. */
+    private fun readAll(gray: Mat, codes: List<MiniCode>, buffer: UprightBuffer): Map<MiniCode, Detection?> {
+        val pixels = buffer.luma(gray.cols() * gray.rows())
+        gray.get(0, 0, pixels)
+        val frame = LumaImage(pixels, gray.cols(), gray.rows())
+        return codes.associateWith { it.read(frame) }
     }
 
     /** Overlapping proposals for one code collapse into one, keyed by a coarse grid cell. */

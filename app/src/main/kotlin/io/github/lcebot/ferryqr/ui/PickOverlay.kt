@@ -32,35 +32,33 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.scan.Found
 import kotlin.coroutines.cancellation.CancellationException
-import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-/**
- * Medium icon buttons, the size of the scanner's found markers, so a found code keeps its marker as
- * the frame freezes.
- */
-private val MARKER_SIZE = IconButtonDefaults.mediumContainerSize()
 private const val STAGGER_MS = 70L
 
 /**
  * Freezes the frame that contained several codes and lets the user tap the one they meant. Only
  * while [active] does it take taps and the back gesture, so the copy fading out after a pick or a
- * close stays inert.
+ * close stays inert. While active it also holds every touch that lands on it, so a tap beside the
+ * markers or a pinch never reaches the scanner's controls or the camera's zoom beneath.
  */
 @Composable
 fun PickOverlay(
@@ -107,16 +105,17 @@ fun PickOverlay(
                 scaleX = 1f - shrink.value * 0.08f
                 scaleY = 1f - shrink.value * 0.08f
             }
+            // Being hit is what keeps touches from the scanner beneath, so the events are awaited
+            // and left unconsumed: consuming them here would cancel the taps on the markers inside.
+            .then(if (active) Modifier.pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent() } } else Modifier)
             .background(Color.Black),
         contentAlignment = AbsoluteAlignment.TopLeft,
     ) {
         val viewWidth = constraints.maxWidth.toFloat()
         val viewHeight = constraints.maxHeight.toFloat()
-        // Same math as ContentScale.Crop with centered alignment.
-        val scale = max(viewWidth / frame.width, viewHeight / frame.height)
-        val dx = (viewWidth - frame.width * scale) / 2f
-        val dy = (viewHeight - frame.height * scale) / 2f
-        val half = with(LocalDensity.current) { MARKER_SIZE.width.toPx() } / 2f
+        val crop = CenterCrop(IntSize(frame.width, frame.height), Size(viewWidth, viewHeight))
+        val markerSize = CameraOverlayStyle.markerSize
+        val half = with(LocalDensity.current) { markerSize.width.toPx() } / 2f
         val popSpec = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
 
         Image(image, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
@@ -126,9 +125,9 @@ fun PickOverlay(
         fun Found.wasShown() = this is Found.Read && detection.text in alreadyShown
         val fresh = codes.filterNot { it.wasShown() }
         codes.forEach { code ->
-            val center = code.center
-            val x = (center.x * scale + dx).coerceIn(half, viewWidth - half)
-            val y = (center.y * scale + dy).coerceIn(half, viewHeight - half)
+            val center = crop.toView(code.center.x, code.center.y)
+            val x = center.x.coerceIn(half, viewWidth - half)
+            val y = center.y.coerceIn(half, viewHeight - half)
             // A code that already had a marker while the camera ran keeps it without popping again;
             // codes that arrived with the frozen frame pop in one after another.
             val wasShown = code.wasShown()
@@ -143,20 +142,19 @@ fun PickOverlay(
                 enter = scaleIn(popSpec),
                 modifier = Modifier.absoluteOffset { IntOffset((x - half).roundToInt(), (y - half).roundToInt()) },
             ) {
-                // A fixed colour keeps one light tone in both themes, which the frozen camera image
-                // behind needs. The copy fading out is disabled in the same colours, so it fades out
-                // as it was rather than greying first.
+                // The copy fading out is disabled in the same colours, so it fades out as it was
+                // rather than greying first.
                 FilledIconButton(
                     onClick = { haptics.tap(); onPick(code) },
                     enabled = active,
                     shapes = IconButtonDefaults.shapes(pressedShape = IconButtonDefaults.mediumPressedShape),
                     colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.primaryFixed,
-                        contentColor = MaterialTheme.colorScheme.onPrimaryFixed,
-                        disabledContainerColor = MaterialTheme.colorScheme.primaryFixed,
-                        disabledContentColor = MaterialTheme.colorScheme.onPrimaryFixed,
+                        containerColor = CameraOverlayStyle.accent,
+                        contentColor = CameraOverlayStyle.onAccent,
+                        disabledContainerColor = CameraOverlayStyle.accent,
+                        disabledContentColor = CameraOverlayStyle.onAccent,
                     ),
-                    modifier = Modifier.size(MARKER_SIZE),
+                    modifier = Modifier.size(markerSize),
                 ) {
                     Icon(
                         painterResource(R.drawable.ic_arrow_forward),
@@ -173,7 +171,7 @@ fun PickOverlay(
         Text(
             stringResource(R.string.pick_title),
             style = MaterialTheme.typography.titleMedium,
-            color = Color.White,
+            color = CameraOverlayStyle.onPicture,
             textAlign = TextAlign.Center,
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -192,7 +190,7 @@ fun PickOverlay(
                 .align(Alignment.BottomCenter)
                 .navigationBarsPadding()
                 .padding(bottom = 32.dp)
-                .size(MARKER_SIZE),
+                .size(markerSize),
         ) {
             Icon(
                 painterResource(R.drawable.ic_close),

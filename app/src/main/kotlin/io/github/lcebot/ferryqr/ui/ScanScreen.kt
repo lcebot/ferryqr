@@ -71,6 +71,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -138,7 +139,7 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
     LaunchedEffect(vm) {
         vm.routes.collect { effect ->
             if (!vm.isCurrent(effect)) return@collect
-            if (Dispatcher.autoLaunch(activity, effect.payload, effect.origin, effect.plan)) activity.finish() else vm.show(effect)
+            if (Dispatcher.autoLaunch(activity, effect.payload, effect.plan)) activity.finish() else vm.show(effect)
         }
     }
     // The sighting changes with nearly every frame while a code is in view; only the overlay that
@@ -170,8 +171,10 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
 
     Box(Modifier.fillMaxSize()) {
         // The controls are the scaffold's top and bottom bars, so the permission panel between them
-        // and the snackbar above them are placed knowing their size in the same pass.
+        // and the snackbar above them are placed knowing their size in the same pass. While the
+        // picker covers them, they leave the semantics tree, so a screen reader reads only the picker.
         Scaffold(
+            modifier = if (phase is Phase.Picking) Modifier.clearAndSetSemantics {} else Modifier,
             containerColor = Color.Black,
             snackbarHost = { SnackbarHost(snackbar) },
             topBar = {
@@ -287,6 +290,7 @@ fun ScanScreen(vm: ScanViewModel, onOpenHistory: () -> Unit, onOpenGenerator: ()
                                 onZoom = { zoom = it },
                                 onUnavailable = { vm.message(R.string.no_camera) },
                                 onSettled = vm::cameraSettled,
+                                onStopped = vm::cameraStopped,
                                 // A code being confirmed has its outcome, so tapping to focus ends with it.
                                 scanning = phase == Phase.Scanning && confirmation == null,
                                 contentPadding = padding,
@@ -401,7 +405,7 @@ private fun ControlLabel(text: String) {
     Text(
         text,
         style = style,
-        color = Color.White,
+        color = CameraOverlayStyle.onPicture,
         textAlign = TextAlign.Center,
         maxLines = 2,
         overflow = TextOverflow.Ellipsis,
@@ -484,8 +488,8 @@ private fun ZoomPill(zoom: () -> Float, modifier: Modifier = Modifier) {
 private fun PillSurface(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
     Surface(
         shape = MaterialTheme.shapes.extraLarge,
-        color = Color.Black.copy(alpha = 0.5f),
-        contentColor = Color.White,
+        color = CameraOverlayStyle.pill,
+        contentColor = CameraOverlayStyle.onPicture,
         modifier = modifier,
         content = content,
     )
@@ -528,11 +532,14 @@ private fun rememberCameraPermission(activity: Activity): CameraPermissionState 
         if (!refused.value && rationale()) refused.value = true
     }
     var refusedForGood by rememberSaveable { mutableStateOf(false) }
+    fun forgetRefusals() {
+        refused.value = false
+        refusedForGood = false
+    }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         granted = it
         asked = true
-        if (it) refused.value = false
-        refusedForGood = !it && !rationale() && refused.value
+        if (it) forgetRefusals() else refusedForGood = !rationale() && refused.value
         noteRefusal()
     }
     fun request() {
@@ -548,7 +555,7 @@ private fun rememberCameraPermission(activity: Activity): CameraPermissionState 
     // The user may grant the permission from system settings while the app is in the background.
     LifecycleResumeEffect(Unit) {
         granted = check()
-        if (granted) refused.value = false
+        if (granted) forgetRefusals()
         onPauseOrDispose { }
     }
     val permanentlyDenied = !granted && refusedForGood

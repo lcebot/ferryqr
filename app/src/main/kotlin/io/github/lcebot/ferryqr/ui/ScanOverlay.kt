@@ -48,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -73,7 +74,6 @@ import io.github.lcebot.ferryqr.scan.Sighting
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.filterNotNull
@@ -83,9 +83,6 @@ private val MARKER_PADDING = 14.dp
 private val MIN_MARKER = 72.dp
 private val BADGE_SIZE = 72.dp
 private val LOADING_SIZE = 48.dp
-
-/** Same size as the picker's markers, so a found code keeps its marker when the frame freezes. */
-private val FOUND_SIZE = 56.dp
 
 /** zxing-cpp often misses a code for a frame or two; the marker rides through such gaps. */
 private const val HIDE_DELAY_MS = 250L
@@ -141,9 +138,10 @@ fun ScanOverlay(
     val confirmationShown = confirmation.targetState != null || confirmation.currentState != null
 
     val rect = remember { SpringFollower(Animatable(Rect.Zero, Rect.VectorConverter)) }
+    val rectLoop = remember { FollowerLoop { listOf(rect) } }
     val moveSpec by rememberUpdatedState(MaterialTheme.motionScheme.fastSpatialSpec<Rect>())
     LaunchedEffect(rect) {
-        var last: Rect? = null
+        launch { rectLoop.run() }
         var wasHolding = false
         snapshotFlow {
             // While the confirmation shows, leaving included, the brackets stay on the code it confirmed.
@@ -160,18 +158,13 @@ fun ScanOverlay(
             wasHolding = nowHolding
             if (next != null) {
                 if (released) rect.unplace()
-                last = next
-                rect.moveTo(next, moveSpec)
+                rectLoop.moveTo(rect, next, moveSpec)
             } else {
                 // Through the frames that miss the code, the brackets carry on to where it was
-                // last seen. Once it has been gone for longer, the next code appears in place
-                // instead of sliding in from the last one.
-                coroutineScope {
-                    last?.let { launch { rect.moveTo(it, moveSpec) } }
-                    delay(2 * HIDE_DELAY_MS)
-                }
+                // last seen, as the loop keeps stepping them there. Once it has been gone for
+                // longer, the next code appears in place instead of sliding in from the last one.
+                delay(2 * HIDE_DELAY_MS)
                 rect.unplace()
-                last = null
             }
         }
     }
@@ -197,7 +190,7 @@ fun ScanOverlay(
         val pen = remember { BracketPen() }
         Canvas(Modifier.fillMaxSize().graphicsLayer { this.alpha = alpha }) {
             // The confirmation draws the brackets in its own colour while it shows.
-            if (!confirmationShown && rect.placed) drawBrackets(rect.value.value, Color.White, pen)
+            if (!confirmationShown && rect.placed) drawBrackets(rect.value.value, CameraOverlayStyle.onPicture, pen)
         }
 
         // It comes later than the brackets, only once looking closer has gone on for a moment, so a
@@ -279,9 +272,7 @@ private fun ConfirmedCode(
     onDone: () -> Unit,
     onRelease: () -> Unit,
 ) {
-    // A fixed colour keeps one light tone in both themes, which the camera image behind needs; the
-    // dim one sets the brackets apart from the badge they hold.
-    val toned = MaterialTheme.colorScheme.primaryFixedDim
+    val toned = CameraOverlayStyle.confirmedBrackets
     var arrived by remember { mutableStateOf(handedOn) }
     LaunchedEffect(Unit) { arrived = true }
     // Timed here rather than by the phase, so the badge has been seen at rest before it goes, and
@@ -293,7 +284,7 @@ private fun ConfirmedCode(
         release()
     }
     val color by animateColorAsState(
-        targetValue = if (arrived) toned else Color.White,
+        targetValue = if (arrived) toned else CameraOverlayStyle.onPicture,
         animationSpec = MaterialTheme.motionScheme.fastEffectsSpec(),
         label = "confirmed-color",
     )
@@ -315,7 +306,10 @@ private class Last<T>(var value: T)
 private class Placement(size: IntSize, private val padding: Float, private val minSide: Float) {
     private val width = size.width.toFloat()
     private val height = size.height.toFloat()
+    private val view = Size(width, height)
     val laidOut = size.width > 0 && size.height > 0
+
+    private fun crop(frameWidth: Int, frameHeight: Int) = CenterCrop(IntSize(frameWidth, frameHeight), view)
 
     fun brackets(confirmation: Confirmation): Rect? {
         if (!laidOut) return null
@@ -323,7 +317,7 @@ private class Placement(size: IntSize, private val padding: Float, private val m
         val code = if (b.isEmpty) {
             Rect(Offset(width / 2, height / 2), 0f)
         } else {
-            toView(confirmation.frameWidth, confirmation.frameHeight, b.left, b.top, b.right, b.bottom, width, height)
+            crop(confirmation.frameWidth, confirmation.frameHeight).toView(b.left, b.top, b.right, b.bottom)
         }
         return code.squarePadded(padding, minSide)
     }
@@ -331,19 +325,16 @@ private class Placement(size: IntSize, private val padding: Float, private val m
     fun brackets(sighting: Sighting): Rect? {
         if (!laidOut) return null
         val b = sighting.bounds
-        return toView(
-            sighting.frameWidth, sighting.frameHeight,
-            b.left.toFloat(), b.top.toFloat(), b.right.toFloat(), b.bottom.toFloat(),
-            width, height,
-        ).squarePadded(padding, minSide)
+        return crop(sighting.frameWidth, sighting.frameHeight)
+            .toView(b.left.toFloat(), b.top.toFloat(), b.right.toFloat(), b.bottom.toFloat())
+            .squarePadded(padding, minSide)
     }
 
     /** The center of the decoded code [text] of [sighting], or null while it has no place in the frame. */
     fun center(sighting: Sighting, text: String): Offset? {
         if (!laidOut) return null
         val code = sighting.found.firstOrNull { it.text == text && it.corners.isNotEmpty() } ?: return null
-        val c = code.center
-        return toView(sighting.frameWidth, sighting.frameHeight, c.x, c.y, c.x, c.y, width, height).center
+        return crop(sighting.frameWidth, sighting.frameHeight).toView(code.center.x, code.center.y)
     }
 
     /** Where on the view, as a fraction of it, the brackets of [confirmation] have their center. */
@@ -362,10 +353,12 @@ private fun FoundMarker(target: () -> Offset?, visible: Boolean) {
     val position = remember {
         SpringFollower(Animatable(Snapshot.withoutReadObservation { target() } ?: Offset.Zero, Offset.VectorConverter))
     }
+    val loop = remember { FollowerLoop { listOf(position) } }
     val moveSpec by rememberUpdatedState(MaterialTheme.motionScheme.fastSpatialSpec<Offset>())
     val goal by rememberUpdatedState(target)
     LaunchedEffect(position) {
-        snapshotFlow { goal() }.filterNotNull().collectLatest { position.follow(it, moveSpec) }
+        launch { loop.run() }
+        snapshotFlow { goal() }.filterNotNull().collect { loop.moveTo(position, it, moveSpec) }
     }
     // Starts hidden, so a marker composed for a code just appended pops in.
     val shown = remember { MutableTransitionState(false) }
@@ -375,22 +368,21 @@ private fun FoundMarker(target: () -> Offset?, visible: Boolean) {
         enter = scaleIn(MaterialTheme.motionScheme.fastSpatialSpec()),
         exit = fadeOut(MaterialTheme.motionScheme.fastEffectsSpec()) +
             scaleOut(MaterialTheme.motionScheme.fastSpatialSpec()),
-        modifier = Modifier.centeredOn(FOUND_SIZE) { position.value.value },
+        modifier = Modifier.centeredOn(CameraOverlayStyle.markerSize.width) { position.value.value },
     ) {
         val haptics = rememberHaptics()
         LaunchedEffect(Unit) { haptics.found() }
-        // A fixed colour keeps one light tone in both themes, which the camera image behind needs.
         Box(
             modifier = Modifier
-                .size(FOUND_SIZE)
+                .size(CameraOverlayStyle.markerSize)
                 .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryFixed),
+                .background(CameraOverlayStyle.accent),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
                 painterResource(R.drawable.ic_check),
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.onPrimaryFixed,
+                tint = CameraOverlayStyle.onAccent,
                 modifier = Modifier.size(28.dp),
             )
         }
@@ -406,13 +398,12 @@ private fun SuccessBadge(center: () -> Offset, fromMarker: Boolean, settled: Boo
     val haptics = rememberHaptics()
     val done by rememberUpdatedState(onDone)
     // A code that already wore a found marker grows from that marker instead of popping in again.
-    val pop = remember { Animatable(if (settled) 1f else if (fromMarker) FOUND_SIZE / BADGE_SIZE else 0f) }
+    val pop = remember { Animatable(if (settled) 1f else if (fromMarker) CameraOverlayStyle.markerSize.width / BADGE_SIZE else 0f) }
     val plays = remember { !settled }
     val popSpec = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
     val morph = remember { Morph(MaterialShapes.SoftBurst, MaterialShapes.Circle) }
-    // A fixed colour keeps one light tone in both themes, which the camera image behind needs.
-    val fill = MaterialTheme.colorScheme.primaryFixed
-    val tint = MaterialTheme.colorScheme.onPrimaryFixed
+    val fill = CameraOverlayStyle.accent
+    val tint = CameraOverlayStyle.onAccent
     val path = remember { android.graphics.Path() }
     val matrix = remember { android.graphics.Matrix() }
 
@@ -488,18 +479,6 @@ private fun Modifier.centeredOn(size: Dp, center: () -> Offset): Modifier = abso
     val c = center()
     val half = size.roundToPx() / 2
     IntOffset(c.x.roundToInt() - half, c.y.roundToInt() - half)
-}
-
-/** Maps upright frame pixels onto the preview, which shows the frame center-cropped. */
-private fun toView(
-    frameWidth: Int, frameHeight: Int,
-    left: Float, top: Float, right: Float, bottom: Float,
-    viewWidth: Float, viewHeight: Float,
-): Rect {
-    val scale = max(viewWidth / frameWidth, viewHeight / frameHeight)
-    val dx = (viewWidth - frameWidth * scale) / 2f
-    val dy = (viewHeight - frameHeight * scale) / 2f
-    return Rect(left * scale + dx, top * scale + dy, right * scale + dx, bottom * scale + dy)
 }
 
 private fun Rect.squarePadded(padding: Float, minSide: Float): Rect {

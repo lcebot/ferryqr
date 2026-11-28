@@ -1,4 +1,3 @@
-// No opt-in: ToggleButton and the connected button shapes are stable APIs.
 package io.github.lcebot.ferryqr.ui
 
 import android.content.Context
@@ -20,15 +19,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.ToggleButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,17 +36,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.disabled
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.repeatOnLifecycle
 import io.github.lcebot.ferryqr.AppSettings
 import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.dispatch.ActiveFerries
@@ -60,7 +47,6 @@ import io.github.lcebot.ferryqr.dispatch.DefaultApp
 import io.github.lcebot.ferryqr.dispatch.DefaultApps
 import io.github.lcebot.ferryqr.dispatch.FerryEnv
 import io.github.lcebot.ferryqr.dispatch.Handling
-import io.github.lcebot.ferryqr.dispatch.InstalledApps
 import io.github.lcebot.ferryqr.dispatch.Launch
 import io.github.lcebot.ferryqr.dispatch.Route
 import io.github.lcebot.ferryqr.dispatch.SystemFeature
@@ -70,7 +56,6 @@ import io.github.lcebot.ferryqr.openin.OpenInApps
 import io.github.lcebot.ferryqr.openin.OpenInModule
 import io.github.lcebot.ferryqr.openin.Strategy
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** How a code reaches an app's scanner, in the terms the settings use. */
@@ -118,20 +103,14 @@ fun FerrySettingsScreen(onBack: () -> Unit) {
     val features = remember(collator) { sorted(SystemFeatures.all) { it.name } }
     val defaults = remember(collator) { sorted(DefaultApps.all) { it.name } }
 
-    // Asked again each time the page comes back, since coming back from LSPosed, or from an app that
-    // restarted, the framework may say otherwise, and an app may be installed, removed or made the
-    // default in the system's settings meanwhile. Until the first answer of this process arrives,
-    // each row's status is blank and fades in; after that, the last answer stays until the next.
-    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    // Read again each time the page comes back, since an app may also have been made the default in
+    // the system's settings meanwhile. Until the first answer of this process arrives, each row's
+    // status is blank and fades in; after that, the last answer stays until the next.
     var facts by remember { mutableStateOf(lastFacts) }
-    LaunchedEffect(lifecycle) {
-        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            InstalledApps.invalidate()
-            launch { OpenInModule.refresh() }
-            val read = withContext(Dispatchers.IO) { readFacts(context) }
-            lastFacts = read
-            facts = read
-        }
+    RefreshAppFactsOnResume {
+        val read = withContext(Dispatchers.IO) { readFacts(context) }
+        lastFacts = read
+        facts = read
     }
 
     TabbedSettingsPage(
@@ -271,7 +250,6 @@ private fun AppRow(
 @Composable
 private fun AppSettingItem(app: AppSetting, installed: Boolean?, shape: Shape) {
     val context = LocalContext.current
-    val haptics = rememberHaptics()
     val name = stringResource(app.name)
     val state by OpenInModule.state(app.pkg).collectAsStateWithLifecycle()
     val cameraFeedSetting = remember(app.pkg) { AppSettings.of(context).cameraFeed(app.pkg) }
@@ -291,13 +269,15 @@ private fun AppSettingItem(app: AppSetting, installed: Boolean?, shape: Shape) {
         }
     }
     AppRow({ AppIcon(app.pkg, R.drawable.ic_apps, Modifier.size(24.dp)) }, name, status, working, shape) {
-        MethodButtons(
+        // An app with one method shows it chosen and the other unavailable, so every app reads the same way.
+        ConnectedChoice(
+            options = Method.entries,
             selected = method,
-            choosable = app.fixed == null,
-            onSelect = { chosen ->
-                haptics.toggle(chosen == Method.Camera)
-                cameraFeedSetting.value = chosen == Method.Camera
-            },
+            label = { it.label },
+            onSelect = { cameraFeedSetting.value = it == Method.Camera },
+            locked = app.fixed != null,
+            // The two methods are the two states of the camera feed setting, so the choice feels like one.
+            haptic = { toggle(it == Method.Camera) },
         )
         // Only an app limited to one method says why; the methods themselves are described above.
         if (app.reason != null) Note(app.reason)
@@ -391,40 +371,4 @@ private fun readFacts(context: Context): SystemFacts {
 @Composable
 private fun Note(@StringRes text: Int) {
     Text(stringResource(text), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-}
-
-/**
- * A connected button group of the methods. An app with one method shows it chosen and the other
- * unavailable, so every app reads the same way.
- */
-@Composable
-private fun MethodButtons(selected: Method, choosable: Boolean, onSelect: (Method) -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth().selectableGroup(),
-        horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
-    ) {
-        Method.entries.forEachIndexed { index, method ->
-            val checked = method == selected
-            ToggleButton(
-                checked = checked,
-                onCheckedChange = { if (it) onSelect(method) },
-                colors = settingToggleColors(),
-                enabled = choosable || checked,
-                shapes = if (index == 0) {
-                    ButtonGroupDefaults.connectedLeadingButtonShapes()
-                } else {
-                    ButtonGroupDefaults.connectedTrailingButtonShapes()
-                },
-                modifier = Modifier
-                    .weight(1f)
-                    .semantics {
-                        role = Role.RadioButton
-                        // The chosen method stays drawn as chosen, but cannot be changed.
-                        if (!choosable) disabled()
-                    },
-            ) {
-                Text(stringResource(method.label), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-        }
-    }
 }

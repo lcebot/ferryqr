@@ -103,8 +103,8 @@ private const val CELL_SAMPLES = 16
  * On a logical multi-camera the zoom ratio also drives the switch to the telephoto lens. A focus
  * the user taps comes first, for as long as [tapFocus] holds.
  *
- * [observe], [focusOn] and [watchScene] run on the analysis thread; the other methods run on the main
- * thread.
+ * [observe], [focusOn] and [watchScene] run on the analysis thread, and [releaseTapFocus] runs there,
+ * on the camera's thread and on the main thread; the other methods run on the main thread.
  */
 class AutoZoom {
 
@@ -157,6 +157,12 @@ class AutoZoom {
 
     @Volatile
     private var tappedAt = 0L
+
+    /**
+     * Held while a tap is made or let go, so a thread letting go of the tap it followed cannot
+     * cancel a fresh one made meanwhile.
+     */
+    private val tapLock = Any()
 
     /** When the focus on the tapped point finished, successful or not; 0 until then. */
     @Volatile
@@ -257,10 +263,12 @@ class AutoZoom {
         val cam = camera ?: return
         val now = SystemClock.elapsedRealtime()
         if (now - lastFocusAt < FOCUS_INTERVAL_MS) return
+        val at = tappedAt
         if (tapped.value) {
-            if (now - tappedAt < TAP_GUARD_MS) return
-            // The code waiting to be read takes the focus over from the tap.
-            tapped.value = false
+            if (now - at < TAP_GUARD_MS) return
+            // The code waiting to be read takes the focus over from the tap, unless a fresh tap has
+            // taken its place meanwhile.
+            if (!letGo(at, cancel = false)) return
         }
         lastFocusAt = now
         val u = region.exactCenterX() / frameWidth
@@ -300,22 +308,39 @@ class AutoZoom {
             .build()
         if (!cam.cameraInfo.isFocusMeteringSupported(action)) return false
         val at = SystemClock.elapsedRealtime()
-        tappedAt = at
-        focusDoneAt = 0L
-        settled = false
-        sceneAtTap = null
-        tapped.value = true
+        synchronized(tapLock) {
+            tappedAt = at
+            focusDoneAt = 0L
+            settled = false
+            sceneAtTap = null
+            tapped.value = true
+        }
         val result = cam.cameraControl.startFocusAndMetering(action)
         // A later tap starts its own wait, so only the latest focus counts.
         result.addListener({ if (tappedAt == at) focusDoneAt = SystemClock.elapsedRealtime() }) { it.run() }
         return true
     }
 
-    /** Lets go of a tapped focus, so the camera focuses by itself again. */
-    fun releaseTapFocus() {
-        if (!tapped.value) return
-        tapped.value = false
-        camera?.cameraControl?.cancelFocusAndMetering()
+    /**
+     * Lets go of the focus tapped at [at], by default the tap held now, so the camera focuses by
+     * itself again. What follows a tap on another thread passes the tap it followed, so a fresh tap
+     * made meanwhile stays.
+     */
+    fun releaseTapFocus(at: Long = tappedAt) {
+        letGo(at, cancel = true)
+    }
+
+    /**
+     * Lets go of the tap made at [at] unless a later one has taken its place, and with [cancel] the
+     * camera's focus on it too; returns whether it let go.
+     */
+    private fun letGo(at: Long, cancel: Boolean): Boolean {
+        synchronized(tapLock) {
+            if (!tapped.value || tappedAt != at) return false
+            tapped.value = false
+            if (cancel) camera?.cameraControl?.cancelFocusAndMetering()
+            return true
+        }
     }
 
     /**
@@ -325,13 +350,14 @@ class AutoZoom {
      * change, so only the view itself is watched.
      */
     private fun onCaptureResult(result: CaptureResult) {
+        val at = tappedAt
         if (!tapped.value || focusDoneAt == 0L) return
         if (!settled) {
             val exposure = result.get(CaptureResult.CONTROL_AE_STATE)
             if (exposure == null || exposure in SETTLED_EXPOSURE) settled = true
             return
         }
-        if (result.get(CaptureResult.CONTROL_AF_SCENE_CHANGE) == CaptureResult.CONTROL_AF_SCENE_CHANGE_DETECTED) releaseTapFocus()
+        if (result.get(CaptureResult.CONTROL_AF_SCENE_CHANGE) == CaptureResult.CONTROL_AF_SCENE_CHANGE_DETECTED) releaseTapFocus(at)
     }
 
     /**
@@ -341,9 +367,11 @@ class AutoZoom {
      * on what is no longer there.
      */
     fun watchScene(image: ImageProxy) {
+        val at = tappedAt
         if (!tapped.value) return
-        if (SystemClock.elapsedRealtime() - tappedAt >= TAP_HOLD_MS) {
-            tapped.value = false
+        if (SystemClock.elapsedRealtime() - at >= TAP_HOLD_MS) {
+            // The camera has let go of the focus by itself by now.
+            letGo(at, cancel = false)
             return
         }
         val scene = sceneOf(image)
@@ -351,7 +379,7 @@ class AutoZoom {
         if (before == null) {
             sceneAtTap = scene
         } else if (!sameScene(before, scene)) {
-            releaseTapFocus()
+            releaseTapFocus(at)
         }
     }
 

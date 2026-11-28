@@ -1,6 +1,7 @@
 package io.github.lcebot.ferryqr.generate
 
 import androidx.annotation.StringRes
+import com.google.zxing.oned.UPCEReader
 import io.github.lcebot.ferryqr.R
 
 /** Why a format cannot hold some text, for the create page and the format picker to explain. */
@@ -50,6 +51,9 @@ object CodeRules {
                 !digits(text) -> CodeProblem.DigitsOnly
                 text.length !in 7..8 -> CodeProblem.DigitCount(R.string.format_needs_7_8)
                 text[0] != '0' && text[0] != '1' -> CodeProblem.Rules
+                // The check digit is that of the UPC-A code a UPC-E code stands for.
+                text.length == 8 -> checkDigit(UPCEReader.convertUPCEtoUPCA(text.take(7)))
+                    .takeIf { it != text[7] }?.let { CodeProblem.CheckDigit(it) }
                 else -> null
             }
             CodeType.ITF -> when {

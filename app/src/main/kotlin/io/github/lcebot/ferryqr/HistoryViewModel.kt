@@ -76,9 +76,7 @@ class HistoryLists private constructor(
  * Entries deleted one after another, earliest first, which one undo brings back together; [id]
  * tells sessions apart.
  */
-data class UndoSession(val id: Long, val entries: List<HistoryEntry>) {
-    val texts: Set<String> = entries.mapTo(HashSet()) { it.text }
-}
+data class UndoSession(val id: Long, val entries: List<HistoryEntry>)
 
 /** The keys the open card and dialog are kept under, so both come back after the process is let go. */
 private const val SHOWING_KEY = "showing"

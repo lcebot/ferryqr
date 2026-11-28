@@ -19,11 +19,12 @@ import io.github.lcebot.ferryqr.content.SchemePayload
 import io.github.lcebot.ferryqr.content.TextPayload
 import io.github.lcebot.ferryqr.content.WebPayload
 import io.github.lcebot.ferryqr.content.WifiPayload
+import io.github.lcebot.ferryqr.content.sensitiveKind
 import io.github.lcebot.ferryqr.generate.CodeDrawing
 import io.github.lcebot.ferryqr.generate.MiniCodeArt
 import java.lang.ref.WeakReference
 
-/** Where a code came from, which decides whether an app's own camera can still see it. */
+/** Where content came from, which decides whether an app's own camera can still see its code. */
 enum class Origin {
     /** The live camera; the code is still in front of it. */
     CAMERA,
@@ -33,6 +34,9 @@ enum class Origin {
 
     /** A history entry; no code is left to scan. */
     HISTORY,
+
+    /** Text typed on the create page; there is no code to scan. */
+    TYPED,
 }
 
 enum class ActionResult {
@@ -49,12 +53,17 @@ enum class ActionResult {
     Unavailable,
 }
 
+/** An app an action can go to, called [name], which [run] hands the content to. */
+data class AppChoice(val pkg: String, val name: String, val run: (Activity) -> ActionResult)
+
 /**
  * [app] is the package the action hands off to; its own icon then replaces [icon]. [appName] is the
  * app's name formatted into [label], for the labels that name the app. [opens] marks an action that
  * opens the content elsewhere, as every app action does and the browser too, rather than acting on it.
  * [labeled] keeps the label on the button rather than showing only a round icon: every action that
- * opens the content keeps it, and so do actions that would look alike as icons.
+ * opens the content keeps it, and so do actions that would look alike as icons. [choices] are the
+ * apps the action may go to when several take it and none is the default; its button then offers
+ * them in a menu, and [run] is not used.
  */
 data class CardAction(
     @param:StringRes val label: Int,
@@ -63,6 +72,7 @@ data class CardAction(
     val appName: String? = null,
     val opens: Boolean = app != null,
     val labeled: Boolean = opens,
+    val choices: List<AppChoice> = emptyList(),
     val run: (Activity) -> ActionResult,
 )
 
@@ -88,6 +98,20 @@ data class ResultCard(
     val format: String = "",
     val exportable: Boolean = false,
     val sections: List<CardSection> = emptyList(),
+)
+
+/**
+ * What a card builder makes of content of its kind, which is all a card holds besides what the
+ * content itself gives every card: its text, its kind and the format it was read in. A null
+ * [headline] leads the card with the content's own name.
+ */
+internal data class CardBody(
+    val headline: String? = null,
+    val body: String? = null,
+    val notes: List<String> = emptyList(),
+    val actions: List<CardAction> = emptyList(),
+    val sections: List<CardSection> = emptyList(),
+    val image: Bitmap? = null,
 )
 
 /** Parts of a card for content with a structure of its own, such as a boarding pass. */
@@ -148,15 +172,22 @@ object Cards {
     fun miniProgram(env: FerryEnv, crop: Bitmap, origin: Origin): ResultCard {
         val context = env.context
         val wechat = ActiveFerries.WECHAT
-        val body = when {
-            wechat.isReady(env) -> R.string.mini_body_module
-            origin == Origin.CAMERA -> R.string.mini_body_scan
-            else -> R.string.mini_body_album
+        val reach = wechat.reach(env, origin)
+        val body = when (reach) {
+            Reach.Opens -> R.string.mini_body_module
+            Reach.Scanner -> R.string.mini_body_scan
+            Reach.Album, Reach.NeedsModule -> R.string.mini_body_album
+            // The body says where to scan the code once WeChat is there, which the note asks for.
+            Reach.NotInstalled -> if (origin == Origin.CAMERA) R.string.mini_body_scan else R.string.mini_body_album
         }
-        return plainMiniProgram(context, crop).copy(
-            body = context.getString(body),
-            notes = if (wechat.installed(env)) emptyList() else listOf(context.getString(R.string.mini_no_wechat)),
-            actions = listOfNotNull(targetAction(env, wechat, origin) { WeChat.openScanner(it, crop) }),
+        return located(
+            context,
+            crop,
+            CardBody(
+                body = context.getString(body),
+                notes = listOfNotNull(context.getString(R.string.mini_no_wechat).takeIf { reach == Reach.NotInstalled }),
+                actions = listOfNotNull(targetAction(env, wechat, origin) { WeChat.openScanner(it, crop) }),
+            ),
         )
     }
 
@@ -164,16 +195,11 @@ object Cards {
      * A mini program code located but not read, shown as [crop] under its headline and nothing more,
      * which asks nothing of the system. [miniProgram] adds to it, and a card that fails falls back to it.
      */
-    fun plainMiniProgram(context: Context, crop: Bitmap): ResultCard = ResultCard(
-        raw = "",
-        kind = MINI_PROGRAM_KIND.label,
-        icon = MINI_PROGRAM_KIND.icon,
-        headline = context.getString(R.string.mini_headline),
-        body = null,
-        notes = emptyList(),
-        actions = emptyList(),
-        image = crop,
-    )
+    fun plainMiniProgram(context: Context, crop: Bitmap): ResultCard = located(context, crop, CardBody())
+
+    /** The card of a mini program code located but not read, shown as [crop], which has no content of its own. */
+    private fun located(context: Context, crop: Bitmap, body: CardBody): ResultCard =
+        body.copy(image = crop).toCard("", MINI_PROGRAM_KIND, context.getString(R.string.mini_headline))
 
     /**
      * A scan's way to WeChat and its card share one drawing of a 720 pixel square, and so do the
@@ -199,36 +225,56 @@ object Cards {
      * which dates what a code leaves undated.
      */
     fun build(env: FerryEnv, content: ReadContent, origin: Origin, scannedAt: Long = System.currentTimeMillis()): ResultCard {
-        val headline = content.names(env.context, null).headline
-        return card(env, content.payload, headline, content.format, origin, scannedAt).copy(format = content.format)
+        val names = content.names(env.context, null)
+        return body(env, content.payload, names, content.format, origin, scannedAt)
+            .toCard(content.payload.raw, content.kind, names.headline, content.format)
     }
 
     /**
      * The card for [raw] read in [format] taken as plain text, whatever it holds. It names nothing,
      * so it is what is left when making anything more of the content fails.
      */
-    fun plainText(context: Context, raw: String, format: String): ResultCard =
-        text(context, TextPayload(raw), raw, format).copy(format = format)
+    fun plainText(context: Context, raw: String, format: String): ResultCard {
+        val payload = TextPayload(raw)
+        return text(context, payload, format).toCard(raw, kindOf(payload), raw, format)
+    }
 
-    private fun card(
+    /**
+     * The card this body makes of content [raw] of [kind], read in [format], led by [headline] unless
+     * the body leads with a headline of its own. Every card is put together here.
+     */
+    private fun CardBody.toCard(raw: String, kind: Kind, headline: String, format: String = ""): ResultCard = ResultCard(
+        raw = raw,
+        kind = kind.label,
+        icon = kind.icon,
+        headline = this.headline ?: headline,
+        body = body,
+        notes = notes,
+        actions = actions,
+        image = image,
+        format = format,
+        sections = sections,
+    )
+
+    private fun body(
         env: FerryEnv,
         payload: Payload,
-        headline: String,
+        names: ContentNames,
         format: String,
         origin: Origin,
         scannedAt: Long,
-    ): ResultCard = when (payload) {
-        is WebPayload -> web(env, payload, headline, origin)
-        is SchemePayload -> scheme(env, payload, headline, origin)
-        is FidoPayload -> passkey(env.context, payload, headline, origin, scannedAt)
+    ): CardBody = when (payload) {
+        is WebPayload -> web(env, payload, origin)
+        is SchemePayload -> scheme(env, payload, names, origin)
+        is FidoPayload -> passkey(env, payload, origin, scannedAt)
         is BoardingPassPayload -> boardingPass(env.context, payload, scannedAt)
         is OtpPayload -> otp(env, payload, origin)
-        is EsimPayload -> esim(env.context, payload, headline, origin)
-        is DppPayload -> dpp(env.context, payload, headline, origin)
-        is WifiPayload -> wifi(env.context, payload, headline)
-        is ContactPayload -> contact(payload, headline)
-        is EventPayload -> event(env.context, payload, headline)
-        is TextPayload -> text(env.context, payload, headline, format)
+        is EsimPayload -> esim(env, payload, names, origin)
+        is DppPayload -> dpp(env.context, payload, origin)
+        is WifiPayload -> wifi(env.context, payload)
+        is ContactPayload -> contact(payload, names)
+        is EventPayload -> event(env.context, payload, names)
+        is TextPayload -> text(env.context, payload, format)
         is MiniProgramPayload -> miniProgramCode(env, payload, origin)
     }
 
@@ -237,7 +283,7 @@ object Cards {
      * shows the code drawn again from it. With the module, WeChat opens the mini program from what
      * was read, as after a scan of its own; without it, the user scans the code again in WeChat.
      */
-    private fun miniProgramCode(env: FerryEnv, payload: MiniProgramPayload, origin: Origin): ResultCard {
+    private fun miniProgramCode(env: FerryEnv, payload: MiniProgramPayload, origin: Origin): CardBody {
         val context = env.context
         val image = miniCodeDrawing(payload.raw)
         val wechat = ActiveFerries.WECHAT
@@ -245,34 +291,34 @@ object Cards {
             if (image != null) {
                 targetAction(env, wechat, origin) { WeChat.openMiniProgram(it, payload.raw, image) }?.let { add(it) }
             }
-            add(copy(payload.raw))
+            add(copyAction(payload.raw, payload.sensitiveKind != null))
         }
-        return ResultCard(
-            raw = payload.raw,
-            kind = MINI_PROGRAM_KIND.label,
-            icon = MINI_PROGRAM_KIND.icon,
+        val note = if (wechat.reach(env, origin) == Reach.NotInstalled) {
+            context.getString(R.string.mini_no_wechat)
+        } else {
+            targetNote(env, wechat, origin)
+        }
+        return CardBody(
             headline = context.getString(R.string.mini_read_headline),
             body = context.getString(R.string.mini_read_body),
-            notes = if (wechat.installed(env)) listOfNotNull(targetNote(env, wechat, origin))
-            else listOf(context.getString(R.string.mini_no_wechat)),
+            notes = listOfNotNull(note),
             actions = actions,
             image = image,
         )
     }
 
     /**
-     * The action that hands content to [target], which [open] does. Ready, the app opens the content
-     * wherever it came from. An app waiting for the module only opens its scanner, which can still
-     * see a code in front of the camera, or pick an image from its album if it has one; a history
-     * entry then gets no action.
+     * The action that hands content to [target], which [open] does, named for how the app takes it.
+     * An app that opens the content does so wherever it came from. An app waiting for the module only
+     * opens its scanner, which can still see a code in front of the camera, or pick an image from its
+     * album if it has one; otherwise there is no action.
      */
     internal fun targetAction(env: FerryEnv, target: Ferry, origin: Origin, open: (Activity) -> Boolean): CardAction? {
-        if (!target.installed(env)) return null
-        val label = when {
-            target.isReady(env) -> R.string.open_in_app
-            origin == Origin.CAMERA -> R.string.scan_again_in_app
-            origin == Origin.IMAGE && target.album -> R.string.open_app_scanner
-            else -> return null
+        val label = when (target.reach(env, origin)) {
+            Reach.Opens -> R.string.open_in_app
+            Reach.Scanner -> R.string.scan_again_in_app
+            Reach.Album -> R.string.open_app_scanner
+            Reach.NeedsModule, Reach.NotInstalled -> return null
         }
         return CardAction(label, R.drawable.ic_open_in_new, target.pkg, target.label(env.context)) {
             if (open(it)) ActionResult.Handoff else ActionResult.Unavailable
@@ -295,24 +341,48 @@ object Cards {
 
     /** What the user has to do in an app waiting for the module, beyond what its action says. */
     internal fun targetNote(env: FerryEnv, target: Ferry, origin: Origin): String? {
-        if (target.isReady(env) || !target.installed(env)) return null
         val context = env.context
-        val name = target.label(context)
-        return when {
-            origin == Origin.CAMERA -> null
-            origin == Origin.IMAGE && target.album -> context.getString(R.string.pick_from_album_in_app, name)
-            else -> context.getString(R.string.needs_module_in_app, name)
+        return when (target.reach(env, origin)) {
+            Reach.Album -> context.getString(R.string.pick_from_album_in_app, target.label(context))
+            Reach.NeedsModule -> context.getString(R.string.needs_module_in_app, target.label(context))
+            Reach.Opens, Reach.Scanner, Reach.NotInstalled -> null
         }
     }
 
-    private fun text(context: Context, payload: TextPayload, headline: String, format: String): ResultCard {
+    /**
+     * The action that hands content to one of [apps], those that take it for one purpose, as
+     * [FerryEnv.apps] finds them: straight to the only one, and through a menu at its button when
+     * there are several, so content such as an activation code never goes to an app unasked. With
+     * none, nothing handles it. [result] is what opening an app means for the card.
+     */
+    internal fun appsAction(
+        @StringRes label: Int,
+        @DrawableRes icon: Int,
+        apps: List<AppCandidate>,
+        result: ActionResult,
+        opens: Boolean = false,
+    ): CardAction {
+        fun launch(app: AppCandidate): (Activity) -> ActionResult = { activity ->
+            if (Launch.start(activity, app.intent)) result else ActionResult.Unavailable
+        }
+        val only = apps.singleOrNull()
+        val none: (Activity) -> ActionResult = { ActionResult.Unavailable }
+        return CardAction(
+            label,
+            icon,
+            opens = opens,
+            choices = if (apps.size > 1) apps.map { AppChoice(it.pkg, it.name, launch(it)) } else emptyList(),
+            run = if (only != null) launch(only) else none,
+        )
+    }
+
+    private fun text(context: Context, payload: TextPayload, format: String): CardBody {
         val formatNote = if (format.contains("QR")) null
         else context.getString(R.string.format_label, format.replace('_', '-'))
-        return ResultCard(
-            payload.raw, R.string.kind_text, R.drawable.ic_notes, headline, formatNote,
-            emptyList(),
-            listOf(
-                copy(payload.raw),
+        return CardBody(
+            body = formatNote,
+            actions = listOf(
+                copyAction(payload.raw, payload.sensitiveKind != null),
                 CardAction(R.string.search, R.drawable.ic_search) {
                     if (Launch.search(it, payload.raw)) ActionResult.Handoff else ActionResult.Unavailable
                 },
@@ -321,8 +391,19 @@ object Cards {
         )
     }
 
-    internal fun copy(text: String) = CardAction(R.string.copy, R.drawable.ic_content_copy) {
-        Launch.copy(it, text)
+    /**
+     * Copies [text]. A [sensitive] one, as is any part of content that has a sensitive kind unless
+     * its caller knows better, is marked so and kept out of the clip's label, as [Launch.copy] does,
+     * so clipboard previews and histories leave it out.
+     */
+    internal fun copyAction(
+        text: String,
+        sensitive: Boolean,
+        @StringRes label: Int = R.string.copy,
+        @DrawableRes icon: Int = R.drawable.ic_content_copy,
+        labeled: Boolean = false,
+    ) = CardAction(label, icon, labeled = labeled) {
+        Launch.copy(it, text, sensitive)
         ActionResult.Copied
     }
 

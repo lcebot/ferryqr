@@ -303,6 +303,7 @@
     <string name="generate_placeholder">输入或粘贴文字</string>
     <string name="generate_clear">清除文字</string>
     <string name="generate_empty">输入内容后显示生成的二维码</string>
+    <string name="generate_empty_unfit">无法使用所选码制</string>
     <string name="code_copy">复制图片</string>
     <string name="code_save">保存到相册</string>
     <string name="code_copied">已复制图片</string>

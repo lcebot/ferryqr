@@ -6,13 +6,11 @@ import androidx.compose.animation.core.VectorConverter
 import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
-import io.github.lcebot.ferryqr.history.HistoryEntry
 import java.util.WeakHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -50,12 +48,6 @@ internal class TileBoard(
 ) : FavoritesReorder, FavoriteOrderKeeper by keeper {
     /** The favorites' contents in the order the tiles show them while one is in hand. */
     val order = FavoriteOrder()
-
-    /** Every favorite shown and not yet faded out, so one that leaves can fade where it was. */
-    val retained = mutableStateMapOf<String, HistoryEntry>()
-
-    /** Where each tile was last placed, where one that leaves fades out. */
-    val lastRects = HashMap<String, Rect>()
 
     /** The tile in hand, or settling into its place once let go. */
     var key by mutableStateOf<String?>(null)
@@ -137,6 +129,8 @@ internal class TileBoard(
      */
     fun relation(pull: Pull, tile: String, arrangement: TileArrangement): Relation? {
         if (pull.group != TILES_GROUP) return null
+        // What the swipe shows behind the pulled tile leans with the tiles beside it, so they do not
+        // slide in under it.
         if (pull.key == tile) return Relation(0f, 0f, 1f, Corners.ALL, Corners.ALL, backdrop = NEAR_TILE_SHARE)
         val worked = neighbours[pull]?.takeIf { (among, rows, _) -> among === arrangement && rows == rowsShown }
             ?: Triple(arrangement, rowsShown, tileNeighbours(pull.key as? String ?: return null, arrangement, rowsShown))
@@ -144,12 +138,16 @@ internal class TileBoard(
         return worked.third[tile]
     }
 
-    /** Picks up the tile [tile], held at [grab] from its start and top edges. */
-    fun pickUp(tile: String, grab: Offset) {
+    /**
+     * Picks up the tile [tile], held at [grab] from its start and top edges, or says it is refused:
+     * while a tile is lifted, a second finger on another takes nothing over.
+     */
+    fun pickUp(tile: String, grab: Offset): Boolean {
+        if (lifted) return false
+        val arrangement = arrange()
+        val spot = arrangement.byKey[tile] ?: return false
         settling?.cancel()
         settling = null
-        val arrangement = arrange()
-        val spot = arrangement.byKey[tile] ?: return
         order.reset(keys)
         key = tile
         val rect = arrangement.rectOf(spot, heights)
@@ -160,6 +158,7 @@ internal class TileBoard(
         lastOver = tile
         lifted = true
         moved = false
+        return true
     }
 
     /** Moves the tile in hand by [delta], from the start edge; past [slop] it is being dragged. */
@@ -236,11 +235,5 @@ internal class TileBoard(
             moved = false
             settling = null
         }
-    }
-
-    /** Lets go of everything kept for a tile that has faded out. */
-    fun forget(tile: String) {
-        retained.remove(tile)
-        lastRects.remove(tile)
     }
 }

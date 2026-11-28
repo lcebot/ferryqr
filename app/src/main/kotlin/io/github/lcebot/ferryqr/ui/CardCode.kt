@@ -23,6 +23,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -35,6 +36,7 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
@@ -59,8 +61,13 @@ private val CODE_HEIGHT = 160.dp
 /** The white margin [TiltedCode] keeps around the code, so the small card shows it at full width. */
 private val TILTED_FRAME = 16.dp
 
-/** Room the sheet needs besides an enlarged code: its handle above, and the hint and spacing below. */
-private val ENLARGE_RESERVE = 112.dp
+/**
+ * Room the sheet needs besides an enlarged code and its hint: above the code, the sheet's 48dp drag
+ * handle, the kind row as tall as its favorite toggle's 48dp touch target, and the 12dp gap under
+ * it; below, the 8dp gap before the hint and the sheet's 24dp padding at the bottom. The hint grows
+ * with the font and can wrap, so it is measured rather than counted here.
+ */
+private val ENLARGE_RESERVE = 48.dp + 48.dp + 12.dp + 8.dp + 24.dp
 
 /**
  * Where the code is on screen, read only when the full-window view opens, so following the sheet
@@ -117,6 +124,9 @@ internal fun CodeImage(
     var overlay by rememberSaveable { mutableStateOf(false) }
     var source by remember { mutableStateOf<Rect?>(null) }
     val place = remember { Place() }
+    // The height of the hint for the size the code is going to, so an enlarged code leaves room for
+    // the hint that tells how to shrink it.
+    var hintHeight by remember { mutableIntStateOf(0) }
     val windowHeight = with(density) { LocalWindowInfo.current.containerSize.height.toDp() }
     val bars = with(density) { (WindowInsets.systemBars.getTop(this) + WindowInsets.systemBars.getBottom(this)).toDp() }
     BoxWithConstraints(modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
@@ -124,7 +134,8 @@ internal fun CodeImage(
         val stretched = long && mode == LongCodeEnlarge.STRETCH
         val fullScreen = long && mode == LongCodeEnlarge.FULL_SCREEN
         val small = minOf(CODE_HEIGHT * maxOf(aspect, 1f), maxWidth)
-        val room = maxOf(windowHeight - bars - ENLARGE_RESERVE, small / aspect)
+        val hintRoom = with(density) { hintHeight.toDp() }
+        val room = maxOf(windowHeight - bars - ENLARGE_RESERVE - hintRoom, small / aspect)
         val bigWidth = if (long) maxWidth else minOf(maxWidth, room * aspect)
         val bigHeight = when {
             tilted -> room
@@ -230,10 +241,15 @@ internal fun CodeImage(
                     stringResource(hint),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    // Only the hint coming in is measured, not the one fading out.
+                    modifier = if (big == enlarged) Modifier.onSizeChanged { hintHeight = it.height } else Modifier,
                 )
             }
         }
     }
+    // An enlarged code is there to be scanned from another device, so like the full-window one it
+    // keeps the screen on, and bright where the settings ask for it.
+    if (enlarged) KeepScreenOn()
     if (brighten && enlarged) FullBrightness()
     if (overlay) CodeOverlay(bitmap, brighten, source, onDismiss = { overlay = false }, drawing = drawing)
 }

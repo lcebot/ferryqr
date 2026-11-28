@@ -28,10 +28,11 @@ enum class CloseReason { HANDOFF, DISMISSED }
  * sheet keeps its content clear of the navigation bar, and the host with it, and the host shows one
  * message at a time, each in place of the last.
  *
- * [content] is given what runs one of the card's actions, what shows a message in the sheet and
- * what closes it. Every sheet with a card follows an action the same way: a haptic for how it went,
- * and a message where the system gives none. Once another app took over, or when closed from its
- * content, the sheet closes as a [SheetCloser] closes it, and [onClosed] follows with why it closed.
+ * [content] is given what runs one of the card's actions, once until the card is back in front,
+ * what shows a message in the sheet and what closes it. Every sheet with a card follows an action
+ * the same way: a haptic for how it went, and a message where the system gives none. Once another
+ * app took over, or when closed from its content, the sheet closes as a [SheetCloser] closes it, and
+ * [onClosed] follows with why it closed.
  */
 @Composable
 internal fun CardSheet(
@@ -47,8 +48,17 @@ internal fun CardSheet(
         { message -> scope.launch { snackbar.showLatest(context.getString(message)) } }
     }
     val onResult = rememberActionResultHandler({ closer.close(CloseReason.HANDOFF) }, onMessage)
-    val onAction: (CardAction) -> Unit = remember(activity, onResult) {
-        { action -> onResult(action.run(activity)) }
+    // A second tap before the page an action opened covers the card runs nothing, so no page opens
+    // twice. Copying, or an action nothing takes, leaves the card in front, so those can run again at once.
+    val once = rememberOpenOnce()
+    val onAction: (CardAction) -> Unit = remember(activity, onResult, once) {
+        { action ->
+            once {
+                val result = action.run(activity)
+                if (result == ActionResult.Copied || result == ActionResult.Unavailable) once.resumed()
+                onResult(result)
+            }
+        }
     }
     ModalSheet(closer, dismissal = CloseReason.DISMISSED) {
         Box(Modifier.fillMaxWidth()) {

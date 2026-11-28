@@ -145,14 +145,16 @@ class HistoryStore private constructor(private val context: Context) {
             // Shortcuts outlive the process, so they are brought in line with the file once it is read.
             syncShortcuts(_entries.value.orEmpty())
             for (request in saves) {
-                val snapshot = _entries.value ?: continue
+                // The flag is taken together with the entries it was raised for, so a favorites change
+                // made while this pass writes keeps its flag for the next pass, which saves its entries.
+                val (snapshot, stale) = synchronized(lock) { _entries.value to shortcutsStale.also { shortcutsStale = false } }
+                if (snapshot == null) continue
                 // One failed write leaves the next to try again, rather than ending saving for good.
                 try {
                     save(snapshot)
                 } catch (e: Exception) {
                     // The entries stay in memory, and the next change writes them all again.
                 }
-                val stale = synchronized(lock) { shortcutsStale.also { shortcutsStale = false } }
                 if (stale) syncShortcuts(snapshot)
             }
         }

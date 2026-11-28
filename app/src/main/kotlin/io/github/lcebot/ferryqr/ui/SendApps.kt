@@ -46,6 +46,7 @@ import androidx.compose.ui.window.PopupProperties
 import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.dispatch.Ferry
 import io.github.lcebot.ferryqr.dispatch.PassiveFerry
+import io.github.lcebot.ferryqr.dispatch.Reach
 
 /**
  * The toolbar's fixed parts, from the floating toolbar's own tokens: its padding, one icon button,
@@ -59,7 +60,10 @@ private val TOOLBAR_FAB = TOOLBAR_TO_FAB_GAP + SHARE_FAB_SIZE
 /** Copy, save and favorite, which always stay in the toolbar. */
 private const val CODE_ACTIONS = 3
 
-/** An app the text can be opened in. [looksEnabled] false draws it disabled while it still explains itself. */
+/**
+ * An app content can be opened in, called [label], with the icon of the package [app]. [looksEnabled]
+ * false draws it disabled while it still explains itself.
+ */
 internal class SendApp(
     val label: String,
     val app: String,
@@ -68,10 +72,11 @@ internal class SendApp(
 )
 
 /**
- * An app with what it is called. Naming an app the system finds asks the package manager, so the
- * name is looked up off the main thread together with the app and travels with it from there.
+ * An app with what it is called and how it takes the content. Naming an app the system finds and
+ * telling whether it is installed ask the package manager, so both are looked up off the main thread
+ * together with the app and travel with it from there.
  */
-internal data class NamedFerry<out F : Ferry>(val ferry: F, val name: String)
+internal data class NamedFerry<out F : Ferry>(val ferry: F, val name: String, val reach: Reach)
 
 /**
  * The apps shown in the toolbar, and those folded behind its overflow button. [passive] is the app
@@ -146,31 +151,41 @@ internal fun SendMenu(apps: List<SendApp>, enabled: Boolean) {
             }
         }
         // The menu leaves focus with the text field, so the keyboard stays and the page keeps still.
-        DropdownMenuPopup(
-            expanded = open,
-            onDismissRequest = { open = false },
-            properties = PopupProperties(focusable = false),
-        ) {
-            DropdownMenuGroup(shapes = MenuDefaults.groupShape(0, 1)) {
-                apps.forEachIndexed { index, app ->
-                    val dim = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                    DropdownMenuItem(
-                        onClick = {
-                            open = false
-                            app.onClick()
-                        },
-                        text = { Text(app.label) },
-                        shape = MenuDefaults.itemShape(index, apps.size).shape,
-                        leadingIcon = {
-                            AppIcon(
-                                app.app,
-                                R.drawable.ic_open_in_new,
-                                Modifier.size(MenuDefaults.LeadingIconSize).alpha(if (app.looksEnabled) 1f else 0.38f),
-                            )
-                        },
-                        colors = if (app.looksEnabled) MenuDefaults.itemColors() else MenuDefaults.itemColors(textColor = dim),
-                    )
-                }
+        AppMenu(expanded = open, onDismiss = { open = false }, apps = apps, focusable = false)
+    }
+}
+
+/**
+ * A menu of [apps], each by its icon and name, at the element it is placed beside, which closes as
+ * one is picked. A [focusable] menu takes focus, so back closes it; one that is not leaves focus where
+ * it is, such as with a text field whose keyboard is to stay.
+ */
+@Composable
+internal fun AppMenu(expanded: Boolean, onDismiss: () -> Unit, apps: List<SendApp>, focusable: Boolean) {
+    DropdownMenuPopup(
+        expanded = expanded,
+        onDismissRequest = onDismiss,
+        properties = PopupProperties(focusable = focusable),
+    ) {
+        DropdownMenuGroup(shapes = MenuDefaults.groupShape(0, 1)) {
+            apps.forEachIndexed { index, app ->
+                val dim = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                DropdownMenuItem(
+                    onClick = {
+                        onDismiss()
+                        app.onClick()
+                    },
+                    text = { Text(app.label) },
+                    shape = MenuDefaults.itemShape(index, apps.size).shape,
+                    leadingIcon = {
+                        AppIcon(
+                            app.app,
+                            R.drawable.ic_open_in_new,
+                            Modifier.size(MenuDefaults.LeadingIconSize).alpha(if (app.looksEnabled) 1f else 0.38f),
+                        )
+                    },
+                    colors = if (app.looksEnabled) MenuDefaults.itemColors() else MenuDefaults.itemColors(textColor = dim),
+                )
             }
         }
     }

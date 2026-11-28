@@ -105,7 +105,8 @@ internal object Titles {
         val rest = payload.uri.substringAfter(':')
         val target = when (payload.scheme.lowercase()) {
             "mailto", "smsto", "sms", "tel" -> rest.substringBefore('?').substringBefore(':')
-            "geo" -> rest.substringAfter("q=", "").substringBefore('&').ifEmpty { rest.substringBefore('?') }
+            // The query is form-encoded, where a plus is a space, which Uri.decode leaves as it is.
+            "geo" -> rest.substringAfter("q=", "").substringBefore('&').replace('+', ' ').ifEmpty { rest.substringBefore('?') }
             else -> return null
         }
         return Uri.decode(target).trim().takeIf { it.isNotEmpty() }

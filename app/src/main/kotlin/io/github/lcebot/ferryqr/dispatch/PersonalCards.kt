@@ -7,6 +7,7 @@ import io.github.lcebot.ferryqr.content.BoardingPassParser
 import io.github.lcebot.ferryqr.content.BoardingPassPayload
 import io.github.lcebot.ferryqr.content.ContactPayload
 import io.github.lcebot.ferryqr.content.EventPayload
+import io.github.lcebot.ferryqr.content.sensitiveKind
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -17,7 +18,7 @@ import java.time.ZoneId
  * out and fields that read as nothing known are shown as printed. A pass gives its dates without
  * the year, which [scannedAt] settles.
  */
-internal fun Cards.boardingPass(context: Context, payload: BoardingPassPayload, scannedAt: Long): ResultCard {
+internal fun Cards.boardingPass(context: Context, payload: BoardingPassPayload, scannedAt: Long): CardBody {
     val pass = payload.pass
     val zone = ZoneId.systemDefault()
     val scanned = Instant.ofEpochMilli(scannedAt).atZone(zone).toLocalDate()
@@ -54,9 +55,10 @@ internal fun Cards.boardingPass(context: Context, payload: BoardingPassPayload, 
         context.getString(R.string.boarding_incomplete).takeUnless { pass.complete },
         context.getString(R.string.boarding_privacy),
     )
-    return ResultCard(
-        payload.raw, R.string.kind_boarding_pass, R.drawable.ic_flight, "", null, notes,
-        listOf(copy(payload.raw), share(payload.raw)),
+    return CardBody(
+        headline = "",
+        notes = notes,
+        actions = listOf(copyAction(payload.raw, payload.sensitiveKind != null), share(payload.raw)),
         sections = sections,
     )
 }
@@ -72,19 +74,18 @@ private fun flightDay(context: Context, dayOfYear: String, scanned: LocalDate, z
  * A contact, led by its name. One without a name, organisation, phone or email is led by the
  * first detail it has, which says more of it than the text of its code.
  */
-internal fun Cards.contact(payload: ContactPayload, headline: String): ResultCard {
+internal fun Cards.contact(payload: ContactPayload, names: ContentNames): CardBody {
     val c = payload.contact
     val details = (c.phones + c.emails + listOfNotNull(c.organization, c.title, c.address, c.url, c.note))
-    val shown = if (headline != payload.raw) headline else details.firstOrNull() ?: headline
-    return ResultCard(
-        payload.raw, R.string.kind_contact, R.drawable.ic_person_add, shown,
-        details.filter { it != shown }.joinToString("\n").ifEmpty { null },
-        emptyList(),
-        listOf(
+    val shown = if (names.carried.name != null) names.headline else details.firstOrNull() ?: names.headline
+    return CardBody(
+        headline = shown,
+        body = details.filter { it != shown }.joinToString("\n").ifEmpty { null },
+        actions = listOf(
             CardAction(R.string.add_contact, R.drawable.ic_person_add) {
                 if (Launch.addContact(it, c)) ActionResult.Handoff else ActionResult.Unavailable
             },
-            copy(payload.raw),
+            copyAction(payload.raw, payload.sensitiveKind != null),
         ),
     )
 }
@@ -93,24 +94,22 @@ internal fun Cards.contact(payload: ContactPayload, headline: String): ResultCar
  * An event, led by its title. One without a title is led by its time, which says more of it
  * than the text of its code.
  */
-internal fun Cards.event(context: Context, payload: EventPayload, headline: String): ResultCard {
+internal fun Cards.event(context: Context, payload: EventPayload, names: ContentNames): CardBody {
     val e = payload.event
-    val titled = headline != payload.raw
+    val titled = names.carried.name != null
     val time = e.begin?.let { begin ->
         val flags = if (e.allDay) DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_WEEKDAY
         else DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_TIME or DateUtils.FORMAT_SHOW_WEEKDAY
         DateUtils.formatDateRange(context, begin, e.end ?: begin, flags)
     }
-    return ResultCard(
-        payload.raw, R.string.kind_event, R.drawable.ic_event,
-        if (titled) headline else time ?: headline,
-        listOfNotNull(time.takeIf { titled }, e.location, e.description).joinToString("\n").ifEmpty { null },
-        emptyList(),
-        listOf(
+    return CardBody(
+        headline = if (titled) names.headline else time ?: names.headline,
+        body = listOfNotNull(time.takeIf { titled }, e.location, e.description).joinToString("\n").ifEmpty { null },
+        actions = listOf(
             CardAction(R.string.add_event, R.drawable.ic_event) {
                 if (Launch.addEvent(it, e)) ActionResult.Handoff else ActionResult.Unavailable
             },
-            copy(payload.raw),
+            copyAction(payload.raw, payload.sensitiveKind != null),
         ),
     )
 }

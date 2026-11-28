@@ -11,7 +11,9 @@ import com.google.zxing.common.BitMatrix
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import io.github.lcebot.ferryqr.R
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 /** How the format picker groups formats: 2D codes, retail product barcodes, and other barcodes. */
 enum class CodeFamily(@param:StringRes val label: Int) {
@@ -81,6 +83,17 @@ private const val LINEAR_ASPECT = 4
 private const val LINEAR_MIN_HEIGHT = 24
 private const val LINEAR_VERTICAL_MARGIN = 2
 
+/** Pixels a module takes at least in an exported code, so it still scans once a chat app recompresses it. */
+private const val EXPORT_MIN_MODULE = 4
+
+/**
+ * The most pixels an exported code takes, 20 MB as ARGB. The widest barcode zxing writes for the
+ * text a barcode holds at most, a Code 39 of 80 symbols, takes 4.7 million at [EXPORT_MIN_MODULE],
+ * and the largest 2D codes far fewer. A Code 128 that switches code sets on most of its characters
+ * can be wider still, and takes the largest scale that fits.
+ */
+private const val EXPORT_MAX_PIXELS = 5_000_000
+
 object CodeGenerator {
 
     /**
@@ -112,17 +125,29 @@ object CodeGenerator {
         return Generated.Unfit(problem ?: CodeRules.unencodable(type), alternatives)
     }
 
-    /** Integer upscaling keeps module edges sharp. */
+    /**
+     * [code], one pixel per module, scaled up by a whole factor, which keeps module edges sharp: to
+     * about [target] pixels on its longer side, and to at least [EXPORT_MIN_MODULE] pixels a module
+     * as far as [EXPORT_MAX_PIXELS] allows.
+     */
     fun forExport(code: Bitmap, target: Int = 1024): Bitmap {
-        val factor = max(1, target / max(code.width, code.height))
+        val wanted = max(EXPORT_MIN_MODULE, target / max(code.width, code.height))
+        val fits = sqrt(EXPORT_MAX_PIXELS / (code.width.toDouble() * code.height)).toInt()
+        val factor = max(1, min(wanted, fits))
         return Bitmap.createScaledBitmap(code, code.width * factor, code.height * factor, false)
     }
 
-    private fun encode(text: String, format: BarcodeFormat): BitMatrix? {
+    /** [text] as [format], one module a cell, or null when it does not fit. */
+    internal fun encode(text: String, format: BarcodeFormat): BitMatrix? {
         val hints = buildMap<EncodeHintType, Any> {
             put(EncodeHintType.MARGIN, 0)
             // Plain Latin-1 text stays without an ECI header, which older readers handle best.
-            if (!Charsets.ISO_8859_1.newEncoder().canEncode(text)) put(EncodeHintType.CHARACTER_SET, "UTF-8")
+            if (!Charsets.ISO_8859_1.newEncoder().canEncode(text)) {
+                put(EncodeHintType.CHARACTER_SET, "UTF-8")
+                // Only the compact encoder of Data Matrix reads the character set, which it writes as
+                // an ECI; the other refuses anything beyond Latin-1.
+                if (format == BarcodeFormat.DATA_MATRIX) put(EncodeHintType.DATA_MATRIX_COMPACT, true)
+            }
             if (format == BarcodeFormat.QR_CODE) put(EncodeHintType.ERROR_CORRECTION, ErrorCorrectionLevel.M)
         }
         return try {

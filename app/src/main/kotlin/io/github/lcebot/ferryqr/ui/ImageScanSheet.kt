@@ -312,12 +312,21 @@ private fun CodeTile(code: ImageCode, selected: Boolean, onClick: () -> Unit) {
         effects,
         label = "tile-container",
     )
+    // The border is always drawn and fades with the fill on the same spec, so the two parts of the
+    // tile change together. It fades through the primary colour made clear, so no other hue shows
+    // on the way.
+    val primary = MaterialTheme.colorScheme.primary
+    val borderColor by animateColorAsState(
+        if (selected) primary else primary.copy(alpha = 0f),
+        effects,
+        label = "tile-border",
+    )
     Surface(
         selected = selected,
         onClick = onClick,
         shape = MaterialTheme.shapes.largeIncreased,
         color = container,
-        border = if (selected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
+        border = BorderStroke(2.dp, borderColor),
         modifier = Modifier.width(TILE_WIDTH),
     ) {
         Column(

@@ -1,11 +1,21 @@
+@file:OptIn(ExperimentalMaterial3ExpressiveApi::class)
+
 package io.github.lcebot.ferryqr.ui
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationSpec
+import androidx.compose.animation.core.AnimationVector
 import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.core.TwoWayConverter
+import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animate
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyListItemInfo
 import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
@@ -13,9 +23,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.drawOutline
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -23,6 +41,7 @@ import io.github.lcebot.ferryqr.history.HistoryEntry
 import kotlin.math.min
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
 /**
@@ -102,6 +121,75 @@ internal fun interface FavoriteOrderKeeper {
 }
 
 /**
+ * Where a favorite in hand will land, marked as a reorderable list marks it: a zone under the
+ * favorite in hand, in its own colour and in the outline of a dragged list item. The list's rows
+ * and the tiles each mark it with one, so both mark it alike. How far it is in view is [alpha], and
+ * where it is drawn, in the coordinates of [T], follows the landing place through [follow].
+ */
+@Stable
+internal class DropZone<T, V : AnimationVector>(converter: TwoWayConverter<T, V>, initial: T) {
+    val alpha = Animatable(0f)
+
+    private val place = SpringFollower(Animatable(initial, converter))
+
+    private val loop = FollowerLoop { listOf(place) }
+
+    /** Where the zone is drawn, or null before it has been put anywhere. */
+    val drawnAt: T? get() = place.takeIf { it.placed }?.value?.value
+
+    /** Stops the zone where it is drawn, and says where that is. */
+    fun stop(): T {
+        place.stopAnimating()
+        return place.value.value
+    }
+
+    /**
+     * Moves the zone to each landing place [target] gives, on [move], until cancelled. Appearing, the
+     * zone starts in its place; still in view, it glides to the next one, as the items around it
+     * slide to theirs.
+     */
+    suspend fun follow(target: () -> T?, move: () -> AnimationSpec<T>) {
+        coroutineScope {
+            launch { loop.run() }
+            snapshotFlow(target).collect { to ->
+                if (to == null) return@collect
+                if (alpha.value == 0f) place.unplace()
+                loop.moveTo(place, to, move())
+            }
+        }
+    }
+}
+
+/**
+ * Shows [zone] while [shown], fading it on the effects spec, as only the look of the place changes,
+ * and moves it to each landing place [target] gives on the spatial spring items move on.
+ */
+@Composable
+internal fun <T> FollowDropZone(zone: DropZone<T, *>, shown: Boolean, target: () -> T?) {
+    val motion = MaterialTheme.motionScheme
+    val showSpec = motion.defaultEffectsSpec<Float>()
+    val move by rememberUpdatedState(motion.defaultSpatialSpec<T>())
+    val where by rememberUpdatedState(target)
+    LaunchedEffect(zone, shown) { zone.alpha.animateTo(if (shown) 1f else 0f, showSpec) }
+    LaunchedEffect(zone) { zone.follow({ where() }) { move } }
+}
+
+/** Draws [zone] behind the element's content, over the rect [at] gives in the element's own bounds, if any. */
+@Composable
+internal fun Modifier.dropZone(zone: DropZone<*, *>, at: DrawScope.() -> Rect?): Modifier {
+    val color = MaterialTheme.colorScheme.surfaceContainerLow
+    val shape = ListItemDefaults.shapes().draggedShape
+    return drawBehind {
+        val alpha = zone.alpha.value
+        if (alpha <= 0f) return@drawBehind
+        val rect = at() ?: return@drawBehind
+        translate(rect.left, rect.top) {
+            drawOutline(shape.createOutline(rect.size, layoutDirection, this), color, alpha)
+        }
+    }
+}
+
+/**
  * While a favorite of [reorder] is held near the top or bottom of the visible list, and favorites
  * reach past that edge, the list scrolls toward them. Only the list's content moves: the held row
  * or tile stays under the finger, taking each scroll off its drag, the top bar keeps its size since
@@ -159,10 +247,12 @@ internal fun ReorderAutoScroll(listState: LazyListState, reorder: FavoritesReord
 /**
  * The favorites reordered as rows of the list, each [rowKey] in the list, right below the list item
  * [headerKey], their title. While [active], the favorites follow [order], their contents in their
- * new order, which [keeper] keeps when done. The row being dragged is [dragging], drawn [dragOffset]
- * from its place, and while [settling], the one gliding into its place after the finger lifted. It
- * sets its dragged look down as the finger lifts and stays above its neighbours only until it lands,
- * so letting go answers at once.
+ * new order, which [keeper] keeps as each drag that moved a row ends, as the tiles keep theirs on
+ * each drop. The row being dragged is [dragging], drawn [dragOffset] from its place, and while
+ * [settling], the one gliding into its place after the finger lifted. It sets its dragged look down
+ * as the finger lifts and stays above its neighbours only until it lands, so letting go answers at
+ * once. Its slot, where it will land, shows the [zone] the tiles show for a tile in hand, once the
+ * row has [moved], and the zone fades as the row settles into it.
  */
 @Stable
 internal class ListReorderState(
@@ -183,6 +273,29 @@ internal class ListReorderState(
     var settling by mutableStateOf<Job?>(null)
         private set
 
+    /** Whether the row in hand has moved since it was picked up. */
+    var moved by mutableStateOf(false)
+        private set
+
+    /**
+     * Where the slot of the row in hand is, in a measure of its own that moves by the distance its
+     * slot moves each time the order changes, which the zone glides along.
+     */
+    var landing by mutableFloatStateOf(0f)
+        private set
+
+    /** Marks where the row in hand lands. */
+    val zone = DropZone(Float.VectorConverter, 0f)
+
+    /** The row whose slot the zone marks, kept while the zone fades after the row is set down. */
+    private var marked by mutableStateOf<String?>(null)
+
+    /** Whether the zone shows: once the row in hand has moved, until the finger lets it go. */
+    val zoneShown: Boolean get() = active && dragging != null && settling == null && moved
+
+    /** The order last kept, so a drag that moved nothing keeps nothing. */
+    private var kept: List<String> = emptyList()
+
     override val held: Any? get() = dragging.takeIf { active && settling == null }
 
     /**
@@ -192,6 +305,12 @@ internal class ListReorderState(
      */
     private var firstRow = -1
 
+    /** The row of the favorite [text] among [this], laid out in view, or null. */
+    private fun List<LazyListItemInfo>.rowOf(text: String): LazyListItemInfo? {
+        val key = rowKey(text)
+        return firstOrNull { it.key == key }
+    }
+
     /** Takes the place of the favorites from the title, where it is laid out in view. */
     private fun findFirstRow(rows: List<LazyListItemInfo>) {
         rows.firstOrNull { it.key == headerKey }?.let { firstRow = it.index + 1 }
@@ -200,15 +319,19 @@ internal class ListReorderState(
     /** Starts reordering [favorites] as they are. */
     fun start(favorites: List<HistoryEntry>) {
         order.reset(favorites.map { it.text })
+        kept = order.toList()
         firstRow = -1
         findFirstRow(listState.layoutInfo.visibleItemsInfo)
         active = true
     }
 
-    /** Ends reordering and keeps the order reached. */
+    /**
+     * Ends reordering, keeping the order reached. Every finished move is kept already; a drag whose
+     * gesture was cut off before it ended is kept here.
+     */
     fun finish() {
+        keep()
         active = false
-        commit(order.toList())
     }
 
     /**
@@ -220,22 +343,41 @@ internal class ListReorderState(
         order.sync(favorites.map { it.text })
     }
 
-    fun startDrag(text: String) {
+    /**
+     * Picks up [text], or says it is refused: while a row is held, a second finger on another row
+     * takes nothing over.
+     */
+    fun startDrag(text: String): Boolean {
+        if (dragging != null && settling == null && dragging != text) return false
         settling?.cancel()
         settling = null
         // Caught again on its way into place, the row goes on from where it is.
-        if (dragging != text) dragOffset = 0f
+        if (dragging != text) {
+            dragOffset = 0f
+            moved = false
+            // A new row's slot is measured from where the zone stands, so it does not glide over
+            // from the slot of the row before.
+            landing = zone.stop()
+            marked = text
+        }
         dragging = text
         haptics.step()
+        return true
     }
 
     fun drag(amount: Float) {
         dragOffset += amount
+        if (amount != 0f) moved = true
         follow()
     }
 
-    /** Glides the row from where the finger left it into its place on [spec], then sets it down. */
+    /**
+     * Keeps the order the drag moved the row into, at once, so leaving the page without Done loses
+     * nothing, then glides the row from where the finger left it into its place on [spec] and sets
+     * it down.
+     */
     fun endDrag(spec: FiniteAnimationSpec<Float>) {
+        keep()
         settling = scope.launch {
             animate(dragOffset, 0f, animationSpec = spec) { value, _ -> dragOffset = value }
             dragging = null
@@ -245,12 +387,20 @@ internal class ListReorderState(
 
     /**
      * Moves [text] to [to] in the order, for screen readers, which move a row at a time. Each move
-     * is kept at once, as a tile's is, so leaving without Done loses none of them.
+     * is kept at once, as a drag is once it ends.
      */
     fun move(text: String, to: Int) {
         if (!order.move(text, to)) return
         haptics.step()
-        commit(order.toList())
+        keep()
+    }
+
+    /** Keeps the order reached, unless it is kept already. */
+    private fun keep() {
+        val reached = order.toList()
+        if (reached == kept) return
+        kept = reached
+        commit(reached)
     }
 
     /**
@@ -260,15 +410,15 @@ internal class ListReorderState(
     private fun follow() {
         val text = dragging ?: return
         val rows = listState.layoutInfo.visibleItemsInfo
-        val row = rows.firstOrNull { it.key == rowKey(text) } ?: return
+        val row = rows.rowOf(text) ?: return
         val index = order.indexOf(text)
         findFirstRow(rows)
         // Until the list is laid out again after a move, its positions are the old ones, and would
         // move the row straight back.
         if (firstRow < 0 || row.index != firstRow + index) return
         val middle = row.offset + row.size / 2 + dragOffset
-        val next = order.getOrNull(index + 1)?.let { key -> rows.firstOrNull { it.key == rowKey(key) } }
-        val previous = order.getOrNull(index - 1)?.let { key -> rows.firstOrNull { it.key == rowKey(key) } }
+        val next = order.getOrNull(index + 1)?.let { rows.rowOf(it) }
+        val previous = order.getOrNull(index - 1)?.let { rows.rowOf(it) }
         // The list keeps its place by its first visible row; pinned here, a moved first row does not
         // drag the list along with it.
         fun pin() = listState.requestScrollToItem(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
@@ -276,28 +426,43 @@ internal class ListReorderState(
             next != null && middle > next.offset + next.size / 2 -> {
                 pin()
                 order.move(text, index + 1)
-                dragOffset -= (next.offset + next.size) - (row.offset + row.size)
+                val shift = (next.offset + next.size) - (row.offset + row.size)
+                dragOffset -= shift
+                landing += shift
                 haptics.step()
             }
             previous != null && middle < previous.offset + previous.size / 2 -> {
                 pin()
                 order.move(text, index - 1)
-                dragOffset += row.offset - previous.offset
+                val shift = row.offset - previous.offset
+                dragOffset += shift
+                landing -= shift
                 haptics.step()
             }
         }
     }
 
+    /**
+     * The top and bottom of the zone, from the top of the list, in the slot of the row it marks or
+     * gliding into it, or null while that row is not laid out.
+     */
+    fun zoneSpan(): ClosedFloatingPointRange<Float>? {
+        val info = listState.layoutInfo
+        val row = info.visibleItemsInfo.rowOf(marked ?: return null) ?: return null
+        val top = info.beforeContentPadding + row.offset + (zone.drawnAt?.let { it - landing } ?: 0f)
+        return top..top + row.size
+    }
+
     override fun reach(info: LazyListLayoutInfo, bottom: Float): HeldReach? {
         val text = dragging ?: return null
         val rows = info.visibleItemsInfo
-        val row = rows.firstOrNull { it.key == rowKey(text) } ?: return null
+        val row = rows.rowOf(text) ?: return null
         if (order.isEmpty()) return null
         val top = row.offset + dragOffset
         // The held row is a favorite in view, so the first one out of view lies above and the last
         // one below.
-        val first = rows.firstOrNull { it.key == rowKey(order.first()) }
-        val lastRow = rows.firstOrNull { it.key == rowKey(order.last()) }
+        val first = rows.rowOf(order.first())
+        val lastRow = rows.rowOf(order.last())
         return HeldReach(
             top = top,
             bottom = top + row.size,

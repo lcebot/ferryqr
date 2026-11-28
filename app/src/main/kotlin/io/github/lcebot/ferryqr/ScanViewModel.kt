@@ -85,7 +85,6 @@ data class Confirmation(
 class RouteEffect(
     val id: Long,
     val payload: Payload,
-    val origin: Origin,
     val plan: LaunchPlan,
     val source: CardSource,
 )
@@ -178,10 +177,19 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     init {
+        warmUp()
         viewModelScope.launch { OpenInModule.refresh() }
         viewModelScope.launch {
             for (report in reports) take(report)
         }
+    }
+
+    /**
+     * Loads the WeChat engine off the analysis thread, which reads frames with zxing-cpp alone until
+     * it is ready, so a code in view as the scanner opens is not held up by the loading.
+     */
+    private fun warmUp() {
+        viewModelScope.launch(Dispatchers.Default) { wechat.warmUp() }
     }
 
     /** Sent from the analysis thread; a report turned away once the scanner is gone lets go of its frame. */
@@ -195,12 +203,15 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * Every change of the phase or the confirmation, made on the main thread. The analyzer is paused
-     * or let read in the same step, so it reads no frame the scanner would not take.
+     * or let read in the same step, so it reads no frame the scanner would not take, and a scanner
+     * that stops reading lets go of the sighting, so its brackets and hint never stay over a decode,
+     * a result or a reset.
      */
     private fun move(phase: Phase = _phase.value, confirmation: Confirmation? = _confirmation.value) {
         _phase.value = phase
         _confirmation.value = confirmation
         analyzer.paused = !reading
+        if (!reading) _sighting.value = null
     }
 
     /**
@@ -301,12 +312,12 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
             val env = FerryEnv(app)
             val source = CardSource.Read(content, origin)
             val (plan, built) = withContext(Dispatchers.Default) {
-                Dispatcher.plan(env, content.payload) to CardFactory.build(env, source)
+                Dispatcher.plan(env, content.payload, origin) to CardFactory.build(env, source)
             }
             // The holder takes the card at once, though the sheet shows it only once the phase
             // turns, so the sheet has it from its first frame.
             if (id == lastRoute && _phase.value == Phase.Routing) cards.show(source, built, env)
-            _routes.send(RouteEffect(id, content.payload, origin, plan, source))
+            _routes.send(RouteEffect(id, content.payload, plan, source))
         }
     }
 
@@ -375,7 +386,7 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
     fun manualReset() {
         autoZoom.forceReset()
         wechat.retryIfFailed()
-        _sighting.value = null
+        warmUp()
         decoding?.cancel()
         forgetCards()
         awaitingCamera = true
@@ -394,6 +405,14 @@ class ScanViewModel(app: Application) : AndroidViewModel(app) {
         awaitingCamera = false
         analyzer.reset()
         move()
+    }
+
+    /**
+     * The camera has stopped, as when a page opens over the scanner, and the viewfinder is covered
+     * until it opens again. The sighting goes with the picture, so no brackets stay over the cover.
+     */
+    fun cameraStopped() {
+        _sighting.value = null
     }
 
     fun message(@StringRes text: Int) {

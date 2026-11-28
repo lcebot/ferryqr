@@ -95,7 +95,7 @@ internal object Xiaomi {
 
     fun signIn(activity: Activity, text: String): Boolean = Launch.start(
         activity,
-        Intent(Intent.ACTION_VIEW, Uri.parse(url(text))).setClassName(ACCOUNT, "com.xiaomi.account.ui.AccountWebActivity"),
+        Intent(Intent.ACTION_VIEW, Uri.parse(url(text)).normalizeScheme()).setClassName(ACCOUNT, "com.xiaomi.account.ui.AccountWebActivity"),
     )
 
     /** Mi Home reads the query parameters as extras; '+' and '/' must survive query decoding. */

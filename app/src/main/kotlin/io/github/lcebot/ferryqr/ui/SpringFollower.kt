@@ -9,6 +9,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
+import kotlinx.coroutines.channels.Channel
 
 /**
  * Frames further apart than this mean the following was paused in between, as while the page is
@@ -76,8 +77,13 @@ internal class FrameSteps {
  * would never leave its first frame, which only records when it began. Each step covers the time
  * [FrameSteps] gives it, so a follow moves the value on in its first frame as in every later one.
  *
+ * The follower keeps its target in a plain field: [aim] and the calls built on it only change where
+ * the value goes, and [step] moves it a frame toward that. Values that move together, as an entry's
+ * lean and corners, are stepped by one [FollowerLoop], so a target given on every move of a finger
+ * starts nothing; [follow] steps a value on its own until it arrives.
+ *
  * The value is an [Animatable], so an animation of its own, such as a fling, can take it over while
- * the follower is [held]. A follower that has no place yet is not [placed], and [moveTo] puts it in
+ * the follower is [held]. A follower that has no place yet is not [placed], and [place] puts it in
  * its first place at once and springs it from there to every later one.
  */
 internal class SpringFollower<T, V : AnimationVector>(val value: Animatable<T, V>) {
@@ -92,14 +98,17 @@ internal class SpringFollower<T, V : AnimationVector>(val value: Animatable<T, V
     private var velocity: V = rest
     private val frames = FrameSteps()
 
+    /** Where the value goes, which a spring carrying it reaches frame by frame. */
+    private var target: T = value.value
+
     /**
-     * While set, [follow] leaves the value alone, for another animation to move it: a step of a
-     * running spring would otherwise cancel that animation.
+     * While set, the follower leaves the value alone, for another animation to move it: a step of a
+     * running spring would otherwise cancel that animation. Targets given meanwhile are only kept.
      */
     var held = false
 
     /**
-     * Whether the value has been put in a place, by [snapTo] or [moveTo], since it was made or
+     * Whether the value has been put in a place, by [snapTo] or [place], since it was made or
      * [unplace] last took its place away. Read while laying out or drawing, it tells a value that
      * stands somewhere from one that only holds what it was made with.
      */
@@ -122,8 +131,13 @@ internal class SpringFollower<T, V : AnimationVector>(val value: Animatable<T, V
         }
     }
 
-    /** Targets after this are set directly. */
+    /** Targets after this are set directly, and the value stays where it is until the next one. */
     fun stopAnimating() {
+        endSpring()
+        target = value.value
+    }
+
+    private fun endSpring() {
         source = null
         spring = null
         velocity = rest
@@ -132,65 +146,121 @@ internal class SpringFollower<T, V : AnimationVector>(val value: Animatable<T, V
 
     /** Puts the value at [target] at once, at rest, with the targets after it set directly. */
     suspend fun snapTo(target: T) {
-        stopAnimating()
+        endSpring()
+        this.target = target
         value.snapTo(target)
         placed = true
     }
 
-    /** Takes the value's place away, so the next [moveTo] puts it in its place at once. */
+    /** Takes the value's place away, so the next [place] puts it in its place at once. */
     fun unplace() {
         stopAnimating()
         placed = false
     }
 
     /**
-     * Puts the value at [target] at once when it has no place yet, and else moves it there through
-     * [spec], as [follow] does.
+     * Sends the value to [target]: at once while nothing animates it, and else through the frames
+     * [step] steps, which the result says are needed.
      */
-    suspend fun moveTo(target: T, spec: AnimationSpec<T>) {
-        if (placed) follow(target, spec) else snapTo(target)
+    suspend fun aim(target: T): Boolean {
+        this.target = target
+        if (held) return false
+        if (spring == null) {
+            value.snapTo(target)
+            return false
+        }
+        return true
     }
 
     /**
-     * Moves to [target] directly while nothing animates the value, else frame by frame until it
-     * arrives, when the animation ends and later targets are set directly again.
+     * Sends the value to [target] through [spec] whether or not an animation already carries it, for
+     * a value that springs to every place it is given rather than following a finger directly.
      */
-    suspend fun follow(target: T) {
-        while (!held) {
-            if (spring == null) {
-                value.snapTo(target)
-                return
-            }
-            val now = withFrameNanos { it }
-            // Another animation may have taken the value over while the frame was awaited, or the
-            // spring stopped, which leaves the target to be set directly.
-            if (held) return
-            val running = spring ?: continue
-            val elapsed = frames.elapsed(now)
-            if (elapsed == 0L) continue
-            if (frames.resumed) velocity = rest
-            val from = converter.convertToVector(value.value)
-            val to = converter.convertToVector(target)
-            if (running.getDurationNanos(from, to, velocity) <= elapsed) {
-                stopAnimating()
-                value.snapTo(target)
-                return
-            }
-            val next = converter.convertFromVector(running.getValueFromNanos(elapsed, from, to, velocity))
-            // The spec hands back vectors it fills again on its next call, so the velocity is kept as a copy.
-            val speed = running.getVelocityFromNanos(elapsed, from, to, velocity)
-            velocity = converter.convertToVector(converter.convertFromVector(speed))
-            value.snapTo(next)
+    suspend fun aim(target: T, spec: AnimationSpec<T>): Boolean {
+        if (spring == null && value.value == target) {
+            this.target = target
+            return false
+        }
+        animateWith(spec)
+        return aim(target)
+    }
+
+    /** Puts the value at [target] at once when it has no place yet, and else sends it there through [spec]. */
+    suspend fun place(target: T, spec: AnimationSpec<T>): Boolean {
+        if (placed) return aim(target, spec)
+        snapTo(target)
+        return false
+    }
+
+    /**
+     * Moves the value on by the frame at [now] toward its target, on the spring that carries it, and
+     * says whether it is still on its way. Once it arrives the spring ends, and later targets are set
+     * directly again. A value held, or carried by no spring, is left where it is.
+     */
+    suspend fun step(now: Long): Boolean {
+        if (held) return false
+        val running = spring ?: return false
+        val elapsed = frames.elapsed(now)
+        if (elapsed == 0L) return true
+        if (frames.resumed) velocity = rest
+        val from = converter.convertToVector(value.value)
+        val to = converter.convertToVector(target)
+        if (running.getDurationNanos(from, to, velocity) <= elapsed) {
+            endSpring()
+            value.snapTo(target)
+            return false
+        }
+        val next = converter.convertFromVector(running.getValueFromNanos(elapsed, from, to, velocity))
+        // The spec hands back vectors it fills again on its next call, so the velocity is kept as a copy.
+        val speed = running.getVelocityFromNanos(elapsed, from, to, velocity)
+        velocity = converter.convertToVector(converter.convertFromVector(speed))
+        value.snapTo(next)
+        return true
+    }
+
+    /** Moves to [target] through [spec] as [aim] sends it there, frame by frame until it arrives. */
+    suspend fun follow(target: T, spec: AnimationSpec<T>) {
+        if (!aim(target, spec)) return
+        while (step(withFrameNanos { it })) {
+            // Each step has waited for its frame.
         }
     }
+}
+
+/**
+ * Steps the followers [followers] gives in one frame loop, [run], for values that move together.
+ * Sending one somewhere through the loop only changes where it goes, so a finger that moves on every
+ * input event starts nothing new. The loop asks for frames only while a follower is on its way, and
+ * otherwise waits for a target that needs them.
+ */
+internal class FollowerLoop(private val followers: () -> Iterable<SpringFollower<*, *>>) {
+    private val needed = Channel<Unit>(Channel.CONFLATED)
+
+    /** Sends [follower] to [target] as [SpringFollower.aim] does, for the loop to step it there. */
+    suspend fun <T> aim(follower: SpringFollower<T, *>, target: T) = wake(follower.aim(target))
 
     /**
-     * Moves to [target] through [spec] whether or not an animation already carries the value, for a
-     * value that springs to every place it is given rather than following a finger directly.
+     * Puts [follower] in its first place, or sends it to [target] through [spec], as
+     * [SpringFollower.place] does, for the loop to step it there.
      */
-    suspend fun follow(target: T, spec: AnimationSpec<T>) {
-        if (spring == null && value.value == target) return
-        animateWith(spec)
-        follow(target)
+    suspend fun <T> moveTo(follower: SpringFollower<T, *>, target: T, spec: AnimationSpec<T>) =
+        wake(follower.place(target, spec))
+
+    private fun wake(moving: Boolean) {
+        if (moving) needed.trySend(Unit)
+    }
+
+    /** Steps every follower once a frame while any of them is on its way, until cancelled. */
+    suspend fun run() {
+        while (true) {
+            needed.receive()
+            do {
+                val now = withFrameNanos { it }
+                var moving = false
+                for (follower in followers()) {
+                    if (follower.step(now)) moving = true
+                }
+            } while (moving)
+        }
     }
 }

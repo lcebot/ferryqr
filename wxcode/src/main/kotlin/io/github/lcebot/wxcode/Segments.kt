@@ -36,6 +36,8 @@ internal object Segments {
         while (count > 0) {
             val digits = minOf(count, 3)
             val value = reader.readOrNull(intArrayOf(0, 4, 7, 10)[digits]) ?: return null
+            // The bits hold more than the digits do, such as 1023 in the ten bits of three digits.
+            if (value >= intArrayOf(1, 10, 100, 1000)[digits]) return null
             out.append(value.toString().padStart(digits, '0'))
             count -= digits
         }

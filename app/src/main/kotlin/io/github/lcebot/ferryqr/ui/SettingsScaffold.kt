@@ -1,3 +1,4 @@
+// No opt-in: ToggleButton and the connected button shapes are stable APIs.
 package io.github.lcebot.ferryqr.ui
 
 import androidx.annotation.StringRes
@@ -7,16 +8,20 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.ButtonGroupDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
@@ -30,6 +35,7 @@ import androidx.compose.material3.SegmentedListItem
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
+import androidx.compose.material3.ToggleButton
 import androidx.compose.material3.ToggleButtonDefaults
 import androidx.compose.material3.TopAppBarColors
 import androidx.compose.material3.TopAppBarDefaults
@@ -45,6 +51,7 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.toggleableState
@@ -78,6 +85,9 @@ internal fun TabbedSettingsPage(
     val haptics = rememberHaptics()
     val pager = rememberPagerState { tabs.size }
     val scope = rememberCoroutineScope()
+    // A tapped tab moves the page on the theme's spring, and the indicator heads for the page the
+    // pager is going to, so both set off together rather than the indicator waiting for halfway.
+    val pageSpec = MaterialTheme.motionScheme.defaultSpatialSpec<Float>()
     // The top bar keeps one colour as it collapses, since the tabs under it, which do not change
     // theirs, would otherwise part from it; the tabs' own divider marks where the content begins.
     val surface = MaterialTheme.colorScheme.surface
@@ -86,13 +96,13 @@ internal fun TabbedSettingsPage(
         onBack,
         TopAppBarDefaults.topAppBarColors(containerColor = surface, scrolledContainerColor = surface),
         tabs = {
-            PrimaryTabRow(selectedTabIndex = pager.currentPage, containerColor = surface) {
+            PrimaryTabRow(selectedTabIndex = pager.targetPage, containerColor = surface) {
                 tabs.forEachIndexed { index, tab ->
                     Tab(
-                        selected = pager.currentPage == index,
+                        selected = pager.targetPage == index,
                         onClick = {
                             haptics.tap()
-                            scope.launch { pager.animateScrollToPage(index) }
+                            scope.launch { pager.animateScrollToPage(index, animationSpec = pageSpec) }
                         },
                         text = { Text(stringResource(tab), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     )
@@ -207,6 +217,56 @@ internal fun SwitchItem(
         },
     ) {
         Text(stringResource(title))
+    }
+}
+
+/**
+ * A connected button group choosing one of [options], each named by the string [label] gives it.
+ * A [locked] group keeps [selected] drawn as chosen and the other options unavailable, so a choice
+ * that cannot be changed reads the same way as one that can.
+ */
+@Composable
+internal fun <T> ConnectedChoice(
+    options: List<T>,
+    selected: T,
+    label: (T) -> Int,
+    onSelect: (T) -> Unit,
+    locked: Boolean = false,
+    haptic: Haptics.(T) -> Unit = { step() },
+) {
+    val haptics = rememberHaptics()
+    Row(
+        modifier = Modifier.fillMaxWidth().selectableGroup(),
+        horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween),
+    ) {
+        options.forEachIndexed { index, option ->
+            val checked = option == selected
+            ToggleButton(
+                checked = checked,
+                onCheckedChange = {
+                    if (it) {
+                        haptics.haptic(option)
+                        onSelect(option)
+                    }
+                },
+                colors = settingToggleColors(),
+                enabled = !locked || checked,
+                shapes = when (index) {
+                    0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
+                    options.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
+                    else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+                },
+                modifier = Modifier
+                    .weight(1f)
+                    .semantics {
+                        role = Role.RadioButton
+                        // The chosen option stays drawn as chosen, but cannot be changed.
+                        if (locked) disabled()
+                    },
+            ) {
+                Text(stringResource(label(option)), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
     }
 }
 

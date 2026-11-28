@@ -41,6 +41,36 @@ internal sealed interface Ferry {
     fun open(activity: Activity, text: String): Boolean
 }
 
+/**
+ * How an app takes content, given whether the module runs in it and where the content came from.
+ * Result cards name it on the app's action and in a note, a scan launches by it, and the create page
+ * draws the app's button by it.
+ */
+internal sealed interface Reach {
+    /** The app opens the content itself. */
+    data object Opens : Reach
+
+    /** Only the app's scanner opens, which can still see the code in front of the camera. */
+    data object Scanner : Reach
+
+    /** Only the app's scanner opens, whose album can pick the image the code is in. */
+    data object Album : Reach
+
+    /** No code is left for the app's scanner, so only the module takes the content there. */
+    data object NeedsModule : Reach
+
+    data object NotInstalled : Reach
+}
+
+/** How this app takes content from [origin], with the readiness [env] holds. */
+internal fun Ferry.reach(env: FerryEnv, origin: Origin): Reach = when {
+    !installed(env) -> Reach.NotInstalled
+    isReady(env) -> Reach.Opens
+    origin == Origin.CAMERA -> Reach.Scanner
+    origin == Origin.IMAGE && album -> Reach.Album
+    else -> Reach.NeedsModule
+}
+
 /** How an [ActiveFerry] reaches its app, which decides the tab the ferry page lists it under. */
 internal enum class Route {
     /** Through the LSPosed module, as [OpenInApps] describes for the app. */
@@ -143,7 +173,7 @@ internal object PassiveFerries {
             is OtpPayload -> Launch.linkIntent(payload.raw)
             else -> null
         } ?: return null
-        return Launch.handler(env.context, intent, env.browsers)?.let { PassiveFerry(it, intent) }
+        return Launch.handler(env.context, env.resolved(intent), env.browsers)?.let { PassiveFerry(it, intent) }
     }
 }
 

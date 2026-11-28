@@ -43,7 +43,6 @@ import java.util.concurrent.Executor
 import kotlin.math.floor
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
@@ -72,6 +71,8 @@ private val STILL_BLUR = 20.dp
  * part the page's bars cover, so the indicator a reset shows sits in the middle of what stays in view.
  * [onSettled] hears whenever the bound camera's picture shows and whenever the camera fails to show
  * one, so what waits for the camera a reset binds never waits on a camera that cannot run.
+ * [onUnavailable] hears of each failure once, and [onStopped] whenever the camera closes as the
+ * scanner stops, when the viewfinder is covered until the camera's picture shows again.
  */
 @Composable
 fun CameraPreview(
@@ -83,6 +84,7 @@ fun CameraPreview(
     onZoom: (Float) -> Unit,
     onUnavailable: () -> Unit,
     onSettled: () -> Unit,
+    onStopped: () -> Unit,
     scanning: Boolean,
     contentPadding: PaddingValues,
     modifier: Modifier = Modifier,
@@ -101,45 +103,47 @@ fun CameraPreview(
     val zoomChanged by rememberUpdatedState(onZoom)
     val unavailable by rememberUpdatedState(onUnavailable)
     val settled by rememberUpdatedState(onSettled)
+    val stopped by rememberUpdatedState(onStopped)
 
     LaunchedEffect(owner) {
-        if (!cameraSession.connect(context)) {
-            unavailable()
-            settled()
-            return@LaunchedEffect
-        }
         try {
-            var first = true
-            snapshotFlow { currentSession }.collectLatest {
-                if (!first) {
-                    veil.restart()
-                    val still = if (veil.holding) null else cameraSession.takeStill(transformer)
-                    cameraSession.retire()
-                    veil.freeze(still)
-                }
-                first = false
-                if (!cameraSession.bind(owner, { zoomChanged(it) }, { unavailable() })) {
-                    settled()
-                    veil.fail()
-                    return@collectLatest
-                }
-                coroutineScope {
-                    // A camera that binds can still fail to open. Until its picture shows, that ends
-                    // the reset as a failed binding does.
-                    val opening = launch {
-                        cameraSession.failed.first { it }
-                        settled()
-                        veil.fail()
-                    }
-                    cameraSession.pictures(owner).collectLatest { shown ->
-                        if (shown) {
-                            opening.cancel()
-                            settled()
-                            veil.reveal()
-                        } else {
-                            veil.close()
+            coroutineScope {
+                // Each status makes one call on the veil, and a new status takes over from what the
+                // last one still animates.
+                launch {
+                    cameraSession.status.collectLatest { status ->
+                        when (status) {
+                            CameraStatus.Connecting -> Unit
+                            CameraStatus.Live -> {
+                                settled()
+                                veil.reveal()
+                            }
+                            CameraStatus.Stopped -> {
+                                stopped()
+                                veil.close()
+                            }
+                            is CameraStatus.Failed -> {
+                                unavailable()
+                                settled()
+                                // A camera that fails while its picture shows leaves the picture as
+                                // it is, since CameraX may open the camera again by itself; only a
+                                // camera that has not shown its picture yet ends on the error.
+                                if (!status.wasLive) veil.fail()
+                            }
                         }
                     }
+                }
+                if (!cameraSession.connect(context)) return@coroutineScope
+                var first = true
+                snapshotFlow { currentSession }.collectLatest {
+                    if (!first) {
+                        veil.restart()
+                        val still = if (veil.holding) null else cameraSession.takeStill(transformer)
+                        cameraSession.retire()
+                        veil.freeze(still)
+                    }
+                    first = false
+                    if (cameraSession.bind(owner) { zoomChanged(it) }) cameraSession.follow(owner)
                 }
             }
         } finally {

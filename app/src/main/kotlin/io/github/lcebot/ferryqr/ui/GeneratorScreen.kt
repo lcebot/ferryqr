@@ -4,10 +4,12 @@ package io.github.lcebot.ferryqr.ui
 
 import android.graphics.Bitmap
 import androidx.activity.compose.LocalActivity
+import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -108,6 +110,9 @@ import io.github.lcebot.ferryqr.dispatch.ActiveFerry
 import io.github.lcebot.ferryqr.dispatch.Ferries
 import io.github.lcebot.ferryqr.dispatch.Ferry
 import io.github.lcebot.ferryqr.dispatch.FerryEnv
+import io.github.lcebot.ferryqr.dispatch.Origin
+import io.github.lcebot.ferryqr.dispatch.Reach
+import io.github.lcebot.ferryqr.dispatch.reach
 import io.github.lcebot.ferryqr.generate.AutoFormat
 import io.github.lcebot.ferryqr.generate.CodeDrawing
 import io.github.lcebot.ferryqr.generate.CodeGenerator
@@ -194,21 +199,20 @@ fun GeneratorScreen(onBack: () -> Unit) {
     var made by remember { mutableStateOf<Made?>(null) }
     // The field follows only whether the text fits, not every code made from it.
     val unfit by remember { derivedStateOf { made?.generated as? Generated.Unfit } }
+    val ready = readyApps()
     // Every installed app FerryQR reaches its own way, each in a place of its own in the toolbar so
     // it can fade in and out there: the apps for their own codes first, the general ones last.
     // Asking the package manager is a call into another process, so it stays off the main thread,
-    // and the apps are named there too, as every app offered is.
-    val candidates by produceState(emptyList<NamedFerry<ActiveFerry>>()) {
+    // and the apps are named there too, as every app offered is, together with how each takes the text.
+    val candidates by produceState(emptyList<NamedFerry<ActiveFerry>>(), ready) {
         value = withContext(Dispatchers.IO) {
-            val env = FerryEnv(context)
-            ActiveFerries.all.filter { it.installed(env) }.sortedBy { it.general }.map { NamedFerry(it, it.label(context)) }
+            val env = FerryEnv(context, ready)
+            ActiveFerries.all.filter { it.installed(env) }.sortedBy { it.general }
+                .map { NamedFerry(it, it.label(context), it.reach(env, Origin.TYPED)) }
         }
     }
     val appFade = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
     val appResize = MaterialTheme.motionScheme.fastSpatialSpec<IntSize>()
-    val ready = readyApps()
-    // Readiness alone, which asks the package manager nothing, so it is read on the main thread.
-    val readiness = remember(context, ready) { FerryEnv(context, ready) }
     // The apps for the text are the ones result cards offer for the same content, in the same order,
     // looked up once typing pauses rather than on every keystroke. An app the system opens the text
     // in is named by the package manager, so each is named here, off the main thread.
@@ -219,7 +223,7 @@ fun GeneratorScreen(onBack: () -> Unit) {
                 val env = FerryEnv(context, ready)
                 Ferries.offered(env, Classifier.classify(text))
                     .filter { it.installed(env) }
-                    .map { NamedFerry(it, it.label(context)) }
+                    .map { NamedFerry(it, it.label(context), it.reach(env, Origin.TYPED)) }
             }
         }
     }
@@ -306,14 +310,15 @@ fun GeneratorScreen(onBack: () -> Unit) {
 
             // What is done with the code sits in one toolbar under it: actions on the code itself,
             // then the apps that can open the text, with sharing as the main way out.
-            val sendApp: (NamedFerry<Ferry>) -> SendApp = { (ferry, name) ->
-                // Without the module the app could only open its scanner on nothing, so the
-                // button looks disabled but still explains why when tapped.
-                val looksEnabled = ferry.isReady(readiness)
-                SendApp(context.getString(R.string.open_in_app, name), ferry.pkg, looksEnabled) {
+            val sendApp: (NamedFerry<Ferry>) -> SendApp = { (ferry, name, reach) ->
+                // Typed text has no code for a scanner, and only installed apps are offered, so an
+                // app either opens the text or needs the module. One that needs it could only open
+                // its scanner on nothing, so its button looks disabled but still explains why when tapped.
+                val opens = reach == Reach.Opens
+                SendApp(context.getString(R.string.open_in_app, name), ferry.pkg, looksEnabled = opens) {
                     when {
                         activity == null -> Unit
-                        !looksEnabled -> {
+                        !opens -> {
                             haptics.reject()
                             scope.launch { snackbar.showLatest(context.getString(R.string.needs_module_in_app, name)) }
                         }
@@ -331,6 +336,8 @@ fun GeneratorScreen(onBack: () -> Unit) {
             var codeBounds by remember { mutableStateOf<Rect?>(null) }
             val brighten by settings.fullBrightness.flow.collectAsStateWithLifecycle()
 
+            val chipFade = MaterialTheme.motionScheme.fastEffectsSpec<Float>()
+            val chipResize = MaterialTheme.motionScheme.fastSpatialSpec<IntSize>()
             val chips: @Composable () -> Unit = {
                 // The automatic choice leads and names the format it uses; the common formats follow, with
                 // one picked from the rest beside them while it is in use, and the rest one tap away.
@@ -342,7 +349,21 @@ fun GeneratorScreen(onBack: () -> Unit) {
                         FilterChip(
                             selected = chosen == null,
                             onClick = { haptics.step(); choose(AUTO) },
-                            label = { Text(stringResource(R.string.format_auto, stringResource(automatic.label))) },
+                            label = {
+                                // A new format's name fades in over the last as the chip takes its width,
+                                // so the chips after it slide along rather than jump.
+                                AnimatedContent(
+                                    targetState = automatic,
+                                    transitionSpec = {
+                                        (fadeIn(chipFade) togetherWith fadeOut(chipFade)) using
+                                            SizeTransform(clip = false) { _, _ -> chipResize }
+                                    },
+                                    contentAlignment = Alignment.CenterStart,
+                                    label = "auto-format",
+                                ) { format ->
+                                    Text(stringResource(R.string.format_auto, stringResource(format.label)))
+                                }
+                            },
                             leadingIcon = {
                                 Icon(painterResource(R.drawable.ic_lightbulb), contentDescription = null, modifier = Modifier.size(FilterChipDefaults.IconSize))
                             },
@@ -425,7 +446,11 @@ fun GeneratorScreen(onBack: () -> Unit) {
                                 }
                                 shown.look == CodeLook.STRETCHED && code != null ->
                                     FilledTallCode(code.base, code, bounds.fillMaxSize())
-                                else -> CodePreview(code?.base, bounds.aspectRatio(1f, matchHeightConstraintsFirst = true))
+                                else -> CodePreview(
+                                    code?.base,
+                                    if (unfit != null) R.string.generate_empty_unfit else R.string.generate_empty,
+                                    bounds.aspectRatio(1f, matchHeightConstraintsFirst = true),
+                                )
                             }
                         }
                     }
@@ -436,7 +461,10 @@ fun GeneratorScreen(onBack: () -> Unit) {
                     (fadeOut(appFade) + shrinkHorizontally(appResize)) using null
             }
             val toolbar: @Composable () -> Unit = {
-                val code = made?.drawing?.base
+                // Saving, copying, sharing and the favorite all act on the code shown, its text and
+                // format, which the text typed since moves on from only once a new code is made.
+                val drawing = made?.drawing
+                val code = drawing?.base
                 // Worked out again only when the offered apps or their room change, not for each new code.
                 val layout = remember(offered, toolbarRoom) { if (offered.isEmpty()) null else sendLayout(offered, toolbarRoom) }
                 CodeToolbar(
@@ -445,13 +473,12 @@ fun GeneratorScreen(onBack: () -> Unit) {
                     favorite = {
                         // Kept codes are shown again from history, drawn the same way as here. Unstarred,
                         // the toggle takes the toolbar's own content colour, like save and copy beside it;
-                        // starred, it fills like the favorite on result cards. Only the toggle reads the
-                        // text, so a keystroke composes it again and leaves the rest of the toolbar be.
+                        // starred, it fills like the favorite on result cards.
                         Labeled(R.string.favorite) {
                             FavoriteToggle(
-                                field.text.toString(),
-                                type.format.name,
-                                enabled = code != null,
+                                drawing?.text.orEmpty(),
+                                drawing?.type?.format?.name.orEmpty(),
+                                enabled = drawing != null,
                                 colors = IconButtonDefaults.iconToggleButtonColors(
                                     checkedContainerColor = MaterialTheme.colorScheme.tertiaryContainer,
                                     checkedContentColor = MaterialTheme.colorScheme.onTertiaryContainer,
@@ -506,36 +533,27 @@ fun GeneratorScreen(onBack: () -> Unit) {
                 }
             }
             val textField: @Composable (lines: Int) -> Unit = { lines ->
-                val error = unfitMessage(unfit, made?.type ?: type)
-                OutlinedTextField(
+                GeneratorField(
                     state = field,
+                    lines = lines,
+                    error = unfitMessage(unfit, made?.type ?: type),
+                    trailing = if (hasText) clearButton else null,
+                    // Its lines change with the room the keyboard leaves. Shrinking, it never springs
+                    // below its new height, which would cut off its outline and supporting text.
                     modifier = Modifier
-                        .fillMaxWidth()
-                        // Its lines change with the room the keyboard leaves. Shrinking, it never springs
-                        // below its new height, which would cut off its outline and supporting text.
                         .clipToBounds()
                         .animateSize(MaterialTheme.motionScheme.defaultSpatialSpec()),
-                    label = { Text(stringResource(R.string.generate_input)) },
-                    placeholder = { Text(stringResource(R.string.generate_placeholder)) },
-                    isError = error != null,
-                    supportingText = { Text(error.orEmpty()) },
-                    trailingIcon = if (hasText) clearButton else null,
-                    lineLimits = TextFieldLineLimits.MultiLine(minHeightInLines = lines, maxHeightInLines = lines),
                 )
             }
-            // The text field one line tall, with the same supporting text, measured but never shown,
-            // which tells how much room the field takes at the current font size.
+            // The text field one line tall, measured but never shown, which tells how much room the
+            // field takes at the current font size.
             val probeState = remember { TextFieldState() }
             val fieldProbe: @Composable () -> Unit = {
-                val error = unfitMessage(unfit, made?.type ?: type)
-                OutlinedTextField(
+                GeneratorField(
                     state = probeState,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text(stringResource(R.string.generate_input)) },
-                    isError = error != null,
-                    supportingText = { Text(error.orEmpty()) },
-                    trailingIcon = if (hasText) clearButton else null,
-                    lineLimits = TextFieldLineLimits.MultiLine(minHeightInLines = 1, maxHeightInLines = 1),
+                    lines = 1,
+                    error = unfitMessage(unfit, made?.type ?: type),
+                    trailing = if (hasText) clearButton else null,
                 )
             }
             GeneratorLayout(
@@ -551,6 +569,31 @@ fun GeneratorScreen(onBack: () -> Unit) {
             )
         }
     }
+}
+
+/**
+ * The field for the text of the code, [lines] tall, with [error] under it when there is one. The
+ * page also measures it one line tall through a probe that is never shown, and both are drawn here,
+ * so the probe always has the field's label, supporting text and icon, and its height stays true.
+ */
+@Composable
+private fun GeneratorField(
+    state: TextFieldState,
+    lines: Int,
+    error: String?,
+    trailing: (@Composable () -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    OutlinedTextField(
+        state = state,
+        modifier = Modifier.fillMaxWidth().then(modifier),
+        label = { Text(stringResource(R.string.generate_input)) },
+        placeholder = { Text(stringResource(R.string.generate_placeholder)) },
+        isError = error != null,
+        supportingText = { Text(error.orEmpty()) },
+        trailingIcon = trailing,
+        lineLimits = TextFieldLineLimits.MultiLine(minHeightInLines = lines, maxHeightInLines = lines),
+    )
 }
 
 /**
@@ -587,23 +630,28 @@ private enum class CodeLook { SQUARE, TILTED, STRETCHED }
 /** The code the preview shows, null before one is made, and how it is drawn. */
 private data class ShownCode(val look: CodeLook, val drawing: CodeDrawing?)
 
-/** The code always sits on white, whatever the theme, because readers expect dark modules on light. */
+/**
+ * The code always sits on white, whatever the theme, because readers expect dark modules on light.
+ * Without a code, [placeholder] says why there is none.
+ */
 @Composable
-private fun CodePreview(code: Bitmap?, modifier: Modifier = Modifier) {
+private fun CodePreview(code: Bitmap?, @StringRes placeholder: Int, modifier: Modifier = Modifier) {
     Surface(
         modifier = modifier,
         shape = MaterialTheme.shapes.extraLarge,
         color = MaterialTheme.colorScheme.surfaceContainer,
     ) {
         val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+        // A new code takes the place of the one shown at once; a code coming or going, or the
+        // placeholder changing its words, crossfades.
         AnimatedContent(
-            targetState = code,
-            contentKey = { it != null },
+            targetState = code to placeholder,
+            contentKey = { (shown, words) -> if (shown != null) null else words },
             transitionSpec = { fadeIn(fade) togetherWith fadeOut(fade) },
             contentAlignment = Alignment.Center,
             modifier = Modifier.fillMaxSize().padding(20.dp),
             label = "code-preview",
-        ) { code ->
+        ) { (code, words) ->
             if (code != null) {
                 val image = remember(code) { code.asImageBitmap() }
                 // Inside a box, so the white card takes the code's own shape rather than the area's size.
@@ -633,7 +681,7 @@ private fun CodePreview(code: Bitmap?, modifier: Modifier = Modifier) {
                         modifier = Modifier.weight(1f, fill = false).sizeIn(maxWidth = 56.dp, maxHeight = 56.dp).aspectRatio(1f),
                     )
                     Text(
-                        stringResource(R.string.generate_empty),
+                        stringResource(words),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

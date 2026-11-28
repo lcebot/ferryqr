@@ -3,6 +3,7 @@
 package io.github.lcebot.ferryqr.ui
 
 import android.text.format.DateUtils
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SizeTransform
@@ -30,7 +31,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyItemScope
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -56,12 +57,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.snapshotFlow
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.layout
@@ -86,23 +86,6 @@ import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.history.FavoriteShortcuts
 import io.github.lcebot.ferryqr.history.HistoryEntry
 import java.time.LocalDate
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.withTimeoutOrNull
-
-/** The group the favorites form for a swipe; the other rows group by day. */
-private const val FAVORITES_GROUP = "favorites"
-
-/** How long rows brought back by undo have to take up their swipes before the swipes are let go. */
-private const val DEPARTED_WAIT_MS = 1000L
-
-/** The list item holding the favorites' title. */
-private const val FAVORITES_HEADER_KEY = "header:favorites"
-
-/** The list item holding the favorites as tiles. */
-internal const val TILES_KEY = "favorites:tiles"
-
-/** The key of the list item showing the entry with [text]. */
-private fun rowKey(text: String): Any = "entry:$text"
 
 /** What the history page shows below its top bar. */
 private enum class HistoryContent { LOADING, EMPTY, LIST }
@@ -139,8 +122,9 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openSaved: String? =
     val keeper = remember(vm) { FavoriteOrderKeeper { vm.setOrder(it) } }
     val board = remember(haptics, keeper) { TileBoard(haptics, keeper) }
     val listState = rememberLazyListState()
-    val listReorder = remember(listState, haptics, scope, keeper) {
-        ListReorderState(listState, haptics, scope, ::rowKey, FAVORITES_HEADER_KEY, keeper)
+    val historyItems = remember(listState) { HistoryItems(listState) }
+    val listReorder = remember(listState, historyItems, haptics, scope, keeper) {
+        ListReorderState(listState, haptics, scope, historyItems::rowKey, FAVORITES_HEADER_KEY, keeper)
     }
     val settleSpec = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
     // The count and the clear button are small parts of the bar, while what shows below it is the
@@ -152,27 +136,19 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openSaved: String? =
     val favoriting = rememberFavoriteRequester()
     val messages = rememberHistoryMessages(vm, snackbar) { restored -> magnetic.undone(restored.map { it.text }) }
 
+    // Back leaves reordering before it leaves the page, as Done does; each move was kept as it was made.
+    BackHandler(enabled = listReorder.active) { listReorder.finish() }
+
     LaunchedEffect(openSaved) {
         if (openSaved == null) return@LaunchedEffect
         vm.openSaved(openSaved)
         onOpened()
     }
 
-    // Swipes kept for rows to fly back with last as long as the session. Once it ends, rows brought
-    // back take up theirs as they are laid out after the lists hold them again, which lists made off
-    // the main thread may take a few frames to do; entries gone for good never come back, so the wait
-    // is bounded, and what is left then belongs to them.
+    // Entries swiped away and deleted keep their swipes, to fly back with, only while undoing can
+    // bring them back, which ends with the view model's undo session.
     LaunchedEffect(undo == null) {
-        if (undo != null) return@LaunchedEffect
-        val kept = magnetic.departed.keys.toSet()
-        if (kept.isNotEmpty()) {
-            withTimeoutOrNull(DEPARTED_WAIT_MS) {
-                snapshotFlow { lists }.first { current -> current != null && kept.all { text -> current.all.any { it.text == text } } }
-            }
-        }
-        withFrameNanos {}
-        withFrameNanos {}
-        magnetic.departed.clear()
+        if (undo == null) magnetic.undoEnded()
     }
 
     fun delete(entry: HistoryEntry) {
@@ -272,20 +248,33 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openSaved: String? =
                     )
 
                     ReorderAutoScroll(listState, section.reorder, padding.calculateBottomPadding())
+                    FollowDropZone(listReorder.zone, listReorder.zoneShown) { listReorder.landing }
 
+                    val hasFavorites = favorites.isNotEmpty()
+                    val pageItems = remember(historyItems, hasFavorites, section, groups) { historyItems.build(hasFavorites, section, groups) }
+
+                    val listPadding = PaddingValues(
+                        start = padding.calculateStartPadding(layoutDirection) + 16.dp,
+                        end = padding.calculateEndPadding(layoutDirection) + 16.dp,
+                        top = padding.calculateTopPadding(),
+                        bottom = padding.calculateBottomPadding() + 24.dp,
+                    )
                     LazyColumn(
                         state = listState,
-                        contentPadding = PaddingValues(
-                            start = padding.calculateStartPadding(layoutDirection) + 16.dp,
-                            end = padding.calculateEndPadding(layoutDirection) + 16.dp,
-                            top = padding.calculateTopPadding(),
-                            bottom = padding.calculateBottomPadding() + 24.dp,
-                        ),
+                        // Drawn behind every row, as the tiles' zone is behind every tile, so the rows
+                        // opening their gap pass over it as it glides the other way.
+                        modifier = Modifier.dropZone(listReorder.zone) {
+                            val span = listReorder.zoneSpan() ?: return@dropZone null
+                            val left = listPadding.calculateLeftPadding(layoutDirection).toPx()
+                            val right = size.width - listPadding.calculateRightPadding(layoutDirection).toPx()
+                            Rect(left, span.start, right, span.endInclusive)
+                        },
+                        contentPadding = listPadding,
                         verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap),
                     ) {
-                        if (favorites.isNotEmpty()) {
-                            item(key = FAVORITES_HEADER_KEY) {
-                                FavoritesHeader(
+                        items(pageItems, key = { it.key }, contentType = { it.contentType }) { item ->
+                            when (item) {
+                                HistoryItem.FavoritesHeader -> FavoritesHeader(
                                     foldable = section.foldable,
                                     folded = section.folded,
                                     hidden = section.hiddenCount,
@@ -301,77 +290,76 @@ fun HistoryScreen(vm: HistoryViewModel, onBack: () -> Unit, openSaved: String? =
                                     },
                                     modifier = animateRow(),
                                 )
-                            }
-                            if (section.tiled) {
-                                item(key = TILES_KEY) {
-                                    FavoriteTiles(
-                                        board = board,
-                                        favorites = favoritesByKey,
-                                        namesOf = { lists?.namesOf(it) },
-                                        inputs = section.tiles,
-                                        arrangement = section.arrangement,
-                                        rowsShown = section.rowsShown,
-                                        pendingUndo = undo?.texts.orEmpty(),
-                                        list = magnetic,
-                                        actions = actions,
-                                        // Folded tiles unfold for one picked up, and stay unfolded after.
-                                        onLift = { if (section.foldable && section.folded) vm.setFolded(false) },
-                                        // Above the rows around it, so a tile dragged or swiped past the
-                                        // favorites stays in sight over them.
-                                        modifier = animateRow().zIndex(1f),
-                                    )
-                                }
-                            } else {
-                                val rows = section.rows
-                                itemsIndexed(rows, key = { _, e -> rowKey(e.text) }) { index, entry ->
-                                    val back = remember { magnetic.departed.containsKey(entry.text) }
-                                    val reordering = listReorder.active
+                                HistoryItem.Tiles -> FavoriteTiles(
+                                    board = board,
+                                    favorites = favoritesByKey,
+                                    namesOf = { lists?.namesOf(it) },
+                                    inputs = section.tiles,
+                                    arrangement = section.arrangement,
+                                    rowsShown = section.rowsShown,
+                                    list = magnetic,
+                                    actions = actions,
+                                    // Folded tiles unfold for one picked up, and stay unfolded after.
+                                    onLift = { if (section.foldable && section.folded) vm.setFolded(false) },
+                                    // Above the rows around it, so a tile dragged or swiped past the
+                                    // favorites stays in sight over them.
+                                    modifier = animateRow().zIndex(1f),
+                                )
+                                is HistoryItem.DayHeader ->
+                                    DayHeader(item.day, item.entries.first().time, onClear = { clearDay(item.entries) }, animateRow())
+                                // Favorites and the other entries are rows of one kind, composed in one
+                                // place, so a row that becomes a favorite or stops being one keeps its
+                                // composition as it moves and changes its look on its own motion.
+                                is HistoryItem.Row -> {
+                                    val entry = item.entry
+                                    val reordering = item.favorite && listReorder.active
                                     val dragged = reordering && listReorder.dragging == entry.text
+                                    val back = magnetic.returning(entry.text) != null
                                     val moveUp = stringResource(R.string.favorite_move_up)
                                     val moveDown = stringResource(R.string.favorite_move_down)
                                     EntryRow(
                                         entry = entry,
                                         listed = lists?.namesOf(entry),
-                                        group = FAVORITES_GROUP,
-                                        index = index,
-                                        count = rows.size,
+                                        group = item.group,
+                                        index = item.index,
+                                        count = item.count,
                                         list = magnetic,
                                         actions = actions,
-                                        modifier = (if (dragged) Modifier else animateRow(flyingBack = back))
-                                            .zIndex(if (dragged) 1f else 0f)
-                                            .graphicsLayer { if (dragged) translationY = listReorder.dragOffset }
-                                            // Without a finger to drag with, the order changes a row at a time.
-                                            .then(
-                                                if (!reordering) {
-                                                    Modifier
-                                                } else {
-                                                    Modifier.semantics {
-                                                        customActions = listOfNotNull(
-                                                            CustomAccessibilityAction(moveUp) { listReorder.move(entry.text, index - 1); true }
-                                                                .takeIf { index > 0 },
-                                                            CustomAccessibilityAction(moveDown) { listReorder.move(entry.text, index + 1); true }
-                                                                .takeIf { index < rows.size - 1 },
-                                                        )
-                                                    }
-                                                },
-                                            ),
-                                        reorder = RowReorder(
-                                            active = reordering,
-                                            lifted = dragged && listReorder.settling == null,
-                                            onDragStart = { listReorder.startDrag(entry.text) },
-                                            onDrag = listReorder::drag,
-                                            onDragEnd = { listReorder.endDrag(settleSpec) },
-                                        ),
+                                        modifier = if (!item.favorite) {
+                                            animateRow(flyingBack = back)
+                                        } else {
+                                            (if (dragged) Modifier else animateRow(flyingBack = back))
+                                                .zIndex(if (dragged) 1f else 0f)
+                                                .graphicsLayer { if (dragged) translationY = listReorder.dragOffset }
+                                                // Without a finger to drag with, the order changes a row at a time.
+                                                .then(
+                                                    if (!reordering) {
+                                                        Modifier
+                                                    } else {
+                                                        Modifier.semantics {
+                                                            customActions = listOfNotNull(
+                                                                CustomAccessibilityAction(moveUp) { listReorder.move(entry.text, item.index - 1); true }
+                                                                    .takeIf { item.index > 0 },
+                                                                CustomAccessibilityAction(moveDown) { listReorder.move(entry.text, item.index + 1); true }
+                                                                    .takeIf { item.index < item.count - 1 },
+                                                            )
+                                                        }
+                                                    },
+                                                )
+                                        },
+                                        reorder = if (!item.favorite) {
+                                            null
+                                        } else {
+                                            RowReorder(
+                                                active = reordering,
+                                                lifted = dragged && listReorder.settling == null,
+                                                onDragStart = { listReorder.startDrag(entry.text) },
+                                                onDrag = listReorder::drag,
+                                                onDragEnd = { listReorder.endDrag(settleSpec) },
+                                            )
+                                        },
                                     )
                                 }
-                            }
-                        }
-                        groups.forEach { (day, items) ->
-                            item(key = "header:$day") { DayHeader(day, items.first().time, onClear = { clearDay(items) }, animateRow()) }
-                            itemsIndexed(items, key = { _, e -> rowKey(e.text) }) { index, entry ->
-                                val back = remember { magnetic.departed.containsKey(entry.text) }
-                                val listed = lists?.namesOf(entry)
-                                EntryRow(entry, listed, day, index, items.size, magnetic, actions, animateRow(flyingBack = back))
                             }
                         }
                     }

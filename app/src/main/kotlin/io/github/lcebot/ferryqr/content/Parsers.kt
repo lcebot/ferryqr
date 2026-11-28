@@ -74,9 +74,11 @@ internal object ContactParser {
             if (colon <= 0) continue
             // "item1.EMAIL;TYPE=work" names the property EMAIL.
             val property = line.substring(0, colon).substringBefore(';').substringAfterLast('.').uppercase()
-            val value = line.substring(colon + 1)
-            fun plain() = Fields.unescape(value, vCard = true).trim()
-            fun components() = Fields.split(value, ';').map { Fields.unescape(it, vCard = true).trim() }
+            // Decoded after the structure is split, so an encoded ";" or "\" stays text.
+            val raw = line.substring(colon + 1)
+            val params = Fields.parameters(line)
+            fun plain() = Fields.unescape(Fields.decode(raw, params), vCard = true).trim()
+            fun components() = Fields.split(raw, ';').map { Fields.unescape(Fields.decode(it, params), vCard = true).trim() }
             when (property) {
                 "FN" -> formatted = plain()
                 "N" -> components().let { structured = joinName(given = it.getOrNull(1), family = it.getOrNull(0)) }
@@ -123,7 +125,7 @@ internal object EventParser {
             val head = line.substring(0, colon).split(';')
             val property = head.first().uppercase()
             val params = head.drop(1)
-            val value = line.substring(colon + 1)
+            val value = Fields.decode(line.substring(colon + 1), params)
             when (property) {
                 "SUMMARY" -> title = Fields.unescape(value, vCard = true).trim()
                 "LOCATION" -> location = Fields.unescape(value, vCard = true).trim()

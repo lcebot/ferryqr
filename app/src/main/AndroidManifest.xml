@@ -50,6 +50,34 @@
             <action android:name="android.intent.action.INSERT" />
             <data android:mimeType="vnd.android.cursor.dir/event" />
         </intent>
+        <!-- The apps that take a passkey request or an eSIM activation code, and the screens where
+             SIM profiles are managed, so a card can offer them, with a menu when several apps take one. -->
+        <package android:name="com.google.android.euicc" />
+        <intent>
+            <action android:name="com.miui.euicc.action.ADD_ESIM" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="LPA" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="lpa" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="FIDO" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="fido" />
+        </intent>
+        <intent>
+            <action android:name="android.settings.MANAGE_ALL_SIM_PROFILES_SETTINGS" />
+        </intent>
+        <intent>
+            <action android:name="android.settings.WIRELESS_SETTINGS" />
+        </intent>
         <!-- Whether an authenticator is installed decides what a two-factor key's card offers. -->
         <intent>
             <action android:name="android.intent.action.VIEW" />

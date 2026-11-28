@@ -3,7 +3,12 @@
 package io.github.lcebot.ferryqr.ui
 
 import android.graphics.Bitmap
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -32,10 +37,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import io.github.lcebot.ferryqr.R
 import io.github.lcebot.ferryqr.dispatch.CardAction
@@ -131,13 +139,13 @@ fun ResultCardContent(
                 modifier = Modifier.align(Alignment.CenterHorizontally),
             )
             // In history the original is out of sight, so the drawing can be kept or passed on.
-            if (card.exportable) CodeToolbar(bitmap, onMessage = onMessage)
+            if (card.exportable) CodeToolbar(bitmap, onMessage = onMessage, picture = code == null)
         }
         if (card.headline.isNotEmpty()) {
-            SelectionContainer {
+            CardText(card.headline, "card-headline") { headline ->
                 Text(
-                    card.headline,
-                    style = if (card.headline.length > 60) MaterialTheme.typography.titleMedium
+                    headline,
+                    style = if (headline.length > 60) MaterialTheme.typography.titleMedium
                     else MaterialTheme.typography.headlineSmall,
                     maxLines = 8,
                     overflow = TextOverflow.Ellipsis,
@@ -145,9 +153,9 @@ fun ResultCardContent(
             }
         }
         card.body?.let { body ->
-            SelectionContainer {
+            CardText(body, "card-body") { shown ->
                 Text(
-                    body,
+                    shown,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -180,6 +188,24 @@ fun ResultCardContent(
     }
 }
 
+/**
+ * A card's [text], selectable, which crossfades when a card built again says it another way, as one
+ * does once an app becomes ready, while the card resizes for it on the spring its notes and actions
+ * move on. It is left unclipped, so text keeps its edges while the spring undershoots its new size.
+ */
+@Composable
+private fun CardText(text: String, label: String, content: @Composable (String) -> Unit) {
+    val fade = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+    val resize = MaterialTheme.motionScheme.defaultSpatialSpec<IntSize>()
+    AnimatedContent(
+        targetState = text,
+        transitionSpec = { (fadeIn(fade) togetherWith fadeOut(fade)) using SizeTransform(clip = false) { _, _ -> resize } },
+        label = label,
+    ) { shown ->
+        SelectionContainer { content(shown) }
+    }
+}
+
 @Composable
 private fun CardSectionView(section: CardSection) {
     val colors = MaterialTheme.colorScheme
@@ -192,8 +218,9 @@ private fun CardSectionView(section: CardSection) {
                     painterResource(R.drawable.ic_flight),
                     contentDescription = null,
                     tint = colors.onSurfaceVariant,
-                    // The glyph points up; along the route it points from the first airport to the second.
-                    modifier = Modifier.size(28.dp).rotate(90f),
+                    // The glyph points up; along the route it points from the first airport to the second,
+                    // which a right-to-left layout places to the left of the first.
+                    modifier = Modifier.size(28.dp).rotate(if (LocalLayoutDirection.current == LayoutDirection.Rtl) -90f else 90f),
                 )
                 Text(section.to, style = MaterialTheme.typography.displaySmall)
             }

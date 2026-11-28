@@ -31,8 +31,11 @@ internal fun String.cutToCodePoints(max: Int): String {
 class ContentNames internal constructor(context: Context, val content: ReadContent, val label: String?) {
     private val payload = content.payload
 
-    /** The name the content carries, as [Titles] gives it. */
-    private val carried: CarriedName = Titles.carried(context, payload)
+    /**
+     * The name the content carries, as [Titles] gives it. Cards for app links and eSIM codes that
+     * lead with that name show the content itself below it.
+     */
+    internal val carried: CarriedName = Titles.carried(context, payload)
 
     val kind: Kind = content.kind
 
